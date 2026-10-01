@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Prove a published release installs the way users get it: a clean Arch
 # container runs the latest release's install.sh and must end up with
-# onecloud <version>, and the CLI must run. scripts/release.sh runs this
+# onecloud <version>, the CLI must run, and the binaries must carry no
+# home directory paths. scripts/release.sh runs this
 # after publishing and takes the release down if it fails.
 #
 #   scripts/verify-release.sh 0.0.1
@@ -18,6 +19,8 @@ for attempt in 1 2 3 4 5 6; do
     pacman -Sy --noconfirm --needed curl gnupg >/dev/null 2>&1
     curl -fsSL "$INSTALLER" | bash >/dev/null 2>&1
     onecloud --version >/dev/null
+    # no builder paths (and so no username) in the binaries
+    if grep -aq "/home/" /usr/bin/onecloud /usr/bin/onecloud-app; then exit 1; fi
     pacman -Q onecloud' 2>/dev/null || true)"
   if [[ $installed == "onecloud $version-"* ]]; then
     echo "Verified: install.sh installs $installed"
