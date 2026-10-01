@@ -1514,3 +1514,77 @@ fn show_text(ui: &Rc<Ui>, heading: &str, body: &str, content: &str) {
     });
     dialog.present(Some(&ui.window));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::s3_location;
+
+    fn loc(
+        p: usize,
+        l: usize,
+        account: &str,
+        eu: bool,
+        endpoint: &str,
+        region: &str,
+    ) -> (String, String) {
+        s3_location(p, l, account, eu, endpoint, region).expect("a location")
+    }
+
+    #[test]
+    fn hetzner_follows_the_location() {
+        assert_eq!(
+            loc(0, 0, "", false, "", ""),
+            ("https://fsn1.your-objectstorage.com".into(), "fsn1".into())
+        );
+        assert_eq!(
+            loc(0, 2, "", false, "", ""),
+            ("https://hel1.your-objectstorage.com".into(), "hel1".into())
+        );
+    }
+
+    #[test]
+    fn r2_needs_the_account_and_knows_the_eu() {
+        assert!(s3_location(1, 0, "", false, "", "").is_err());
+        assert_eq!(
+            loc(1, 0, "abc123", false, "", ""),
+            (
+                "https://abc123.r2.cloudflarestorage.com".into(),
+                "auto".into()
+            )
+        );
+        assert_eq!(
+            loc(1, 0, "abc123", true, "", "").0,
+            "https://abc123.eu.r2.cloudflarestorage.com"
+        );
+    }
+
+    #[test]
+    fn b2_takes_the_region_from_the_endpoint() {
+        for given in [
+            "s3.eu-central-003.backblazeb2.com",
+            "https://s3.eu-central-003.backblazeb2.com",
+        ] {
+            assert_eq!(
+                loc(2, 0, "", false, given, ""),
+                (
+                    "https://s3.eu-central-003.backblazeb2.com".into(),
+                    "eu-central-003".into()
+                )
+            );
+        }
+        assert!(s3_location(2, 0, "", false, "backblaze.com", "").is_err());
+    }
+
+    #[test]
+    fn other_s3_keeps_what_it_is_given() {
+        assert!(s3_location(3, 0, "", false, "", "").is_err());
+        assert_eq!(
+            loc(3, 0, "", false, "http://127.0.0.1:9000", ""),
+            ("http://127.0.0.1:9000".into(), "auto".into())
+        );
+        assert_eq!(
+            loc(3, 0, "", false, "minio.example.com", "us-east-1"),
+            ("https://minio.example.com".into(), "us-east-1".into())
+        );
+    }
+}
