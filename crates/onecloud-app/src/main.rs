@@ -28,7 +28,11 @@ fn main() -> glib::ExitCode {
     let argv0 = args.next().unwrap_or_default();
     let page = args.next();
     let app = adw::Application::builder().application_id(APP_ID).build();
-    app.connect_activate(move |app| build(app, page.as_deref()));
+    // one window: launching again brings it forward instead of opening another
+    app.connect_activate(move |app| match app.active_window() {
+        Some(window) => window.present(),
+        None => build(app, page.as_deref()),
+    });
     // the page is ours to read; GTK sees no arguments
     app.run_with_args(&[argv0])
 }
@@ -378,6 +382,13 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
     run_then(&argv_ref, env, None, move |r| match r {
         Err(e) => ui2.toast(&e),
         Ok(out) => {
+            // set up: keep it syncing from now on, not from the next login
+            run_then(
+                &["systemctl", "--user", "start", "onecloud"],
+                Vec::new(),
+                None,
+                |_| {},
+            );
             let code = out
                 .lines()
                 .find_map(|l| l.strip_prefix("recovery code: "))
@@ -401,11 +412,43 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
                     .selectable(true)
                     .css_classes(["title-2", "monospace"])
                     .build();
-                dialog.set_extra_child(Some(&label));
+                // typed back, so nobody clicks past the one chance to keep it
+                let check = adw::EntryRow::builder()
+                    .title("Type its last four characters")
+                    .build();
+                let list = gtk::ListBox::new();
+                list.add_css_class("boxed-list");
+                list.set_selection_mode(gtk::SelectionMode::None);
+                list.append(&check);
+                let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+                body.append(&label);
+                body.append(&list);
+                dialog.set_extra_child(Some(&body));
                 dialog.add_response("copy", "Copy");
                 dialog.add_response("done", "I Wrote It Down");
                 dialog.set_response_appearance("done", adw::ResponseAppearance::Suggested);
-                dialog.set_close_response("done");
+                dialog.set_response_enabled("done", false);
+                dialog.set_close_response("copy");
+                let tail: String = {
+                    let chars: Vec<char> =
+                        code.chars().filter(char::is_ascii_alphanumeric).collect();
+                    chars[chars.len().saturating_sub(4)..]
+                        .iter()
+                        .collect::<String>()
+                        .to_ascii_lowercase()
+                };
+                {
+                    let dialog = dialog.clone();
+                    check.connect_changed(move |e| {
+                        let typed: String = e
+                            .text()
+                            .chars()
+                            .filter(char::is_ascii_alphanumeric)
+                            .collect::<String>()
+                            .to_ascii_lowercase();
+                        dialog.set_response_enabled("done", typed == tail);
+                    });
+                }
                 let (window, ui3) = (ui2.window.clone(), ui2.clone());
                 dialog.connect_response(None, move |d, id| {
                     if id == "copy" {
@@ -434,20 +477,299 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
     });
 }
 
-/// First run: join an account, or create one.
+/// Where a new self-hosted account's bucket lives: what to ask for and how
+/// to get it.
+struct Provider {
+    name: &'static str,
+    steps: &'static str,
+    link: &'static str,
+}
+
+const PROVIDERS: [Provider; 4] = [
+    Provider {
+        name: "Hetzner Object Storage",
+        steps: "1. In the Hetzner Console, open Object Storage and create a bucket: private, \
+                Object Lock disabled.\n2. Under Security, S3 credentials, generate credentials and \
+                copy both keys. Hetzner shows the secret key only once.",
+        link: "https://console.hetzner.com/projects",
+    },
+    Provider {
+        name: "Cloudflare R2",
+        steps: "1. In the Cloudflare dashboard, open R2 and create a bucket.\n2. Under API tokens, \
+                create a token with Object Read & Write on that bucket and copy its Access Key ID \
+                and Secret Access Key. Your account ID is on the R2 overview page.",
+        link: "https://dash.cloudflare.com/?to=/:account/r2/overview",
+    },
+    Provider {
+        name: "Backblaze B2",
+        steps: "1. In Backblaze, create a private bucket and note its S3 endpoint, like \
+                s3.eu-central-003.backblazeb2.com.\n2. Under Application Keys, add a key with read \
+                and write access to that bucket only, and copy its keyID and applicationKey.",
+        link: "https://secure.backblaze.com/b2_buckets.htm",
+    },
+    Provider {
+        name: "Other S3 storage",
+        steps: "Any S3-compatible storage works, such as MinIO. You need its endpoint, its region, \
+                a bucket, and a key that can read and write that bucket.",
+        link: "",
+    },
+];
+
+const HETZNER_LOCATIONS: [(&str, &str); 3] = [
+    ("Falkenstein", "fsn1"),
+    ("Nuremberg", "nbg1"),
+    ("Helsinki", "hel1"),
+];
+
+/// The endpoint and region for a provider's answers, or what's missing.
+fn s3_location(
+    provider: usize,
+    location: usize,
+    account: &str,
+    eu: bool,
+    endpoint: &str,
+    region: &str,
+) -> Result<(String, String), &'static str> {
+    let with_scheme = |e: &str| {
+        if e.starts_with("https://") || e.starts_with("http://") {
+            e.to_string()
+        } else {
+            format!("https://{e}")
+        }
+    };
+    match provider {
+        0 => {
+            let loc = HETZNER_LOCATIONS[location.min(2)].1;
+            Ok((format!("https://{loc}.your-objectstorage.com"), loc.into()))
+        }
+        1 if account.is_empty() => Err("Fill in your Cloudflare account ID"),
+        1 => Ok((
+            format!(
+                "https://{account}.{}r2.cloudflarestorage.com",
+                if eu { "eu." } else { "" }
+            ),
+            "auto".into(),
+        )),
+        2 => {
+            // s3.<region>.backblazeb2.com
+            let host = endpoint
+                .trim_start_matches("https://")
+                .trim_start_matches("http://");
+            let region = host
+                .strip_prefix("s3.")
+                .and_then(|r| r.strip_suffix(".backblazeb2.com"))
+                .ok_or("The endpoint looks like s3.eu-central-003.backblazeb2.com")?;
+            Ok((with_scheme(host), region.into()))
+        }
+        _ if endpoint.is_empty() => Err("Fill in the endpoint"),
+        _ => Ok((
+            with_scheme(endpoint),
+            if region.is_empty() { "auto" } else { region }.into(),
+        )),
+    }
+}
+
+/// First run: start an account, or add this computer to one.
 fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
     let secret = |k: &str, v: String| vec![(k.to_string(), v)];
 
+    // create, own bucket
+    let own = group(
+        "Start a new account",
+        "OneCloud keeps your files in a storage bucket you rent from a provider. You pay the \
+         provider for the space you use; OneCloud itself charges nothing. Everything is \
+         encrypted on this computer before it leaves, so the provider can't read it.",
+    );
+    let names: Vec<&str> = PROVIDERS.iter().map(|p| p.name).collect();
+    let provider = adw::ComboRow::builder()
+        .title("Provider")
+        .model(&gtk::StringList::new(&names))
+        .build();
+    own.add(&provider);
+    let steps = adw::ActionRow::builder()
+        .title("Before you start")
+        .subtitle(PROVIDERS[0].steps)
+        .subtitle_selectable(true)
+        .build();
+    let open = button("Open", Some("flat"));
+    open.set_valign(gtk::Align::Center);
+    steps.add_suffix(&open);
+    own.add(&steps);
+    let locations: Vec<&str> = HETZNER_LOCATIONS.iter().map(|l| l.0).collect();
+    let location = adw::ComboRow::builder()
+        .title("Location of the bucket")
+        .model(&gtk::StringList::new(&locations))
+        .build();
+    let account = entry("Cloudflare account ID");
+    let eu = adw::SwitchRow::builder()
+        .title("The bucket is in the EU jurisdiction")
+        .build();
+    let endpoint = entry("Endpoint");
+    let region = entry("Region (blank for auto)");
+    let bucket = entry("Bucket name");
+    let key_id = entry("Access key ID");
+    let key = adw::PasswordEntryRow::builder()
+        .title("Secret access key")
+        .build();
+    // a bucket with object lock can't take the create-only writes
+    // coordination needs on some providers: it goes in a second bucket
+    let advanced = adw::ExpanderRow::builder()
+        .title("The bucket has object lock")
+        .subtitle("Then OneCloud needs a second, plain bucket for keeping your computers in step")
+        .show_enable_switch(true)
+        .enable_expansion(false)
+        .build();
+    let coord_bucket = entry("Second bucket's name");
+    advanced.add_row(&coord_bucket);
+    for w in [
+        &location.clone().upcast::<gtk::Widget>(),
+        account.upcast_ref(),
+        eu.upcast_ref(),
+        endpoint.upcast_ref(),
+        region.upcast_ref(),
+        bucket.upcast_ref(),
+        key_id.upcast_ref(),
+    ] {
+        own.add(w);
+    }
+    own.add(&key);
+    own.add(&advanced);
+    let show = {
+        let (steps, location, account, eu, endpoint, region, open) = (
+            steps.clone(),
+            location.clone(),
+            account.clone(),
+            eu.clone(),
+            endpoint.clone(),
+            region.clone(),
+            open.clone(),
+        );
+        move |i: usize| {
+            let p = &PROVIDERS[i.min(PROVIDERS.len() - 1)];
+            steps.set_subtitle(p.steps);
+            open.set_visible(!p.link.is_empty());
+            location.set_visible(i == 0);
+            account.set_visible(i == 1);
+            eu.set_visible(i == 1);
+            endpoint.set_visible(i >= 2);
+            endpoint.set_title(if i == 2 {
+                "S3 endpoint, like s3.eu-central-003.backblazeb2.com"
+            } else {
+                "Endpoint, like https://minio.example.com"
+            });
+            region.set_visible(i == 3);
+        }
+    };
+    show(0);
+    provider.connect_selected_notify(move |c| show(c.selected() as usize));
+    {
+        let (provider, window) = (provider.clone(), ui.window.clone());
+        open.connect_clicked(move |_| {
+            let link = PROVIDERS[(provider.selected() as usize).min(PROVIDERS.len() - 1)].link;
+            gtk::UriLauncher::new(link).launch(Some(&window), None::<&gio::Cancellable>, |_| {});
+        });
+    }
+    let create_own = button("Create Account", Some("suggested-action"));
+    create_own.set_halign(gtk::Align::End);
+    create_own.set_margin_top(12);
+    {
+        let ui = ui.clone();
+        create_own.connect_clicked(move |_| {
+            let location = s3_location(
+                provider.selected() as usize,
+                location.selected() as usize,
+                account.text().trim(),
+                eu.is_active(),
+                endpoint.text().trim(),
+                region.text().trim(),
+            );
+            let (e, r) = match location {
+                Ok(l) => l,
+                Err(why) => {
+                    ui.toast(why);
+                    return;
+                }
+            };
+            let (b, k, sk) = (
+                bucket.text().trim().to_string(),
+                key_id.text().trim().to_string(),
+                key.text().trim().to_string(),
+            );
+            if [&b, &k, &sk].iter().any(|v| v.is_empty()) {
+                ui.toast("Fill in the bucket name and both keys");
+                return;
+            }
+            let mut args = vec!["--repo".to_string(), "opendal:s3".to_string()];
+            for (name, value) in [
+                ("endpoint", e),
+                ("bucket", b),
+                ("region", r),
+                ("access_key_id", k),
+            ] {
+                args.push("--opt".into());
+                args.push(format!("{name}={value}"));
+            }
+            // self-hosted: coordination lives in the bucket too, or in a
+            // second one beside a bucket with object lock
+            args.push("--coordinator".into());
+            args.push("bucket".into());
+            let cb = coord_bucket.text().trim().to_string();
+            if advanced.enables_expansion() {
+                if cb.is_empty() {
+                    ui.toast("Fill in the second bucket's name, or turn off object lock");
+                    return;
+                }
+                args.push("--coordination-bucket".into());
+                args.push(cb);
+            }
+            // the secret through the environment: a command line is readable
+            // by other processes
+            run_init(
+                &ui,
+                args,
+                vec![("ONECLOUD_SECRET_ACCESS_KEY".to_string(), sk)],
+            );
+        });
+    }
+    own.add(&create_own);
+    page.add(&own);
+
+    // create, hosted
+    let hosted = group(
+        "New account, hosted",
+        "OneCloud stores your files, encrypted on this computer before they leave it.",
+    );
+    let invite = adw::PasswordEntryRow::builder()
+        .title("Invite code (during the beta)")
+        .build();
+    let create = button("Create", Some("suggested-action"));
+    {
+        let (ui, invite2) = (ui.clone(), invite.clone());
+        create.connect_clicked(move |_| {
+            run_init(
+                &ui,
+                Vec::new(),
+                secret("ONECLOUD_INVITE", invite2.text().to_string()),
+            );
+        });
+    }
+    invite.add_suffix(&create);
+    hosted.add(&invite);
+    if HOSTED {
+        page.add(&hosted);
+    }
+
     // join
     let join = group(
-        "Join your account",
-        "Already use onecloud on another computer? Your Desktop, Documents and Pictures follow. \
-         The join code comes from `onecloud join-code` on one of your computers.",
+        "Add this computer to your account",
+        "Already use OneCloud on another computer? On that computer, open OneCloud, go to \
+         Devices and click Show Join Code, then paste the code here. That computer approves \
+         this one, or your recovery code lets it in right away.",
     );
     let jcode = adw::PasswordEntryRow::builder().title("Join code").build();
     let code = adw::PasswordEntryRow::builder()
-        .title("Recovery code (optional: joins without waiting for approval)")
+        .title("Recovery code (optional)")
         .build();
     join.add(&jcode);
     join.add(&code);
@@ -487,91 +809,6 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     }
     join.add(&join_button);
     page.add(&join);
-
-    // create, hosted
-    let hosted = group(
-        "New account, hosted",
-        "onecloud stores your files, encrypted on this computer before they leave it.",
-    );
-    let invite = adw::PasswordEntryRow::builder()
-        .title("Invite code (during the beta)")
-        .build();
-    let create = button("Create", Some("suggested-action"));
-    {
-        let (ui, invite2) = (ui.clone(), invite.clone());
-        create.connect_clicked(move |_| {
-            run_init(
-                &ui,
-                Vec::new(),
-                secret("ONECLOUD_INVITE", invite2.text().to_string()),
-            );
-        });
-    }
-    invite.add_suffix(&create);
-    hosted.add(&invite);
-    if HOSTED {
-        page.add(&hosted);
-    }
-
-    // create, own bucket
-    let own = group(
-        "New account, self-hosted (free)",
-        "Everything lives in your own S3 storage (Hetzner, R2, B2, ...): you pay the provider, \
-         and nobody sits in between. Encrypted here first, as always. Computers check for \
-         changes every few seconds.",
-    );
-    let (endpoint, bucket, region, key_id) = (
-        entry("Endpoint, like https://fsn1.your-objectstorage.com"),
-        entry("Bucket"),
-        entry("Region, like fsn1 (or auto)"),
-        entry("Access key"),
-    );
-    let key = adw::PasswordEntryRow::builder().title("Secret key").build();
-    for w in [&endpoint, &bucket, &region, &key_id] {
-        own.add(w);
-    }
-    own.add(&key);
-    let create_own = button("Create", Some("suggested-action"));
-    create_own.set_halign(gtk::Align::End);
-    create_own.set_margin_top(12);
-    {
-        let ui = ui.clone();
-        create_own.connect_clicked(move |_| {
-            let (e, b, r, k, sk) = (
-                endpoint.text().trim().to_string(),
-                bucket.text().trim().to_string(),
-                region.text().trim().to_string(),
-                key_id.text().trim().to_string(),
-                key.text().to_string(),
-            );
-            if [&e, &b, &k, &sk].iter().any(|v| v.is_empty()) {
-                ui.toast("Fill in the endpoint, bucket and keys");
-                return;
-            }
-            let mut args = vec!["--repo".to_string(), "opendal:s3".to_string()];
-            for (name, value) in [
-                ("endpoint", e),
-                ("bucket", b),
-                ("region", if r.is_empty() { "auto".into() } else { r }),
-                ("access_key_id", k),
-            ] {
-                args.push("--opt".into());
-                args.push(format!("{name}={value}"));
-            }
-            // self-hosted: coordination lives in the bucket too
-            args.push("--coordinator".into());
-            args.push("bucket".into());
-            // the secret through the environment: a command line is readable
-            // by other processes
-            run_init(
-                &ui,
-                args,
-                vec![("ONECLOUD_SECRET_ACCESS_KEY".to_string(), sk)],
-            );
-        });
-    }
-    own.add(&create_own);
-    page.add(&own);
     page
 }
 
@@ -815,6 +1052,12 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
             ""
         },
     );
+    if self_hosted && me["role"] == "member" {
+        let add = button("Show Join Code", Some("flat"));
+        let ui2 = ui.clone();
+        add.connect_clicked(move |_| show_join_code(&ui2));
+        g.set_header_suffix(Some(&add));
+    }
     for d in list("devices") {
         let (name, fp) = (text(&d["name"]), text(&d["fingerprint"]));
         let rw = row(&name, &fp);
@@ -901,6 +1144,27 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         page.add(&bucket_key(ui, &s["bucket_key"]));
     }
     page
+}
+
+/// A join code for adding another computer to this account.
+fn show_join_code(ui: &Rc<Ui>) {
+    let ui2 = ui.clone();
+    run_then(
+        &["onecloud", "join-code"],
+        Vec::new(),
+        None,
+        move |r| match r {
+            Err(e) => ui2.toast(&e),
+            Ok(out) => show_text(
+                &ui2,
+                "Join code",
+                "On the new computer, install OneCloud, open it, and paste this under Add this \
+             computer to your account. Then approve it here. The code holds your bucket's key: \
+             pass it only to your own computers, and not through chat or email.",
+                out.trim(),
+            ),
+        },
+    );
 }
 
 /// A self-hosted account's bucket key: every computer holds it, so a lost

@@ -6,14 +6,12 @@ and ssh and gpg keys alongside, every version kept, end to end encrypted.
 This page describes what protects your data and what each party can and
 can't do. The source files named here hold the details.
 
-## Two ways to run it
+## Your bucket, nobody in between
 
-- **Self-hosted** (free): everything lives in your own S3 bucket (Hetzner,
-  R2, B2, MinIO), coordination included. Nobody sits in between: your
-  computers talk to your bucket and to nothing else.
-- **Hosted** (from 1.0): the OneCloud service stores the data and
-  coordinates. It sees only ciphertext and signed records, and the client
-  verifies everything it relays.
+Everything lives in an S3 bucket you rent from a provider (Hetzner, R2, B2,
+MinIO): the files, and the records that keep your computers in step. Your
+computers talk to your bucket and to nothing else. The provider sees only
+encrypted objects.
 
 ## Storage: plain restic
 
@@ -57,25 +55,19 @@ Computers agree on the latest version through a chain of *heads*
 (`head.rs`). Each head names a snapshot, links to the previous one by hash,
 records the device chain position its signer saw, and is signed by the
 computer that pushed it. Every computer remembers the last head it verified,
-so whoever relays heads (the service, or your bucket) can order them but
-can't roll history back, withhold it, fork it or forge it without the
-clients noticing.
+so whoever can write to the bucket can't roll history back, withhold it,
+fork it or forge it without the other computers noticing.
 
-- **Self-hosted** (`bucket.rs`): the heads, device chain and epoch records
-  are objects in your bucket. Appending is a create-only write
-  (`If-None-Match: *`), which the bucket refuses if another computer took
-  that position first. S3, R2, MinIO and Hetzner support it on unversioned
-  buckets; a bucket with object lock keeps coordination in a second, plain
-  bucket (`--coordination-bucket`). Computers poll for changes.
-- **Hosted** (`http.rs`, `service/`): a Cloudflare Durable Object per account
-  orders the records and pushes change notices. It checks every write
-  against the same rules the client applies, and the client still verifies
-  every read. Storage goes through presigned URLs (`storage.rs`), so a
-  removed computer is cut off from storage at once.
+The heads, device chain and epoch records are objects in your bucket
+(`bucket.rs`). Appending is a create-only write (`If-None-Match: *`), which
+the bucket refuses if another computer took that position first. S3, R2,
+MinIO and Hetzner support it on buckets without versioning; a bucket with
+object lock keeps these records in a second, plain bucket
+(`--coordination-bucket`). Computers check for changes every few seconds.
 
-## Bucket keys (self-hosted)
+## Bucket keys
 
-On a self-hosted account every computer holds the bucket's key, kept in the
+Every computer holds the bucket's key, kept in the
 desktop keyring rather than a file. A lost computer is cut off by changing
 that key (`bucket_key.rs`): one computer publishes the new key sealed to the
 current members and the root, the others switch on their next sync and say
@@ -97,11 +89,11 @@ when another dotfile manager owns those files.
 
 ## What each party can see
 
-| | self-hosted | hosted |
-|---|---|---|
-| your bucket provider | encrypted objects, their sizes and times | (not involved) |
-| the OneCloud service | nothing | encrypted objects, signed records, your computers' public keys, storage used |
-| a removed computer | what it had synced before removal, until the bucket key changes | what it had synced before removal |
+- **Your storage provider** sees encrypted objects, their sizes (padded) and
+  when they're written.
+- **The OneCloud project** sees nothing: there is no OneCloud server.
+- **A removed computer** keeps what it had synced before removal, and can
+  reach the bucket until its key changes.
 
 Nobody but your computers and your recovery code can read file contents,
 names, settings or keys.

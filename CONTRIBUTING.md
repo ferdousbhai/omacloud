@@ -1,7 +1,7 @@
 # Contributing
 
 The layout is in the README, the design in [docs/design.md](docs/design.md),
-and the work ahead in the issues (milestones `0.0.1` and `1.0`).
+and the work ahead in the issues.
 
 ## Before a commit
 

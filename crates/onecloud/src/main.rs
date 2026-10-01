@@ -51,22 +51,20 @@ enum Cmd {
         /// Pictures in home, as iCloud does; `onecloud folders` changes them]
         #[arg(long)]
         folder: Option<PathBuf>,
-        /// Repository: a path, an opendal URL like `opendal:s3`, or
-        /// `onecloud` for storage through the hosted service (1.0). Joining
-        /// with a join code needs none
+        /// Where the files live: an opendal URL like `opendal:s3` (with
+        /// `--opt endpoint=... --opt bucket=... --opt access_key_id=...`; the
+        /// secret key is asked for), or a path. Joining with a join code needs
+        /// none
         #[arg(long)]
         repo: Option<String>,
         /// Backend option, repeatable: `--opt bucket=name`
         #[arg(long = "opt", value_parser = parse_kv)]
         opts: Vec<(String, String)>,
-        /// Coordinator: the service's URL, or a shared directory
-        /// [default: `bucket`, in your own bucket; the hosted service comes
-        /// with 1.0]
-        #[arg(long)]
+        /// Where computers keep in step [default: `bucket`, beside the files]
+        #[arg(long, hide = true)]
         coordinator: Option<String>,
-        /// Account to join (its id, printed when it was created); needed to
-        /// join through the service without the recovery code
-        #[arg(long)]
+        /// Account to join, by id, through a coordinator that relays requests
+        #[arg(long, hide = true)]
         account: Option<String>,
         /// Name for this device [default: the hostname]
         #[arg(long)]
@@ -75,8 +73,8 @@ enum Cmd {
         /// device to approve
         #[arg(long, env = "ONECLOUD_RECOVERY_CODE", hide_env_values = true)]
         recovery_code: Option<String>,
-        /// Invite code, to create an account on the service during the beta
-        #[arg(long, env = "ONECLOUD_INVITE", hide_env_values = true)]
+        /// Invite code, for a coordinator that needs one
+        #[arg(long, env = "ONECLOUD_INVITE", hide_env_values = true, hide = true)]
         invite: Option<String>,
         /// With `--coordinator bucket`: keep coordination in this bucket
         /// (same endpoint and keys) instead of beside the data. Needed when
@@ -84,14 +82,13 @@ enum Cmd {
         /// create-only writes coordination needs on versioned buckets
         #[arg(long)]
         coordination_bucket: Option<String>,
-        /// Join an account that coordinates in its own bucket, with the code
-        /// `onecloud join-code` printed on one of its devices
+        /// Join your account with the code from `onecloud join-code` (or Show
+        /// Join Code in the app) on one of your computers
         #[arg(long, env = "ONECLOUD_JOIN_CODE", hide_env_values = true)]
         join_code: Option<String>,
     },
-    /// Print what a new device needs to join this account when it runs with
-    /// no service (`--coordinator bucket`). It holds the bucket's keys: pass
-    /// it privately
+    /// Print a code another computer joins this account with (`onecloud
+    /// init --join-code`). It holds the bucket's key: pass it privately
     JoinCode,
     /// Sync once and exit
     Sync,
@@ -138,8 +135,7 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<PackagesCmd>,
     },
-    /// The bucket key of a self-hosted account: change it, to cut off a lost
-    /// or removed computer
+    /// Your bucket's key: change it, to cut off a lost or removed computer
     Bucket {
         #[command(subcommand)]
         action: Option<BucketCmd>,
@@ -161,8 +157,8 @@ enum Cmd {
         #[command(subcommand)]
         action: RecoveryCmd,
     },
-    /// Shared folders: a folder shared with other onecloud users. Each is
-    /// its own repository with its own key and members
+    /// Shared folders: not available yet
+    #[command(hide = true)]
     Share {
         #[command(subcommand)]
         action: Option<ShareCmd>,
@@ -182,8 +178,8 @@ enum Cmd {
         #[arg(long)]
         yes: bool,
     },
-    /// Delete the account on the service, with all its stored data, and
-    /// this device's setup. Files in the synced folder stay. Cannot be undone
+    /// Delete the account on a coordinator that stores it
+    #[command(hide = true)]
     DeleteAccount {
         /// The full account id, to confirm (`onecloud status` shows it)
         #[arg(long)]

@@ -1,10 +1,26 @@
 # Changelog
 
+## 0.0.2 (2026-10-01)
+
+Easier to set up.
+
+- Setup asks which storage provider you use (Hetzner, Cloudflare R2,
+  Backblaze B2 or other S3 storage) and shows the two steps to get a bucket
+  and a key there, with a link; the endpoint and region follow from your
+  answers. A bucket with object lock gets its second bucket from a switch.
+- The recovery code is confirmed by typing its last four characters.
+- Background sync starts as soon as a computer is set up, not at the next
+  login.
+- Devices has Show Join Code, so adding a computer needs no terminal.
+- Opening OneCloud while it's open brings its window forward instead of a
+  second one.
+- Plain wording about cost: you pay your storage provider; OneCloud charges
+  nothing.
+
 ## 0.0.1 (2026-10-01)
 
-The first release, as OneCloud: self-hosted. Everything lives in your own S3 bucket
-(Hetzner, R2, B2, MinIO), coordination included, and nobody sits in between.
-The hosted service comes with 1.0.
+The first release. Everything lives in your own S3 bucket (Hetzner, R2, B2,
+MinIO), and nobody sits in between.
 
 - Syncs Desktop, Documents and Pictures in place on every computer, as iCloud
   does; `onecloud folders add|skip` for others. Folders match by what they
@@ -34,4 +50,4 @@ The hosted service comes with 1.0.
   interrupted first sync resumes.
 - Bandwidth cap, pause on battery, delete protection on the bucket respected.
 
-Not yet: sharing with other people, online-only files, the hosted service.
+Not yet: sharing with other people, online-only files.
