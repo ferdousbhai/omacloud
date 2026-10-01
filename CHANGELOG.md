@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.4 (2026-10-01)
+
+- Reproducible builds: two builds of the same tag give byte-identical
+  binaries wherever they run, and the binaries no longer carry the
+  builder's home directory. CONTRIBUTING.md says how to check a release.
+- docs/providers.md: setting up Hetzner, Cloudflare R2, Backblaze B2 or
+  other S3 storage, and what was tested on each.
+
 ## 0.0.3 (2026-10-01)
 
 OneCloud is your own bucket only: the code for running it through a server

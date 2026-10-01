@@ -36,6 +36,9 @@ build() {
   cd "$srcdir/$pkgname"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR=target
+  # dependency sources sit under the builder's home: name them neutrally,
+  # so the binaries carry no username and rebuild the same anywhere
+  export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
   cargo build --frozen --release -p onecloud -p onecloud-app
 }
 

@@ -59,3 +59,18 @@ keyring; scripts that make test accounts clear their keyring entries on exit
 GitHub release, then `scripts/verify-release.sh` installs it in a clean Arch
 container and takes the release back down if that fails. Signing needs the
 package-signing key whose fingerprint `install.sh` pins.
+
+## Checking a release
+
+From 0.0.4, builds are reproducible: two builds of the same tag give
+byte-identical binaries, wherever they run (the PKGBUILD maps the builder's
+cargo directory to `/cargo`). Only the package's `.BUILDINFO`, which records the build
+directory, and `.MTREE`, which hashes it, differ when the directory does.
+Arch's `makerepropkg` rebuilds a package in a clean chroot from its
+`.BUILDINFO` and compares; by hand:
+
+```sh
+git clone --branch v<version> https://github.com/ferdousbhai/onecloud && cd onecloud/pkgbuild
+SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) makepkg --nocheck
+# then compare usr/bin/* with the released package's
+```
