@@ -34,7 +34,8 @@ the app shows: create a private bucket, and a key that can read and write
 it. Paste the bucket name and both keys, and click Create Account. The app
 then shows your **recovery code** once: write it down and keep it offline.
 With it you can add a computer when no other is at hand and recover
-everything; without it and without a computer, nobody can.
+everything; without it and without a computer, nobody can. [docs/providers.md](docs/providers.md) has the
+steps and notes for each storage provider.
 
 **Each other computer:** install OneCloud, then on a computer that already
 has it, open Devices and click Show Join Code. Paste the code into the new
