@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libadwaita-1-dev
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Restore with plain restic
+        run: |
+          sudo apt-get install -y restic
+          cargo build -p onecloud
+          scripts/restic-compat.sh target/debug/onecloud
+      - name: Sync through S3 (SeaweedFS)
+        env:
+          S3_ENDPOINT: http://localhost:8333
+          S3_BUCKET: onecloud-ci
+          S3_KEY: ci
+          S3_SECRET: ci-secret
+        run: |
+          echo '{"identities":[{"name":"ci","credentials":[{"accessKey":"ci","secretKey":"ci-secret"}],"actions":["Admin","Read","Write","List","Tagging"]}]}' > /tmp/s3.json
+          docker run -d --name s3 -p 8333:8333 -v /tmp/s3.json:/etc/s3.json:ro \
+            chrislusf/seaweedfs server -s3 -s3.config=/etc/s3.json -dir=/data
+          for i in $(seq 1 60); do curl -s -o /dev/null localhost:8333 && break; sleep 1; done
+          curl -sf -X PUT --aws-sigv4 "aws:amz:us-east-1:s3" --user ci:ci-secret "$S3_ENDPOINT/$S3_BUCKET"
+          scripts/s3-sync.sh target/debug/onecloud
+      - name: Bucket key change, one computer offline
+        run: scripts/bucket-key.sh target/debug/onecloud
+
+  service:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: service/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: service/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test

@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "onecloud-coordinator",
+  "compatibility_date": "2026-08-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "src/index.ts",
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  // one Durable Object per account orders and relays that account's history
+  "durable_objects": {
+    "bindings": [{ "name": "ACCOUNT", "class_name": "Account" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Account"] }],
+  // the bucket behind the managed tiers (R2, EU jurisdiction);
+  // STORAGE_KEY_ID and STORAGE_SECRET are secrets, and so is INVITE_CODE,
+  // which new accounts need until billing exists (`wrangler secret put`, or
+  // .dev.vars locally)
+  "vars": {
+    "STORAGE_ENDPOINT": "https://0af9e0921b880657d84a6c07307f8aef.eu.r2.cloudflarestorage.com",
+    "STORAGE_BUCKET": "onecloud-storage",
+    "STORAGE_REGION": "auto",
+    // bytes an account may store (10 GB during the beta); billing will set
+    // this per account
+    "STORAGE_QUOTA_BYTES": "10000000000"
+  },
+  "workers_dev": true,
+  // the account page (public/, with web/app.ts bundled into public/app.js);
+  // API paths fall through to the Worker
+  "assets": { "directory": "./public" },
+  "build": { "command": "pnpm build:web" }
+}

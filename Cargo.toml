@@ -1,0 +1,38 @@
+[workspace]
+resolver = "3"
+members = ["crates/onecloud-core", "crates/onecloud", "crates/onecloud-app"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/ferdousbhai/onecloud"
+
+[workspace.dependencies]
+onecloud-core = { path = "crates/onecloud-core" }
+rustic_core = "0.13"
+rustic_backend = "0.7"
+opendal = { version = "0.58", default-features = false, features = ["blocking", "services-s3", "services-fs"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread"] }
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+ed25519-dalek = { version = "2", features = ["rand_core", "serde"] }
+rand = "0.8"
+sha2 = "0.10"
+crypto_box = { version = "0.9", features = ["seal"] }
+hex = "0.4"
+notify = "8"
+ignore = "0.4"
+libc = "0.2"
+rayon = "1"
+clap = { version = "4", features = ["derive", "env"] }
+log = "0.4"
+env_logger = "0.11"
+tempfile = "3"
+
+# rustic_core 0.13 plus pack padding and splice_tree, see vendor/rustic_core/ONECLOUD.md
+[patch.crates-io]
+rustic_core = { path = "vendor/rustic_core" }

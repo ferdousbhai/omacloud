@@ -1,0 +1,355 @@
+From 7f0f006927e3758ef62b97861b2bbc2843604e5f Mon Sep 17 00:00:00 2001
+From: Ferdous Bhai <ferdousbd@gmail.com>
+Date: Mon, 28 Sep 2026 12:21:53 +0300
+Subject: [PATCH] =?UTF-8?q?feat:=20optional=20Padm=C3=A9=20padding=20for?=
+ =?UTF-8?q?=20pack=20files?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add a `pack_padding` repository config option (`--set-pack-padding`), off
+by default. When on, each pack gets one random, unreferenced data blob
+before its header is written, sized so the finished pack is exactly a
+Padmé size. Small packs then no longer reveal the exact size of the file
+they hold; the overhead is at most 12%.
+
+The padding blob is an ordinary indexed blob (id = hash of its
+plaintext), so padded packs stay valid restic packs. Prune drops padding
+as unused data on repack; the repacker carries the setting, so repacked
+packs are padded again.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/core/src/blob/packer.rs                | 78 ++++++++++++++++++-
+ crates/core/src/commands/config.rs            | 10 +++
+ crates/core/src/commands/prune.rs             |  1 +
+ crates/core/src/repofile/configfile.rs        | 12 +++
+ crates/core/src/repofile/packfile.rs          |  5 +-
+ crates/core/tests/integration.rs              |  1 +
+ crates/core/tests/integration/pack_padding.rs | 66 ++++++++++++++++
+ 7 files changed, 170 insertions(+), 3 deletions(-)
+ create mode 100644 crates/core/tests/integration/pack_padding.rs
+
+diff --git a/crates/core/src/blob/packer.rs b/crates/core/src/blob/packer.rs
+index 8ab6049..0f4d9ad 100644
+--- a/crates/core/src/blob/packer.rs
++++ b/crates/core/src/blob/packer.rs
+@@ -11,6 +11,7 @@ use integer_sqrt::IntegerSquareRoot;
+ use jiff::Timestamp;
+ use log::warn;
+ use pariter::IteratorExt;
++use rand::{Rng, rng};
+ 
+ use crate::{
+     Progress,
+@@ -19,13 +20,16 @@ use crate::{
+         decrypt::{DecryptFullBackend, DecryptWriteBackend},
+     },
+     blob::{BlobId, BlobLocations, BlobType},
+-    crypto::{CryptoKey, hasher::hash_reader},
++    crypto::{
++        CryptoKey,
++        hasher::{hash, hash_reader},
++    },
+     error::{ErrorKind, RusticError, RusticResult},
+     index::{IndexEntry, indexer::SharedIndexer},
+     repofile::{
+         configfile::ConfigFile,
+         indexfile::IndexPack,
+-        packfile::{PackHeaderLength, PackHeaderRef, PackId},
++        packfile::{HeaderEntry, PackHeaderLength, PackHeaderRef, PackId},
+         snapshotfile::SnapshotSummary,
+     },
+ };
+@@ -78,6 +82,8 @@ pub struct PackSizer {
+     min_packsize_tolerate_percent: u32,
+     /// The maximum pack size tolerance in percent before a repack is triggered.
+     max_packsize_tolerate_percent: u32,
++    /// Whether to pad finished packs to a Padmé size.
++    padding: bool,
+ }
+ 
+ impl PackSizer {
+@@ -104,6 +110,7 @@ impl PackSizer {
+             current_size,
+             min_packsize_tolerate_percent,
+             max_packsize_tolerate_percent,
++            padding: config.pack_padding(),
+         }
+     }
+ 
+@@ -125,9 +132,17 @@ impl PackSizer {
+             current_size: 0,
+             min_packsize_tolerate_percent: 100,
+             max_packsize_tolerate_percent: 100,
++            padding: false,
+         }
+     }
+ 
++    /// Sets whether finished packs are padded to a Padmé size.
++    #[must_use]
++    pub const fn with_padding(mut self, padding: bool) -> Self {
++        self.padding = padding;
++        self
++    }
++
+     /// Computes the size of the pack file.
+     #[must_use]
+     #[allow(clippy::cast_possible_truncation)]
+@@ -503,6 +518,9 @@ impl<BE: DecryptWriteBackend> RawPacker<BE> {
+     /// * If converting the header length to u32 fails
+     /// * If the header could not be written
+     fn save(&mut self) -> RusticResult<()> {
++        if self.basic.pack_sizer.padding {
++            self.pad()?;
++        }
+         // write header
+         let data = self.basic.header_bytes()?;
+         // encrypt and write to pack file
+@@ -526,6 +544,22 @@ impl<BE: DecryptWriteBackend> RawPacker<BE> {
+         Ok(())
+     }
+ 
++    /// Adds one random data blob so that the finished pack is exactly a Padmé
++    /// size. It's an ordinary indexed blob (its id is the hash of its
++    /// plaintext), so the pack stays a valid restic pack; prune sees it as
++    /// unused and drops it on the next repack, which pads again.
++    fn pad(&mut self) -> RusticResult<()> {
++        let header =
++            PackHeaderRef::from_index_pack(&self.basic.index).size() + HeaderEntry::ENTRY_LEN;
++        let unpadded = self.basic.size + CRYPTO_OVERHEAD + header + PackHeaderLength::LEN;
++        let len = padme(unpadded) - unpadded;
++        let mut plain = vec![0u8; len as usize];
++        rng().fill_bytes(&mut plain);
++        let id = BlobId::from(hash(&plain));
++        let data = self.be.key().encrypt_data(&plain)?;
++        self.basic.add_raw(data.into(), &id, u64::from(len), None)
++    }
++
+     fn has(&self, id: &BlobId) -> bool {
+         self.basic.has(id)
+     }
+@@ -1097,3 +1131,43 @@ mod tests {
+         assert_ron_snapshot!(output);
+     }
+ }
++
++/// Encryption overhead of one blob: 16 byte IV plus 16 byte MAC.
++const CRYPTO_OVERHEAD: u32 = 32;
++
++/// Padmé (Nikitin et al., PETS 2019): round `len` up so that only the top
++/// `floor(log2(log2(len))) + 1` bits of the size vary. Overhead is at most 12%,
++/// and a size reveals O(log log n) bits instead of O(log n).
++pub(crate) const fn padme(len: u32) -> u32 {
++    if len < 2 {
++        return len;
++    }
++    let e = 31 - len.leading_zeros(); // floor(log2 len)
++    let s = 32 - e.leading_zeros(); // floor(log2 e) + 1
++    let mask = (1u32 << (e - s)) - 1;
++    (len + mask) & !mask
++}
++
++#[cfg(test)]
++mod padme_tests {
++    use super::padme;
++
++    #[test]
++    fn padme_matches_the_paper() {
++        // values from the Padmé definition: only the top log2(log2 L) + 1 bits vary
++        assert_eq!(padme(0), 0);
++        assert_eq!(padme(1), 1);
++        assert_eq!(padme(9), 10);
++        assert_eq!(padme(1000), 1024);
++        assert_eq!(padme(1025), 1088);
++        assert_eq!(padme(1_000_000), 1_015_808);
++        for len in 2..200_000u32 {
++            let p = padme(len);
++            assert!(p >= len && padme(p) == p);
++            assert!(
++                u64::from(p - len) * 100 <= u64::from(len) * 12,
++                "{len} -> {p}"
++            );
++        }
++    }
++}
+diff --git a/crates/core/src/commands/config.rs b/crates/core/src/commands/config.rs
+index a3a3963..8217c66 100644
+--- a/crates/core/src/commands/config.rs
++++ b/crates/core/src/commands/config.rs
+@@ -238,6 +238,12 @@ pub struct ConfigOptions {
+     #[cfg_attr(feature = "clap", clap(long))]
+     #[cfg_attr(feature = "merge", merge(strategy = conflate::option::overwrite_none))]
+     pub set_extra_verify: Option<bool>,
++
++    /// Pad pack files to Padmé sizes to hide the exact size of small packs.
++    /// Costs at most 12% extra storage. Default: false
++    #[cfg_attr(feature = "clap", clap(long))]
++    #[cfg_attr(feature = "merge", merge(strategy = conflate::option::overwrite_none))]
++    pub set_pack_padding: Option<bool>,
+ }
+ 
+ impl ConfigOptions {
+@@ -404,6 +410,10 @@ impl ConfigOptions {
+ 
+         config.extra_verify = self.set_extra_verify;
+ 
++        if let Some(padding) = self.set_pack_padding {
++            config.pack_padding = Some(padding);
++        }
++
+         Ok(())
+     }
+ }
+diff --git a/crates/core/src/commands/prune.rs b/crates/core/src/commands/prune.rs
+index 306a5ab..b07e0ab 100644
+--- a/crates/core/src/commands/prune.rs
++++ b/crates/core/src/commands/prune.rs
+@@ -1379,6 +1379,7 @@ pub(crate) fn prune_repository<S: Open>(
+         // use a fixed pack size corresponding to the estimated size after pruning.
+         let pack_sizer = size_after_prune.map(|blob_type, size| {
+             PackSizer::fixed(PackSizer::from_config(repo.config(), blob_type, size).pack_size())
++                .with_padding(repo.config().pack_padding())
+         });
+ 
+         let tree_repacker = BlobCopier::new(
+diff --git a/crates/core/src/repofile/configfile.rs b/crates/core/src/repofile/configfile.rs
+index 13cb896..b0d0945 100644
+--- a/crates/core/src/repofile/configfile.rs
++++ b/crates/core/src/repofile/configfile.rs
+@@ -138,6 +138,12 @@ pub struct ConfigFile {
+ 
+     /// Do an extra verification by decompressing/decrypting all data before uploading to the repository
+     pub extra_verify: Option<bool>,
++
++    /// Pad every pack file to a Padmé size (Nikitin et al., PETS 2019) by
++    /// adding one random, unreferenced data blob. This hides the exact size of
++    /// small packs, which otherwise reveals the size of the file they hold.
++    /// Costs at most 12% extra storage. Padded packs stay readable by restic.
++    pub pack_padding: Option<bool>,
+ }
+ 
+ impl ConfigFile {
+@@ -199,6 +205,12 @@ impl ConfigFile {
+         self.extra_verify.unwrap_or(true) // default is to do the extra check
+     }
+ 
++    /// Get whether packs are padded to Padmé sizes.
++    #[must_use]
++    pub fn pack_padding(&self) -> bool {
++        self.pack_padding.unwrap_or(false)
++    }
++
+     /// Get pack size parameter
+     ///
+     /// # Arguments
+diff --git a/crates/core/src/repofile/packfile.rs b/crates/core/src/repofile/packfile.rs
+index e4a3b10..c3de8ea 100644
+--- a/crates/core/src/repofile/packfile.rs
++++ b/crates/core/src/repofile/packfile.rs
+@@ -41,6 +41,9 @@ pub(super) mod constants {
+ pub struct PackHeaderLength(pub u32);
+ 
+ impl PackHeaderLength {
++    /// The length of the length field at the end of a pack
++    pub(crate) const LEN: u32 = constants::LENGTH_LEN;
++
+     /// Create a new [`PackHeaderLength`] from a [`u32`]
+     ///
+     /// # Arguments
+@@ -131,7 +134,7 @@ pub enum HeaderEntry {
+ 
+ impl HeaderEntry {
+     /// The length of an uncompressed header entry
+-    const ENTRY_LEN: u32 = 37;
++    pub(crate) const ENTRY_LEN: u32 = 37;
+ 
+     /// The length of a compressed header entry
+     pub(crate) const ENTRY_LEN_COMPRESSED: u32 = 41;
+diff --git a/crates/core/tests/integration.rs b/crates/core/tests/integration.rs
+index 43840ec..2f6428f 100644
+--- a/crates/core/tests/integration.rs
++++ b/crates/core/tests/integration.rs
+@@ -33,6 +33,7 @@ mod integration {
+     mod hotcold;
+     mod key;
+     mod ls;
++    mod pack_padding;
+     mod prune;
+     mod repair_snapshots;
+     mod restore;
+diff --git a/crates/core/tests/integration/pack_padding.rs b/crates/core/tests/integration/pack_padding.rs
+new file mode 100644
+index 0000000..35114ab
+--- /dev/null
++++ b/crates/core/tests/integration/pack_padding.rs
+@@ -0,0 +1,66 @@
++use std::{path::PathBuf, str::FromStr, sync::Arc};
++
++use anyhow::Result;
++use rstest::rstest;
++
++use rustic_core::{
++    BackupOptions, CheckOptions, ConfigOptions, Credentials, FileType, KeyOptions, PruneOptions,
++    ReadBackend, Repository, RepositoryBackends, RepositoryOptions,
++    repofile::{MasterKey, SnapshotFile},
++};
++use rustic_testing::backend::in_memory_backend::InMemoryBackend;
++
++use super::{TestSource, tar_gz_testdata};
++
++/// Padmé, written independently of the implementation under test.
++fn is_padme(len: u32) -> bool {
++    if len < 2 {
++        return true;
++    }
++    let e = len.ilog2();
++    let s = e.ilog2() + 1;
++    len.trailing_zeros() >= e - s
++}
++
++#[rstest]
++fn test_pack_padding(tar_gz_testdata: Result<TestSource>) -> Result<()> {
++    let source = tar_gz_testdata?;
++    let be = Arc::new(InMemoryBackend::new());
++    let backends = RepositoryBackends::new(be.clone(), None);
++    let config_opts = ConfigOptions::default().set_pack_padding(true);
++    let repo = Repository::new(&RepositoryOptions::default(), &backends)?.init(
++        &Credentials::Masterkey(MasterKey::new()),
++        &KeyOptions::default(),
++        &config_opts,
++    )?;
++    assert!(repo.config().pack_padding());
++
++    let repo = repo.to_indexed_ids()?;
++    let opts = BackupOptions::default().as_path(PathBuf::from_str("test")?);
++    _ = repo.backup(&opts, &source.path_list(), SnapshotFile::default())?;
++
++    let assert_padded = || -> Result<()> {
++        let packs = be.list_with_size(FileType::Pack)?;
++        assert!(!packs.is_empty());
++        for (id, size) in packs {
++            assert!(
++                is_padme(size),
++                "pack {id} has size {size}, not a Padmé size"
++            );
++        }
++        Ok(())
++    };
++    assert_padded()?;
++    repo.check(CheckOptions::default().read_data(true))?
++        .is_ok()?;
++
++    // prune drops the padding blobs as unused; repacked packs are padded again
++    let prune_opts = PruneOptions::default().instant_delete(true);
++    let plan = repo.prune_plan(&prune_opts)?;
++    repo.prune(&prune_opts, plan)?;
++    assert_padded()?;
++    repo.check(CheckOptions::default().read_data(true))?
++        .is_ok()?;
++
++    Ok(())
++}
+-- 
+2.55.0
+

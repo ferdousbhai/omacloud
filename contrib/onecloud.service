@@ -1,0 +1,18 @@
+[Unit]
+Description=Keep the onecloud folder in sync
+Documentation=https://github.com/ferdousbhai/onecloud
+After=network-online.target
+# the package enables this for every user; it runs for those who set up
+# onecloud (`onecloud init`)
+ConditionPathExists=%h/.config/onecloud/config.toml
+
+[Service]
+ExecStart=/usr/bin/onecloud watch
+Restart=on-failure
+RestartSec=10
+# exit code 2: removed from the account, or the coordinator served a history
+# this device refuses; a human has to look, so don't restart into it
+RestartPreventExitStatus=2
+
+[Install]
+WantedBy=default.target

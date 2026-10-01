@@ -1,0 +1,604 @@
+From 81a6ecbe9179b0d0c0738e2d80613f164d3e19ae Mon Sep 17 00:00:00 2001
+From: Ferdous Bhai <ferdousbd@gmail.com>
+Date: Mon, 28 Sep 2026 12:21:53 +0300
+Subject: [PATCH] feat: add splice_tree to edit a tree at given paths
+
+Add `Repository::splice_tree(root, edits)` and the `TreeEdit` enum (Put,
+PutFile, Delete). Only the trees on the paths from each edit to the root
+are read and rewritten; all other subtrees keep their ids, so the cost of
+a new snapshot follows the size of the change rather than the size of the
+source. This suits continuous sync, where a watcher already knows which
+paths changed.
+
+Also add `Repository::save_snapshot`, which returns the id of the saved
+snapshot so it can be used as the next snapshot's parent.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/core/src/blob/tree.rs            |   1 +
+ crates/core/src/blob/tree/splice.rs     | 292 ++++++++++++++++++++++++
+ crates/core/src/lib.rs                  |   2 +-
+ crates/core/src/repository.rs           |  48 ++++
+ crates/core/tests/integration.rs        |   1 +
+ crates/core/tests/integration/splice.rs | 160 +++++++++++++
+ 6 files changed, 503 insertions(+), 1 deletion(-)
+ create mode 100644 crates/core/src/blob/tree/splice.rs
+ create mode 100644 crates/core/tests/integration/splice.rs
+
+diff --git a/crates/core/src/blob/tree.rs b/crates/core/src/blob/tree.rs
+index d2fbe40..6e04f3a 100644
+--- a/crates/core/src/blob/tree.rs
++++ b/crates/core/src/blob/tree.rs
+@@ -1,6 +1,7 @@
+ pub mod excludes;
+ pub mod modify;
+ pub mod rewrite;
++pub mod splice;
+ 
+ use std::{
+     borrow::Cow,
+diff --git a/crates/core/src/blob/tree/splice.rs b/crates/core/src/blob/tree/splice.rs
+new file mode 100644
+index 0000000..b6b6006
+--- /dev/null
++++ b/crates/core/src/blob/tree/splice.rs
+@@ -0,0 +1,292 @@
++//! Edit a tree at given paths without walking the rest of it.
++//!
++//! Only the trees on the paths from each edit to the root are read and
++//! rewritten; every other subtree keeps its id. This makes the cost of a new
++//! snapshot proportional to the change instead of the size of the tree, which
++//! is what continuous sync needs.
++
++use std::{
++    collections::{BTreeMap, BTreeSet},
++    ffi::{OsStr, OsString},
++    io::Read,
++    path::{Component, Path, PathBuf},
++};
++
++use jiff::Timestamp;
++use rayon::prelude::*;
++
++use crate::{
++    BlobId, DataId, ErrorKind, RusticError, RusticResult,
++    backend::{
++        decrypt::DecryptFullBackend,
++        node::{Metadata, Node, NodeType},
++    },
++    blob::{
++        BlobType,
++        packer::{PackSizer, Packer},
++        tree::{Tree, TreeId},
++    },
++    chunker::ChunkIter,
++    crypto::hasher::hash,
++    index::{ReadGlobalIndex, indexer::Indexer},
++    repofile::ConfigFile,
++};
++
++/// Go's `os.ModeDir`, as restic stores directory modes.
++const GO_MODE_DIR: u32 = 0x8000_0000;
++
++/// One change to a tree, at a path relative to its root.
++pub enum TreeEdit {
++    /// Put this node as is. Its `content` or `subtree` must already be in
++    /// the repository. A directory without a subtree means "this directory
++    /// exists": an existing one keeps its contents, a new one starts empty,
++    /// and it stays even if other edits leave it empty.
++    Put(Node),
++    /// Put this file node, with its content read, chunked and stored from
++    /// `reader`.
++    PutFile {
++        /// The file node; its `content` is replaced.
++        node: Node,
++        /// Where to read the file's content from.
++        reader: Box<dyn Read + Send>,
++    },
++    /// Remove whatever is at the path; a directory goes with its contents.
++    Delete,
++}
++
++impl std::fmt::Debug for TreeEdit {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            Self::Put(node) => f.debug_tuple("Put").field(node).finish(),
++            Self::PutFile { node, .. } => f.debug_struct("PutFile").field("node", node).finish(),
++            Self::Delete => f.write_str("Delete"),
++        }
++    }
++}
++
++/// The path decides the name, whatever name the node was built with.
++fn named(node: Node, name: &OsStr) -> Node {
++    let escaped = Node::new_node(name, NodeType::File, Metadata::default()).name;
++    Node {
++        name: escaped,
++        ..node
++    }
++}
++
++fn empty_tree_id() -> TreeId {
++    Tree::new()
++        .serialize()
++        .map(|(_, id)| id)
++        .expect("serializing an empty tree")
++}
++
++/// Edits grouped by directory.
++#[derive(Default)]
++struct Group {
++    here: BTreeMap<OsString, TreeEdit>,
++    sub: BTreeMap<OsString, Self>,
++}
++
++impl Group {
++    fn insert(&mut self, path: &Path, edit: TreeEdit) -> RusticResult<()> {
++        let mut names: Vec<&OsStr> = Vec::new();
++        for c in path.components() {
++            let Component::Normal(name) = c else {
++                return Err(RusticError::new(
++                    ErrorKind::InvalidInput,
++                    "Tree edit path `{path}` must be relative, without `.` or `..`.",
++                )
++                .attach_context("path", path.display().to_string()));
++            };
++            names.push(name);
++        }
++        let Some((last, dirs)) = names.split_last() else {
++            return Err(RusticError::new(
++                ErrorKind::InvalidInput,
++                "Tree edit path must not be empty.",
++            ));
++        };
++        let mut group = self;
++        for dir in dirs {
++            group = group.sub.entry((*dir).to_owned()).or_default();
++        }
++        _ = group.here.insert((*last).to_owned(), edit);
++        Ok(())
++    }
++}
++
++/// Applies edits to a tree, writing new data and tree blobs as needed.
++pub(crate) struct TreeSplicer<'a, BE: DecryptFullBackend, I: ReadGlobalIndex> {
++    be: &'a BE,
++    index: &'a I,
++    config: &'a ConfigFile,
++    indexer: crate::index::indexer::SharedIndexer<BE>,
++    data: Packer<BE>,
++    trees: Packer<BE>,
++}
++
++impl<'a, BE: DecryptFullBackend, I: ReadGlobalIndex> TreeSplicer<'a, BE, I> {
++    pub(crate) fn new(be: &'a BE, index: &'a I, config: &'a ConfigFile) -> RusticResult<Self> {
++        let indexer = Indexer::new(be.clone()).into_shared();
++        let sizer = |tpe| PackSizer::from_config(config, tpe, index.total_size(tpe));
++        let data = Packer::new(
++            be.clone(),
++            BlobType::Data,
++            indexer.clone(),
++            sizer(BlobType::Data),
++        )?;
++        let trees = Packer::new(
++            be.clone(),
++            BlobType::Tree,
++            indexer.clone(),
++            sizer(BlobType::Tree),
++        )?;
++        Ok(Self {
++            be,
++            index,
++            config,
++            indexer,
++            data,
++            trees,
++        })
++    }
++
++    /// Applies `edits` to `root` (`None` is an empty tree) and returns the id
++    /// of the new root. Writes at most one index file.
++    pub(crate) fn splice(
++        self,
++        root: Option<TreeId>,
++        edits: impl IntoIterator<Item = (impl AsRef<Path>, TreeEdit)>,
++    ) -> RusticResult<TreeId> {
++        // chunk and store file contents in parallel; the trees are built
++        // sequentially afterwards
++        let edits: Vec<(PathBuf, TreeEdit)> = edits
++            .into_iter()
++            .map(|(path, edit)| (path.as_ref().to_path_buf(), edit))
++            .collect();
++        let edits: Vec<(PathBuf, TreeEdit)> = edits
++            .into_par_iter()
++            .map(|(path, edit)| match edit {
++                TreeEdit::PutFile { mut node, reader } => {
++                    node.content = Some(self.store(reader, node.meta.size)?);
++                    Ok((path, TreeEdit::Put(node)))
++                }
++                other => Ok((path, other)),
++            })
++            .collect::<RusticResult<_>>()?;
++        let mut group = Group::default();
++        for (path, edit) in edits {
++            group.insert(&path, edit)?;
++        }
++        let new_root = match self.tree(root, group)? {
++            Some(id) => id,
++            None => self.save(&Tree::new())?,
++        };
++        _ = self.data.finalize()?;
++        _ = self.trees.finalize()?;
++        self.indexer.write().unwrap().finalize()?;
++        Ok(new_root)
++    }
++
++    /// Returns `None` when the resulting directory is empty.
++    fn tree(&self, id: Option<TreeId>, group: Group) -> RusticResult<Option<TreeId>> {
++        // the empty tree may have been made in this very splice, so it isn't
++        // in the index yet; there is nothing to read anyway
++        let id = id.filter(|id| *id != empty_tree_id());
++        let mut nodes: BTreeMap<OsString, Node> = match id {
++            Some(id) => Tree::from_backend(self.be, self.index, id)?
++                .nodes
++                .into_iter()
++                .map(|node| (node.name().into_owned(), node))
++                .collect(),
++            None => BTreeMap::new(),
++        };
++        // directories put explicitly stay, even when empty
++        let mut kept = BTreeSet::new();
++        for (name, edit) in group.here {
++            match edit {
++                TreeEdit::Delete => _ = nodes.remove(&name),
++                TreeEdit::Put(mut node) => {
++                    if node.is_dir() && node.subtree.is_none() {
++                        // "this directory exists": an existing one keeps its
++                        // contents, a new one starts empty
++                        _ = kept.insert(name.clone());
++                        match nodes.get(&name).filter(|n| n.is_dir()) {
++                            Some(existing) => node.subtree = existing.subtree,
++                            None => node.subtree = Some(self.save(&Tree::new())?),
++                        }
++                    } else if node.is_dir() {
++                        _ = kept.insert(name.clone());
++                    }
++                    let node = named(node, &name);
++                    _ = nodes.insert(name, node);
++                }
++                TreeEdit::PutFile { mut node, reader } => {
++                    node.content = Some(self.store(reader, node.meta.size)?);
++                    let node = named(node, &name);
++                    _ = nodes.insert(name, node);
++                }
++            }
++        }
++        for (name, sub) in group.sub {
++            let existing = nodes.get(&name).filter(|node| node.is_dir()).cloned();
++            match self.tree(existing.as_ref().and_then(|node| node.subtree), sub)? {
++                None if kept.contains(&name) => {
++                    let empty = self.save(&Tree::new())?;
++                    if let Some(node) = nodes.get_mut(&name) {
++                        node.subtree = Some(empty);
++                    }
++                }
++                None => _ = nodes.remove(&name),
++                Some(subtree) => {
++                    let mut node = existing.unwrap_or_else(|| {
++                        let meta = Metadata {
++                            mode: Some(GO_MODE_DIR | 0o755),
++                            mtime: Some(Timestamp::now()),
++                            ..Metadata::default()
++                        };
++                        Node::new_node(&name, NodeType::Dir, meta)
++                    });
++                    node.subtree = Some(subtree);
++                    _ = nodes.insert(name, node);
++                }
++            }
++        }
++        if nodes.is_empty() {
++            return Ok(None);
++        }
++        let mut tree = Tree::new();
++        for node in nodes.into_values() {
++            tree.add(node);
++        }
++        Ok(Some(self.save(&tree)?))
++    }
++
++    fn save(&self, tree: &Tree) -> RusticResult<TreeId> {
++        let (chunk, id) = tree.serialize().map_err(|err| {
++            RusticError::with_source(ErrorKind::Internal, "Failed to serialize tree.", err)
++                .ask_report()
++        })?;
++        if !self.index.has_tree(&id) {
++            self.trees.add(chunk.into(), BlobId::from(*id))?;
++        }
++        Ok(id)
++    }
++
++    fn store(&self, reader: Box<dyn Read + Send>, size: u64) -> RusticResult<Vec<DataId>> {
++        ChunkIter::from_config(
++            self.config,
++            reader,
++            usize::try_from(size).unwrap_or(usize::MAX),
++        )?
++        .map(|chunk| {
++            let chunk = chunk?;
++            let id = DataId::from(hash(&chunk));
++            if !self.index.has_data(&id) {
++                self.data.add(chunk.into(), BlobId::from(*id))?;
++            }
++            Ok(id)
++        })
++        .collect()
++    }
++}
+diff --git a/crates/core/src/lib.rs b/crates/core/src/lib.rs
+index e347f6b..9f31e8d 100644
+--- a/crates/core/src/lib.rs
++++ b/crates/core/src/lib.rs
+@@ -148,7 +148,7 @@ pub use crate::{
+         BlobId, DataId, PackedId,
+         tree::{
+             FindMatches, FindNode, TreeId, TreeStreamerOptions as LsOptions, excludes::Excludes,
+-            rewrite::RewriteTreesOptions,
++            rewrite::RewriteTreesOptions, splice::TreeEdit,
+         },
+     },
+     commands::{
+diff --git a/crates/core/src/repository.rs b/crates/core/src/repository.rs
+index 66a09ff..2f25b69 100644
+--- a/crates/core/src/repository.rs
++++ b/crates/core/src/repository.rs
+@@ -34,6 +34,7 @@ use crate::{
+         tree::{
+             FindMatches, FindNode, NodeStreamer, TreeId, TreeStreamerOptions as LsOptions,
+             rewrite::RewriteTreesOptions,
++            splice::{TreeEdit, TreeSplicer},
+         },
+     },
+     commands::{
+@@ -993,6 +994,25 @@ impl<S: Open> Repository<S> {
+         Ok(())
+     }
+ 
++    /// Save one snapshot to the repository and return its id.
++    ///
++    /// Unlike [`Self::save_snapshots`], this returns the id of the saved
++    /// file, so a caller can reference the snapshot, for example as the
++    /// parent of the next one.
++    ///
++    /// # Arguments
++    ///
++    /// * `snap` - The snapshot to save. Its `id` field is ignored.
++    ///
++    /// # Errors
++    ///
++    /// * If the file could not be serialized to json or written.
++    pub fn save_snapshot(&self, snap: &SnapshotFile) -> RusticResult<SnapshotId> {
++        let mut snap = snap.clone();
++        snap.id = SnapshotId::default();
++        Ok(SnapshotId::from(self.dbe().save_file(&snap)?))
++    }
++
+     /// Save the given snapshots to the repository.
+     ///
+     /// # Arguments
+@@ -1662,6 +1682,34 @@ impl<S: IndexedTree> Repository<S> {
+ }
+ 
+ impl<S: IndexedIds> Repository<S> {
++    /// Apply `edits` to the tree `root` (`None` for an empty tree) and return
++    /// the id of the new root tree.
++    ///
++    /// Only the trees on the paths from each edit to the root are read and
++    /// rewritten; all other subtrees keep their ids. File content given with
++    /// [`TreeEdit::PutFile`] is chunked with the repository's chunker and
++    /// deduplicated against the index. Writes at most one data pack, one tree
++    /// pack and one index file (more only if they exceed the pack size).
++    /// Directories created along the way get mode `0755`; directories left
++    /// empty by deletions are removed.
++    ///
++    /// # Arguments
++    ///
++    /// * `root` - The tree to edit
++    /// * `edits` - Paths relative to `root`, each with the edit to apply
++    ///
++    /// # Errors
++    ///
++    /// * If a path is empty, absolute, or contains `.` or `..`.
++    /// * If reading content or writing to the backend fails.
++    pub fn splice_tree<P: AsRef<Path>>(
++        &self,
++        root: Option<TreeId>,
++        edits: impl IntoIterator<Item = (P, TreeEdit)>,
++    ) -> RusticResult<TreeId> {
++        TreeSplicer::new(self.dbe(), self.index(), self.config())?.splice(root, edits)
++    }
++
+     /// Run a backup of `source` using the given options.
+     ///
+     /// You have to give a preflled [`SnapshotFile`] which is modified and saved.
+diff --git a/crates/core/tests/integration.rs b/crates/core/tests/integration.rs
+index 43840ec..6cad4c5 100644
+--- a/crates/core/tests/integration.rs
++++ b/crates/core/tests/integration.rs
+@@ -38,6 +38,7 @@ mod integration {
+     mod restore;
+     mod rewrite;
+     mod snapshots;
++    mod splice;
+     mod vfs;
+     use super::*;
+ }
+diff --git a/crates/core/tests/integration/splice.rs b/crates/core/tests/integration/splice.rs
+new file mode 100644
+index 0000000..cbb7c2a
+--- /dev/null
++++ b/crates/core/tests/integration/splice.rs
+@@ -0,0 +1,160 @@
++use std::{io::Cursor, path::PathBuf, str::FromStr};
++
++use anyhow::Result;
++use rstest::rstest;
++
++use rustic_core::{
++    BackupOptions, CheckOptions, LsOptions, TreeEdit, TreeId,
++    repofile::{Metadata, Node, NodeType, SnapshotFile},
++};
++
++use super::{RepoOpen, TestSource, set_up_repo, tar_gz_testdata};
++
++fn file_node(name: &str, body: &[u8]) -> Node {
++    let meta = Metadata {
++        size: body.len() as u64,
++        mode: Some(0o644),
++        ..Metadata::default()
++    };
++    Node::new_node(name.as_ref(), NodeType::File, meta)
++}
++
++fn put(name: &str, body: &'static [u8]) -> TreeEdit {
++    TreeEdit::PutFile {
++        node: file_node(name, body),
++        reader: Box::new(Cursor::new(body)),
++    }
++}
++
++#[rstest]
++fn test_splice_tree(
++    tar_gz_testdata: Result<TestSource>,
++    set_up_repo: Result<RepoOpen>,
++) -> Result<()> {
++    let (source, repo) = (tar_gz_testdata?, set_up_repo?.to_indexed_ids()?);
++    let opts = BackupOptions::default().as_path(PathBuf::from_str("test")?);
++    let snap = repo.backup(&opts, &source.path_list(), SnapshotFile::default())?;
++    let repo = repo.to_indexed()?;
++
++    // pick two files in different top level directories of the snapshot
++    let root = repo.node_from_snapshot_and_path(&snap, "")?;
++    let files: Vec<PathBuf> = repo
++        .ls(&root, &LsOptions::default().recursive(true))?
++        .filter_map(Result::ok)
++        .filter(|(_, node)| node.is_file())
++        .map(|(path, _)| path)
++        .collect();
++    let changed = files[0].clone();
++    let deleted = files
++        .iter()
++        .find(|p| p.parent() != changed.parent())
++        .unwrap_or(&files[1])
++        .clone();
++
++    let new_root = repo.splice_tree(
++        Some(snap.tree),
++        [
++            (changed.clone(), put("ignored", b"changed\n")),
++            (deleted.clone(), TreeEdit::Delete),
++            (PathBuf::from("new/dir/file.txt"), put("file.txt", b"new\n")),
++        ],
++    )?;
++    assert_ne!(new_root, snap.tree);
++
++    // saving returns the id, and the snapshot reads back
++    let new_snap = SnapshotFile {
++        tree: new_root,
++        parent: Some(snap.id),
++        ..SnapshotFile::default()
++    };
++    let id = repo.save_snapshot(&new_snap)?;
++
++    // re-read the index to see the blobs splice wrote
++    let repo = repo.to_indexed()?;
++    let new_snap = repo.get_snapshots(&[id.to_string()])?.remove(0);
++    assert_eq!(new_snap.tree, new_root);
++
++    let dump = |path: &str| -> Result<Vec<u8>> {
++        let node = repo.node_from_snapshot_and_path(&new_snap, path)?;
++        let mut out = Vec::new();
++        repo.dump(&node, &mut out)?;
++        Ok(out)
++    };
++    assert_eq!(dump(changed.to_str().unwrap())?, b"changed\n");
++    assert_eq!(dump("new/dir/file.txt")?, b"new\n");
++    assert!(
++        repo.node_from_snapshot_and_path(&new_snap, deleted.to_str().unwrap())
++            .is_err()
++    );
++    // the node is stored under its path's name, not the name given in the node
++    let name = changed.file_name().unwrap();
++    let node = repo.node_from_snapshot_and_path(&new_snap, changed.to_str().unwrap())?;
++    assert_eq!(node.name(), name);
++
++    // subtrees without edits keep their ids
++    let subtrees = |tree: TreeId| -> Result<Vec<(String, Option<TreeId>)>> {
++        Ok(repo
++            .get_tree(&tree)?
++            .nodes
++            .into_iter()
++            .map(|n| (n.name().to_string_lossy().into_owned(), n.subtree))
++            .collect())
++    };
++    let touched =
++        |name: &str| [&changed, &deleted].iter().any(|p| p.starts_with(name)) || name == "new";
++    for (name, subtree) in subtrees(snap.tree)? {
++        if !touched(&name) {
++            assert!(subtrees(new_root)?.contains(&(name, subtree)));
++        }
++    }
++
++    repo.check(CheckOptions::default().read_data(true))?
++        .is_ok()?;
++
++    // a directory put without a subtree: a new one starts empty, and one
++    // emptied by a delete in the same splice stays
++    let dir = |name: &str| {
++        TreeEdit::Put(Node::new_node(
++            name.as_ref(),
++            NodeType::Dir,
++            Metadata::default(),
++        ))
++    };
++    let root3 = repo.splice_tree(
++        Some(new_root),
++        [
++            (PathBuf::from("empty/dir"), dir("dir")),
++            (PathBuf::from("new/dir/file.txt"), TreeEdit::Delete),
++            (PathBuf::from("new/dir"), dir("dir")),
++        ],
++    )?;
++    let repo = repo.to_indexed()?;
++    let snap3 = SnapshotFile {
++        tree: root3,
++        ..SnapshotFile::default()
++    };
++    for path in ["empty/dir", "new/dir"] {
++        let node = repo.node_from_snapshot_and_path(&snap3, path)?;
++        assert!(node.is_dir(), "{path}");
++        assert!(
++            repo.get_tree(&node.subtree.unwrap())?.nodes.is_empty(),
++            "{path}"
++        );
++    }
++    // the rest of the tree is untouched
++    let node = repo.node_from_snapshot_and_path(&snap3, changed.to_str().unwrap())?;
++    let mut out = Vec::new();
++    repo.dump(&node, &mut out)?;
++    assert_eq!(out, b"changed\n");
++    repo.check(CheckOptions::default())?.is_ok()?;
++
++    // invalid paths are rejected
++    for bad in ["", "/abs", "a/../b", "./a"] {
++        assert!(
++            repo.splice_tree(Some(new_root), [(bad, TreeEdit::Delete)])
++                .is_err(),
++            "path {bad:?} should be rejected"
++        );
++    }
++    Ok(())
++}
+-- 
+2.55.0
+
