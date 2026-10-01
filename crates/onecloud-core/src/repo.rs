@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use ed25519_dalek::SigningKey;
 use rustic_backend::BackendOptions;
 use rustic_core::{
     ALL_FILE_TYPES, ConfigOptions, Credentials, FileType, Id, IndexedFullStatus, IndexedIdsStatus,
@@ -14,35 +13,16 @@ use rustic_core::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{http::HttpCoordinator, storage::ServiceStorage};
-
 pub(crate) type Repo = Repository<IndexedFullStatus>;
 
-/// Where a repository lives: a local path; an opendal URL such as
-/// `opendal:s3` with its options (endpoint, bucket, keys); or `onecloud:`,
-/// storage through the service (options `service` and `account`; see
-/// [`crate::storage`]).
-#[derive(Serialize, Deserialize, Clone, Debug)]
+/// Where a repository lives: an opendal URL such as `opendal:s3` with its
+/// options (endpoint, bucket, keys), or a local path.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct RepoSpec {
     pub repository: String,
     #[serde(default)]
     pub options: BTreeMap<String, String>,
-    /// The device key that signs requests to the service, for `onecloud:`
-    /// repositories. Never stored.
-    #[serde(skip)]
-    pub signer: Option<SigningKey>,
 }
-
-impl PartialEq for RepoSpec {
-    fn eq(&self, other: &Self) -> bool {
-        self.repository == other.repository && self.options == other.options
-    }
-}
-
-impl Eq for RepoSpec {}
-
-/// The repository kind for storage through the service.
-pub const SERVICE_REPOSITORY: &str = "onecloud:";
 
 /// Backend options that are credentials: kept out of config files, sealed
 /// in the epoch secret instead.
@@ -61,25 +41,7 @@ pub const CREDENTIAL_OPTIONS: &[&str] = &[
 pub const LOCAL_OPTIONS: &[&str] = &["bandwidth", "connections"];
 
 impl RepoSpec {
-    /// Storage through the service at `url`.
-    #[must_use]
-    pub fn service(url: &str) -> Self {
-        Self {
-            repository: SERVICE_REPOSITORY.into(),
-            options: [("service".to_string(), url.to_string())].into(),
-            signer: None,
-        }
-    }
-
-    #[must_use]
-    pub fn is_service(&self) -> bool {
-        self.repository == SERVICE_REPOSITORY
-    }
-
-    /// Attach what storage through the service needs: the account and the
-    /// key that signs for this device. Other kinds are returned unchanged.
-    /// A bucket of the user's own (OpenDAL, such as S3), as opposed to the
-    /// service or a local path.
+    /// A bucket (OpenDAL, such as S3), as opposed to a local path.
     #[must_use]
     pub fn is_bucket(&self) -> bool {
         self.repository.starts_with("opendal:")
@@ -104,15 +66,6 @@ impl RepoSpec {
         spec
     }
 
-    #[must_use]
-    pub fn for_device(mut self, account: &str, signer: &SigningKey) -> Self {
-        if self.is_service() {
-            _ = self.options.insert("account".into(), account.into());
-            self.signer = Some(signer.clone());
-        }
-        self
-    }
-
     fn backends(&self) -> Result<RepositoryBackends> {
         let backends = self.raw_backends()?;
         // `bandwidth`: this device's cap, whatever the backend
@@ -130,18 +83,6 @@ impl RepoSpec {
     }
 
     fn raw_backends(&self) -> Result<RepositoryBackends> {
-        if self.is_service() {
-            let service = self.options.get("service").context("no service URL")?;
-            let account = self.options.get("account").context("no account")?;
-            let signer = self
-                .signer
-                .clone()
-                .context("no device key for the service")?;
-            let client = HttpCoordinator::new(service, Some(account.clone()), signer);
-            let prefix = self.options.get("root").map_or("", String::as_str);
-            let storage = ServiceStorage::new(client, prefix);
-            return Ok(RepositoryBackends::new(Arc::new(storage), None));
-        }
         let mut options = self.options.clone();
         _ = options.remove("bandwidth");
         if !self.is_bucket() {
@@ -182,9 +123,7 @@ impl RepoSpec {
             return self.clone();
         }
         let mut spec = self.clone();
-        if spec.is_service() {
-            _ = spec.options.insert("root".into(), format!("e{n}"));
-        } else if spec.repository.starts_with("opendal:") {
+        if spec.repository.starts_with("opendal:") {
             let root = spec
                 .options
                 .get("root")
@@ -243,8 +182,7 @@ impl RepoSpec {
     }
 
     /// Copy every file of this repository, as stored, to `dest`, so it
-    /// opens there with the same password. How a managed tier user leaves
-    /// with their data. Returns the number of files copied.
+    /// opens there with the same password. Returns the number of files copied.
     ///
     /// # Errors
     ///

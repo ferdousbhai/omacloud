@@ -298,7 +298,6 @@ impl Engine {
             state.devices.root == root,
             "sync state belongs to another account root"
         );
-        let repo = repo.for_device(root, &signing);
         Ok(Self {
             device,
             folder,

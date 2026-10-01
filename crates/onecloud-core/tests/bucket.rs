@@ -51,7 +51,6 @@ fn an_account_with_no_service() -> Result<()> {
     let repo = RepoSpec {
         repository: t.join("repo").to_string_lossy().into_owned(),
         options: BTreeMap::new(),
-        signer: None,
     };
     let coord_dir = t.join("coordination");
     let (ka, kb, kc) = (key(), key(), key());

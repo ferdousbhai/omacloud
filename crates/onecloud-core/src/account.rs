@@ -60,7 +60,7 @@ pub fn create(
     // the repository comes after the first device: storage through the
     // service answers members only
     let password = random_secret();
-    let key = repo.clone().for_device(&root, device).init(&password)?;
+    let key = repo.init(&password)?;
     let mut chain = DeviceChain::new(&root);
     chain.advance(coord)?;
     let secret = EpochSecret {

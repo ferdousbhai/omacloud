@@ -9,16 +9,10 @@ and the work ahead in the issues.
 cargo fmt --all                                        # CI checks it
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-(cd service && pnpm check && pnpm test)                # when service/ changed
 ```
 
 The GTK app needs `gtk4` and `libadwaita` (CI installs `libgtk-4-dev
-libadwaita-1-dev`). After changing a signed format in Rust, regenerate the
-service's fixtures so `service/src/proto.ts` is checked against it:
-
-```sh
-ONECLOUD_FIXTURES=$PWD/service/test/fixtures.json cargo test -p onecloud-core --test fixtures
-```
+libadwaita-1-dev`).
 
 ## End to end scripts
 
@@ -30,8 +24,6 @@ ONECLOUD_FIXTURES=$PWD/service/test/fixtures.json cargo test -p onecloud-core --
   with keys made through its admin shell so one can be deleted mid-test.
 - `scripts/restic-compat.sh` needs restic on PATH; a wrapper around the
   `restic/restic` image with paths mounted 1:1 works.
-- `scripts/coordinator-e2e.sh` runs `service/` under `wrangler dev` with
-  SeaweedFS as its bucket.
 - Where `/tmp` is small, put `CARGO_TARGET_DIR` and SeaweedFS data under
   `~/.cache` (SeaweedFS preallocates volumes).
 
@@ -47,9 +39,9 @@ a test account and a local build.
 ## Secrets
 
 Secrets never go on a command line, where other processes can read them:
-`ONECLOUD_RECOVERY_CODE`, `ONECLOUD_JOIN_CODE`, `ONECLOUD_INVITE` and
+`ONECLOUD_RECOVERY_CODE`, `ONECLOUD_JOIN_CODE` and
 `ONECLOUD_SECRET_ACCESS_KEY` come from the environment, or a prompt that
-doesn't echo. A self-hosted computer's bucket key lives in the desktop
+doesn't echo. A computer's bucket key lives in the desktop
 keyring; scripts that make test accounts clear their keyring entries on exit
 (`ONECLOUD_KEYRING=0` keeps keys in the config file instead).
 

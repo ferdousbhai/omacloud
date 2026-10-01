@@ -11,7 +11,7 @@ ONECLOUD=${1:-target/debug/onecloud}
 : "${S3_ENDPOINT:?} ${S3_BUCKET:?} ${S3_KEY:?} ${S3_SECRET:?}"
 work=$(mktemp -d)
 cleanup() {
-  for f in "$work"/*.toml "$work"/noservice/*.toml; do
+  for f in "$work"/*.toml "$work"/inbucket/*.toml; do
     secret-tool clear service onecloud config "$f" 2>/dev/null || true
   done
   rm -rf "${work:?}"
@@ -55,13 +55,13 @@ diff -r --no-dereference "$work/A" "$work/B"
 oc b export 2>/dev/null | grep -q "root = \"${S3_ROOT:-}/onecloud-e1\""
 echo "s3 sync: ok"
 
-# no service at all: the account coordinates in its own bucket, and a new
+# coordination in the bucket too, and a new
 # device joins with a code from an existing one
-nw="$work/noservice"
+nw="$work/inbucket"
 mkdir -p "$nw/A"
 echo "mine alone" >"$nw/A/mine.txt"
 ns() { local dev=$1; shift; "$ONECLOUD" --config "$nw/$dev.toml" "$@"; }
-root_opt=${S3_ROOT:-}/noservice
+root_opt=${S3_ROOT:-}/inbucket
 ONECLOUD_SECRET_ACCESS_KEY=$S3_SECRET ns a init --folder "$nw/A" "${s3[@]}" --opt "root=$root_opt" --coordinator bucket --device a >/dev/null 2>&1
 ns a sync >/dev/null 2>&1
 code=$(ns a join-code 2>/dev/null)
@@ -73,4 +73,4 @@ ns b sync >/dev/null 2>&1
 ns a sync >/dev/null 2>&1
 diff -r "$nw/A" "$nw/B"
 [ "$(stat -c %a "$nw/a.toml")" = 600 ] || { echo "config with bucket keys is readable by others"; exit 1; }
-echo "no service: ok"
+echo "coordination in the bucket: ok"

@@ -33,7 +33,6 @@ impl World {
         Self::with_repo(devices, |tmp| RepoSpec {
             repository: tmp.join("repo").to_string_lossy().into_owned(),
             options: BTreeMap::new(),
-            signer: None,
         })
     }
 
@@ -1095,8 +1094,8 @@ fn secrets_travel_sealed_and_open_only_with_the_recovery_code() -> Result<()> {
 }
 
 /// An own bucket: its location and credentials travel sealed in the epoch
-/// secret, so a joining device needs neither typed in, and the service
-/// never sees them.
+/// secret, so a joining device needs neither typed in, and whoever relays
+/// the records never sees them.
 #[test]
 fn own_bucket_location_and_credentials_travel_with_the_key() -> Result<()> {
     let bucket = |tmp: &Path| RepoSpec {
@@ -1109,7 +1108,6 @@ fn own_bucket_location_and_credentials_travel_with_the_key() -> Result<()> {
             ("access_key_id".to_string(), "not-needed-by-fs".to_string()),
         ]
         .into(),
-        signer: None,
     };
     let w = World::with_repo(&["a"], bucket)?;
     let mut a = w.engine("a")?;
@@ -1128,7 +1126,6 @@ fn own_bucket_location_and_credentials_travel_with_the_key() -> Result<()> {
             repo: RepoSpec {
                 repository: w.tmp.path().join("nowhere").to_string_lossy().into_owned(),
                 options: [("connections".to_string(), "2".to_string())].into(),
-                signer: None,
             },
             signing: kb,
             root: w.root.clone(),

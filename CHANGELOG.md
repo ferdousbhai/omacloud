@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.0.3 (2026-10-01)
+
+OneCloud is your own bucket only: the code for running it through a server
+of ours is gone, and with it the commands that needed one. Nothing changes
+for an existing setup.
+
+- `onecloud share` is gone until folders can be shared through your own
+  bucket (#8).
+- Computers learn of changes by checking the bucket, as before.
+
 ## 0.0.2 (2026-10-01)
 
 Easier to set up.

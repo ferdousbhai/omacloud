@@ -1,17 +1,16 @@
-//! Coordination in the user's own bucket: no service in between.
+//! Coordination in the user's own bucket: nothing in between.
 //!
 //! The same layout as [`crate::DirCoordinator`] (`heads/`, `devices/`,
 //! `epochs/`, `grants/`, `requests/`, `account.json`), as objects. An append
 //! is a create-only write (`If-None-Match: *`), which the bucket refuses if
-//! another device took that position first: the compare and swap the
-//! service's Durable Object gives, from the bucket itself. S3, R2, MinIO and
+//! another device took that position first: a compare and swap from the
+//! bucket itself. S3, R2, MinIO and
 //! Hetzner support it on unversioned buckets (Hetzner not on versioned ones,
 //! so a bucket with object lock keeps its coordination in a second, plain
 //! bucket).
 //!
-//! What the service adds and this doesn't: devices learn of changes by
-//! polling, not a pushed feed; and cutting off a lost device's storage takes
-//! changing the bucket key, since every device holds it.
+//! Devices learn of changes by polling, and cutting off a lost device's
+//! storage takes changing the bucket key, since every device holds it.
 
 use std::{
     collections::{BTreeMap, HashMap},

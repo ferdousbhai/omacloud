@@ -41,7 +41,7 @@ pub struct EpochSecret {
     pub key: MasterKey,
     /// For a bucket of the user's own: where it is and the credentials to
     /// reach it, so a new device gets them with the key instead of from
-    /// the person typing them in. The service knows neither.
+    /// the person typing them in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub storage: Option<RepoSpec>,
 }

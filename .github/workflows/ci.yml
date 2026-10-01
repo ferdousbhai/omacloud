@@ -37,22 +37,3 @@ jobs:
           scripts/s3-sync.sh target/debug/onecloud
       - name: Bucket key change, one computer offline
         run: scripts/bucket-key.sh target/debug/onecloud
-
-  service:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: service
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          package_json_file: service/package.json
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: service/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm check
-      - run: pnpm test

@@ -25,11 +25,9 @@ bytes = "1"
 ignore.workspace = true
 libc.workspace = true
 rayon.workspace = true
-ureq = { version = "3.4.2", features = ["json"] }
 diffy = "0.5.2"
 
 [dev-dependencies]
-ureq = "3"
 serde_json.workspace = true
 env_logger.workspace = true
 tempfile.workspace = true

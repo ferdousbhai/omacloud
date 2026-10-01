@@ -16,14 +16,13 @@ mod power;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use ed25519_dalek::SigningKey;
 use log::{info, warn};
 use notify::{RecursiveMode, Watcher};
 use onecloud_core::{
-    Coordinator, DeviceError, DirCoordinator, Engine, HeadError, HttpCoordinator, Membership,
-    RepoSpec, SettingsSetup, Setup, account,
+    Coordinator, DeviceError, DirCoordinator, Engine, HeadError, Membership, RepoSpec,
+    SettingsSetup, Setup, account,
     bucket::key_refused,
-    devices::{fingerprint, public_hex, root_key},
+    devices::{fingerprint, public_hex},
     epoch::EpochError,
     head::load_or_create_key,
     settings::Manifest,
@@ -63,9 +62,6 @@ enum Cmd {
         /// Where computers keep in step [default: `bucket`, beside the files]
         #[arg(long, hide = true)]
         coordinator: Option<String>,
-        /// Account to join, by id, through a coordinator that relays requests
-        #[arg(long, hide = true)]
-        account: Option<String>,
         /// Name for this device [default: the hostname]
         #[arg(long)]
         device: Option<String>,
@@ -73,9 +69,6 @@ enum Cmd {
         /// device to approve
         #[arg(long, env = "ONECLOUD_RECOVERY_CODE", hide_env_values = true)]
         recovery_code: Option<String>,
-        /// Invite code, for a coordinator that needs one
-        #[arg(long, env = "ONECLOUD_INVITE", hide_env_values = true, hide = true)]
-        invite: Option<String>,
         /// With `--coordinator bucket`: keep coordination in this bucket
         /// (same endpoint and keys) instead of beside the data. Needed when
         /// the data bucket has object lock, as Hetzner doesn't do the
@@ -157,12 +150,6 @@ enum Cmd {
         #[command(subcommand)]
         action: RecoveryCmd,
     },
-    /// Shared folders: not available yet
-    #[command(hide = true)]
-    Share {
-        #[command(subcommand)]
-        action: Option<ShareCmd>,
-    },
     /// Settings sync: the dots manifest's shared files, on this device
     Settings {
         #[command(subcommand)]
@@ -177,13 +164,6 @@ enum Cmd {
         /// Install the packages (pacman still asks); otherwise only show
         #[arg(long)]
         yes: bool,
-    },
-    /// Delete the account on a coordinator that stores it
-    #[command(hide = true)]
-    DeleteAccount {
-        /// The full account id, to confirm (`onecloud status` shows it)
-        #[arg(long)]
-        confirm: String,
     },
     /// Print everything needed to restore without onecloud; with `--to`,
     /// first copy the repository somewhere of your own
@@ -308,76 +288,6 @@ enum FoldersCmd {
 }
 
 #[derive(Subcommand)]
-enum ShareCmd {
-    /// Show shared folders, their members, and who asks to join
-    List,
-    /// Share a folder: creates its repository and prints the id others join
-    /// with
-    Create {
-        /// A name for it, on this device
-        name: String,
-        /// The folder to share
-        #[arg(long)]
-        folder: PathBuf,
-        /// Repository, for a coordinator other than the service (as for
-        /// `init`)
-        #[arg(long)]
-        repo: Option<String>,
-        /// Backend option, repeatable
-        #[arg(long = "opt", value_parser = parse_kv)]
-        opts: Vec<(String, String)>,
-        /// Invite code, during the beta
-        #[arg(long, env = "ONECLOUD_INVITE", hide_env_values = true)]
-        invite: Option<String>,
-        /// Coordinator [default: the service this device uses; with a shared
-        /// directory, `<that directory>.shares/<name>`]
-        #[arg(long)]
-        coordinator: Option<String>,
-    },
-    /// Ask to join a folder someone shared; they approve after comparing
-    /// the fingerprint this prints
-    Join {
-        /// The shared folder's id, from whoever shared it
-        id: String,
-        /// A name for it, on this device
-        #[arg(long)]
-        name: String,
-        /// Where to keep it
-        #[arg(long)]
-        folder: PathBuf,
-        /// Coordinator [default: the service this device uses]; with shared
-        /// directories, the directory the folder was created with
-        #[arg(long)]
-        coordinator: Option<String>,
-        /// Repository, when it is a path (a bucket's location comes with
-        /// the key, and the service needs none)
-        #[arg(long)]
-        repo: Option<String>,
-        /// Backend option, repeatable
-        #[arg(long = "opt", value_parser = parse_kv)]
-        opts: Vec<(String, String)>,
-    },
-    /// Let someone in, after they told you the fingerprint their device shows
-    Approve {
-        name: String,
-        /// Fingerprint (or its start) of the requesting device
-        fingerprint: String,
-    },
-    /// Remove someone's device from a shared folder
-    Remove {
-        name: String,
-        /// Fingerprint (or its start) of the device
-        fingerprint: String,
-        /// Also change the folder's key, so it can't read what comes next or
-        /// what it hasn't downloaded (uploads everything again)
-        #[arg(long)]
-        rotate: bool,
-    },
-    /// Stop syncing a shared folder on this device; its files stay
-    Leave { name: String },
-}
-
-#[derive(Subcommand)]
 enum DevicesCmd {
     /// Show devices and join requests
     List,
@@ -406,7 +316,8 @@ fn parse_kv(s: &str) -> Result<(String, String), String> {
 struct Config {
     device: String,
     folder: PathBuf,
-    /// The service's URL, or a shared directory
+    /// `bucket` (coordination in the bucket, see `coordination`), or a
+    /// shared directory
     coordinator: String,
     repo: RepoSpec,
     /// The account root public key (hex), pinned at setup
@@ -640,28 +551,10 @@ fn save(paths: &Paths, config: &Config) -> Result<()> {
 /// own storage.
 const SELF_HOSTED: &str = "bucket";
 
-fn is_service(coordinator: &str) -> bool {
-    coordinator.starts_with("https://") || coordinator.starts_with("http://")
-}
-
-/// The coordinator for `config`, signing requests to the service with `key`.
-fn coordinator(
-    config: &Config,
-    account: Option<String>,
-    key: SigningKey,
-) -> Result<Arc<dyn Coordinator>> {
-    coordinator_with_invite(config, account, key, None)
-}
-
-fn coordinator_with_invite(
-    config: &Config,
-    account: Option<String>,
-    key: SigningKey,
-    invite: Option<String>,
-) -> Result<Arc<dyn Coordinator>> {
-    Ok(if is_service(&config.coordinator) {
-        Arc::new(HttpCoordinator::new(&config.coordinator, account, key).with_invite(invite))
-    } else if config.coordinator == SELF_HOSTED {
+/// Where `config`'s computers keep in step: its bucket, or a shared
+/// directory.
+fn coordinator(config: &Config) -> Result<Arc<dyn Coordinator>> {
+    Ok(if config.coordinator == SELF_HOSTED {
         let mut opts = config
             .coordination
             .clone()
@@ -675,7 +568,7 @@ fn coordinator_with_invite(
 
 fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
     let signing = load_or_create_key(&paths.device_key())?;
-    let coord = coordinator(config, Some(config.root.clone()), signing.clone())?;
+    let coord = coordinator(config)?;
     let mut repo = config.repo.clone();
     config.limits.apply(&mut repo);
     // self-hosted: the bucket key lives in this config, and key changes
@@ -719,14 +612,7 @@ fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
     Ok(e)
 }
 
-fn init(
-    paths: &Paths,
-    mut config: Config,
-    account_id: Option<String>,
-    recovery: Option<String>,
-    invite: Option<String>,
-    share: Option<&str>,
-) -> Result<()> {
+fn init(paths: &Paths, mut config: Config, recovery: Option<String>) -> Result<()> {
     if paths.config.exists() {
         bail!(
             "{} exists; this device is already set up",
@@ -737,81 +623,45 @@ fn init(
     fs::create_dir_all(&paths.data)?;
     let signing = load_or_create_key(&paths.device_key())?;
     let me = fingerprint(&public_hex(&signing));
-    // which account: given, implied by the recovery code, or new
-    let root_signing = recovery.as_deref().map(root_key).transpose()?;
-    let account_id = account_id.or_else(|| root_signing.as_ref().map(public_hex));
-    let coord = coordinator_with_invite(&config, account_id.clone(), signing.clone(), invite)?;
-    let creating = if is_service(&config.coordinator) {
-        account_id.is_none()
-    } else {
-        coord.anchor()?.is_none()
-    };
+    let coord = coordinator(&config)?;
+    let creating = coord.anchor()?.is_none();
 
     let message = if creating {
         if config.repo.repository.is_empty() {
-            bail!("creating an account with this coordinator needs --repo");
+            bail!("creating an account needs --repo");
         }
         let created = account::create(coord.as_ref(), &config.repo, &signing, &config.device)?;
         config.root = created.root;
-        if let Some(name) = share {
-            format!(
-                "shared {} as {name}\n\n\
-                 its id, for the people you share it with:\n\n  \
-                 onecloud share join {} --name {name} --folder <where>\n\n\
-                 They send you the fingerprint their device shows; you check it and run\n\
-                 `onecloud share approve {name} <fingerprint>`.\n\n\
-                 recovery code for this shared folder: {}\n\
-                 Keep it offline: it lets you add yourself back if every member device is lost.",
-                config.folder.display(),
-                config.root,
-                created.recovery_code
-            )
-        } else {
-            format!(
-                "created repository and account {}\n\n\
-             account id (other devices join with --account, or with no service a code\n\
-             from `onecloud join-code`): {}\n\n\
+        format!(
+            "created repository and account {}\n\n\
+             account id: {}\n\n\
              recovery code: {}\n\n\
              Write it down and keep it offline. It is shown once. With it you can add a\n\
              device when no other device is at hand, and recover the account; without\n\
              it and without a device, the data is gone.\n\n\
-             repository password (for leaving onecloud, also in `onecloud export`): {}",
-                config.repo.repository, config.root, created.recovery_code, created.password
-            )
-        }
-    } else if let (Some(code), Some(root_signing)) = (recovery, root_signing) {
-        // the service lets the root read what joining needs
-        let as_root = coordinator(&config, account_id, root_signing)?;
-        config.root =
-            account::join_with_recovery(as_root.as_ref(), &code, &signing, &config.device)?;
+             repository password (for leaving onecloud, also in `onecloud export`): {}\n\n\
+             Other computers join with a code from `onecloud join-code`.",
+            config.repo.repository, config.root, created.recovery_code, created.password
+        )
+    } else if let Some(code) = recovery {
+        config.root = account::join_with_recovery(coord.as_ref(), &code, &signing, &config.device)?;
         "joined the account with the recovery code".to_string()
     } else {
         config.root = account::request(coord.as_ref(), &signing, &config.device)?;
-        if share.is_some() {
-            format!(
-                "asked to join the shared folder\n\n\
-                 this device's fingerprint: {me}\n\n\
-                 Send it to whoever shared the folder, by a channel you trust. It syncs\n\
-                 once they approve."
-            )
-        } else {
-            format!(
-                "asked to join {}\n\n\
+        format!(
+            "asked to join {}\n\n\
              this device's fingerprint: {me}\n\n\
              On a device that already syncs, run `onecloud devices` and check that it\n\
              shows the same fingerprint, then `onecloud devices approve {me}`.",
-                config.repo.repository
-            )
-        }
+            config.repo.repository
+        )
     };
     // bucket credentials live sealed in the account's key records, not in
     // the config file
     config.repo = config.repo.without_credentials();
     save(paths, &config)?;
     println!("{message}");
-    if share.is_none() {
-        println!("\naccount root: {}", fingerprint(&config.root));
-    }
+    println!("\naccount root: {}", fingerprint(&config.root));
     if paths.is_default() {
         // the packaged unit starts at login for users with a config; start
         // it now for this session
@@ -820,49 +670,17 @@ fn init(
     Ok(())
 }
 
-/// Keep one folder in sync. The account's own folder (`primary`) also
-/// starts a loop for each shared folder, now and whenever one is added.
-/// Returns when sync must stop: this device was removed, or the account
-/// can't be verified.
-fn watch(paths: &Paths, config: &Config, poll: Duration, primary: bool) -> Result<()> {
+/// Keep the folders in sync. Returns when sync must stop: this device was
+/// removed, or the account can't be verified.
+fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<()> {
     power::be_nice();
     let mut engine = engine(paths, config)?;
-    let (tx, rx) = mpsc::channel();
-    let files = tx.clone();
+    let (files, rx) = mpsc::channel();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(event) = res {
-            _ = files.send(Wake::Files(event.paths));
+            _ = files.send(event.paths);
         }
     })?;
-    if is_service(&config.coordinator) {
-        // the service holds a request open until a head lands: sync on it
-        let feed = coordinator(
-            config,
-            Some(config.root.clone()),
-            load_or_create_key(&paths.device_key())?,
-        )?;
-        std::thread::spawn(move || {
-            let mut last = 0;
-            loop {
-                match feed.wait(last) {
-                    Ok(seq) if seq > last => {
-                        last = seq;
-                        if tx.send(Wake::Remote).is_err() {
-                            return;
-                        }
-                    }
-                    Ok(_) => {}
-                    // let a sync meet the error: a removed device stops there
-                    Err(_) => {
-                        if tx.send(Wake::Remote).is_err() {
-                            return;
-                        }
-                        std::thread::sleep(Duration::from_secs(5));
-                    }
-                }
-            }
-        });
-    }
     // syncing folders of home: watch those, never all of home
     let mut watched = std::collections::BTreeSet::new();
     if config.folders.is_none() {
@@ -883,8 +701,6 @@ fn watch(paths: &Paths, config: &Config, poll: Duration, primary: bool) -> Resul
     let mut alerts = config
         .notifications
         .then(|| alerts::Alerts::new((!paths.is_default()).then_some(paths.config.as_path())));
-    let mut running = std::collections::BTreeSet::new();
-    let mut shares_at: Option<Instant> = None;
     let mut key_at: Option<Instant> = None;
     let config_mtime = || fs::metadata(&paths.config).and_then(|m| m.modified()).ok();
     let mut config_seen = config_mtime();
@@ -910,20 +726,6 @@ fn watch(paths: &Paths, config: &Config, poll: Duration, primary: bool) -> Resul
             {
                 info!("watching {}", dir.display());
                 _ = watched.insert(dir);
-            }
-        }
-        if primary && shares_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
-            shares_at = Some(Instant::now());
-            for (name, sp) in shares(paths) {
-                if running.insert(name.clone()) {
-                    std::thread::spawn(move || {
-                        let result = load(&sp).and_then(|c| watch(&sp, &c, poll, false));
-                        match result {
-                            Ok(()) => warn!("shared folder {name} stopped syncing"),
-                            Err(e) => warn!("shared folder {name}: {e:#}"),
-                        }
-                    });
-                }
             }
         }
         // the package list, at start and hourly
@@ -958,20 +760,18 @@ fn watch(paths: &Paths, config: &Config, poll: Duration, primary: bool) -> Resul
             }
         }
         match rx.recv_timeout(poll) {
-            Ok(Wake::Remote) => {}
-            Ok(Wake::Files(paths)) => {
+            Ok(paths) => {
                 engine.notice(paths);
                 let first = Instant::now();
                 loop {
                     match rx.recv_timeout(quiet) {
-                        Ok(Wake::Files(more)) => {
+                        Ok(more) => {
                             engine.notice(more);
                             if first.elapsed() >= longest {
                                 break;
                             }
                         }
-                        // someone else pushed: sync now, edits included
-                        Ok(Wake::Remote) | Err(mpsc::RecvTimeoutError::Timeout) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => break,
                         Err(e) => return Err(e.into()),
                     }
                 }
@@ -980,14 +780,6 @@ fn watch(paths: &Paths, config: &Config, poll: Duration, primary: bool) -> Resul
             Err(e) => return Err(e.into()),
         }
     }
-}
-
-/// Why the daemon wakes up.
-enum Wake {
-    /// The watcher saw these paths change.
-    Files(Vec<PathBuf>),
-    /// Another device pushed.
-    Remote,
 }
 
 /// One sync; false when sync must stop until a human looks.
@@ -1055,16 +847,14 @@ fn main() -> Result<()> {
             repo,
             opts,
             coordinator,
-            account,
             device,
             recovery_code,
-            invite,
             coordination_bucket,
             join_code,
         } => {
             // a join code says where the account coordinates
             let joined = join_code.as_deref().map(parse_join_code).transpose()?;
-            // self-hosted unless told otherwise: the hosted service is for 1.0
+            // in the bucket, unless a shared directory is given
             let coordinator = match (coordinator, &joined, repo.as_deref()) {
                 (_, Some(_), _) => SELF_HOSTED.to_string(),
                 (Some(c), _, _) => c,
@@ -1077,8 +867,7 @@ fn main() -> Result<()> {
                      (onecloud-app) walks through the same."
                 ),
             };
-            let account = account.or_else(|| joined.as_ref().map(|j| j.1.clone()));
-            let coordinator = if is_service(&coordinator) || coordinator == SELF_HOSTED {
+            let coordinator = if coordinator == SELF_HOSTED {
                 coordinator
             } else {
                 absolute(Path::new(&coordinator))?
@@ -1086,19 +875,11 @@ fn main() -> Result<()> {
                     .into_owned()
             };
             let repo = match repo.as_deref() {
-                Some("onecloud") => {
-                    if !is_service(&coordinator) {
-                        bail!("storage through onecloud needs the service as --coordinator");
-                    }
-                    RepoSpec::service(&coordinator)
-                }
-                None if is_service(&coordinator) => RepoSpec::service(&coordinator),
                 // joining an account whose bucket location comes sealed with
                 // its key
                 None => RepoSpec {
                     repository: String::new(),
                     options: opts.into_iter().collect::<BTreeMap<_, _>>(),
-                    signer: None,
                 },
                 Some(repo) => RepoSpec {
                     repository: repo.to_string(),
@@ -1113,7 +894,6 @@ fn main() -> Result<()> {
                         }
                         o
                     },
-                    signer: None,
                 },
             };
             let (folder, folders) = match folder {
@@ -1150,7 +930,7 @@ fn main() -> Result<()> {
                     None => coordination_beside(&config.repo, coordination_bucket.as_deref())?,
                 });
             }
-            init(&paths, config, account, recovery_code, invite, None)
+            init(&paths, config, recovery_code)
         }
         Cmd::Sync => {
             let config = load(&paths)?;
@@ -1176,30 +956,10 @@ fn main() -> Result<()> {
             if follow_bucket_key(&paths, &mut e)? {
                 println!("switched to the account's new bucket key");
             }
-            // then each shared folder, each on its own: one failing doesn't
-            // hold up the others
-            let mut failed = 0;
-            for (name, sp) in shares(&paths) {
-                let result = load(&sp).and_then(|c| engine(&sp, &c)?.sync());
-                match result {
-                    Ok(st) => println!(
-                        "{name}: pushed {}, pulled {}, conflicts {}",
-                        st.pushed, st.pulled, st.conflicts
-                    ),
-                    Err(e) if e.downcast_ref::<Membership>() == Some(&Membership::NotApproved) => {
-                        println!("{name}: waiting for approval");
-                    }
-                    Err(e) => {
-                        failed += 1;
-                        println!("{name}: {e:#}");
-                    }
-                }
-            }
-            anyhow::ensure!(failed == 0, "{failed} shared folders didn't sync");
             Ok(())
         }
         Cmd::Watch { poll } => {
-            watch(&paths, &load(&paths)?, Duration::from_secs(poll), true)?;
+            watch(&paths, &load(&paths)?, Duration::from_secs(poll))?;
             // the account stopped (this device was removed): a human looks
             std::process::exit(2);
         }
@@ -1243,20 +1003,6 @@ fn main() -> Result<()> {
             }
             if let Some((epoch, _)) = &st.secret {
                 println!("epoch    {epoch}");
-            }
-            if repo.is_service() {
-                let client = HttpCoordinator::new(
-                    &config.coordinator,
-                    Some(config.root.clone()),
-                    load_or_create_key(&paths.device_key())?,
-                );
-                let (used, quota) = client.usage()?;
-                let quota = if quota == 0 {
-                    "no limit".to_string()
-                } else {
-                    human(quota)
-                };
-                println!("storage  {} of {quota}", human(used));
             }
             let members = st.devices.members();
             let me = e.device_key();
@@ -1313,7 +1059,6 @@ fn main() -> Result<()> {
         }
         Cmd::Settings { action } => settings(&paths, action.unwrap_or(SettingsCmd::Status)),
         Cmd::Secrets { action } => secrets(&paths, action.unwrap_or(SecretsCmd::List)),
-        Cmd::Share { action } => share(&paths, action.unwrap_or(ShareCmd::List)),
         Cmd::JoinCode => {
             let config = load(&paths)?;
             let coordination = config
@@ -1376,29 +1121,6 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Cmd::DeleteAccount { confirm } => {
-            let config = load(&paths)?;
-            if confirm != config.root {
-                bail!("--confirm must be this account's id: {}", config.root);
-            }
-            if !is_service(&config.coordinator) {
-                bail!("only accounts on the onecloud service can be deleted this way");
-            }
-            HttpCoordinator::new(
-                &config.coordinator,
-                Some(config.root.clone()),
-                load_or_create_key(&paths.device_key())?,
-            )
-            .delete_account()?;
-            fs::remove_file(&paths.config)?;
-            fs::remove_dir_all(&paths.data)?;
-            println!(
-                "deleted account {} and this device's setup; the files in {} stay",
-                config.root,
-                config.folder.display()
-            );
-            Ok(())
-        }
         Cmd::Rotate => {
             let config = load(&paths)?;
             let r = engine(&paths, &config)?.rotate()?;
@@ -1419,16 +1141,10 @@ fn main() -> Result<()> {
                 let dest = RepoSpec {
                     repository: to,
                     options: to_opts.into_iter().collect(),
-                    signer: None,
                 };
                 let n = spec.copy_files_to(&dest)?;
                 eprintln!("copied {n} files to {}", dest.repository);
                 spec = dest;
-            } else if spec.is_service() {
-                bail!(
-                    "this repository is stored with onecloud; copy it somewhere of your own \
-                     first: onecloud export --to <path>"
-                );
             }
             let repo = &spec.repository;
             println!("# restore without onecloud: restic or rustic, this repository and password");
@@ -1543,22 +1259,6 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// Bytes for people: `1.4 GB`.
-fn human(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1000.0 && unit < UNITS.len() - 1 {
-        value /= 1000.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
 }
 
 /// This machine's explicitly installed packages, repository and foreign
@@ -2008,25 +1708,7 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
     };
     let st = e.state();
     let repo = e.repository().map_or_else(|_| config.repo.clone(), |r| r.0);
-    let kind = if repo.is_service() {
-        "service"
-    } else if repo.is_bucket() {
-        "bucket"
-    } else {
-        "path"
-    };
-    let storage = if repo.is_service() {
-        HttpCoordinator::new(
-            &config.coordinator,
-            Some(config.root.clone()),
-            load_or_create_key(&paths.device_key())?,
-        )
-        .usage()
-        .ok()
-        .map(|(used, quota)| json!({ "used": used, "quota": quota }))
-    } else {
-        None
-    };
+    let kind = if repo.is_bucket() { "bucket" } else { "path" };
     let role = if members.valid.contains_key(&me) {
         "member"
     } else if members.revoked.contains_key(&me) {
@@ -2052,15 +1734,7 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
         .args(["--user", "is-active", "--quiet", "onecloud"])
         .status()
         .is_ok_and(|s| s.success());
-    let shares: Vec<serde_json::Value> = shares(paths)
-        .into_iter()
-        .map(|(name, sp)| {
-            share_json(&name, &sp)
-                .unwrap_or_else(|e| json!({ "name": name, "error": format!("{e:#}") }))
-        })
-        .collect();
     Ok(json!({
-        "shares": shares,
         "device": config.device,
         "account": config.root,
         "account_fingerprint": fingerprint(&config.root),
@@ -2081,7 +1755,6 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
         "self_hosted": config.coordinator == SELF_HOSTED,
         "bucket_key": bucket_key,
         "epoch": st.secret.as_ref().map(|s| s.0),
-        "storage": storage,
         "this_device": { "fingerprint": fingerprint(&me), "role": role },
         "devices": list(&members.valid),
         "removed": list(&members.revoked),
@@ -2093,264 +1766,6 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
         },
         "secrets": e.secrets_devices(),
         "daemon": daemon,
-    }))
-}
-
-/// A shared folder's own config and data: `<data>/shares/<name>.toml`, with
-/// its device key and state in `<name>.d` beside it.
-fn share_paths(paths: &Paths, name: &str) -> Result<Paths> {
-    anyhow::ensure!(
-        !name.is_empty()
-            && name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
-            && !name.starts_with('.'),
-        "a shared folder's name is letters, digits, `-`, `_` and `.`"
-    );
-    Paths::new(Some(paths.data.join("shares").join(format!("{name}.toml"))))
-}
-
-/// The shared folders set up on this device, by name.
-fn shares(paths: &Paths) -> Vec<(String, Paths)> {
-    let mut out: Vec<(String, Paths)> = fs::read_dir(paths.data.join("shares"))
-        .map(|it| {
-            it.flatten()
-                .filter_map(|e| {
-                    let name = e
-                        .file_name()
-                        .to_string_lossy()
-                        .strip_suffix(".toml")?
-                        .to_string();
-                    share_paths(paths, &name).ok().map(|p| (name, p))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    out
-}
-
-/// How this person appears in shared folders: user@host.
-fn member_name() -> String {
-    let user = std::env::var("USER").unwrap_or_else(|_| "someone".into());
-    format!("{user}@{}", hostname())
-}
-
-fn share(paths: &Paths, action: ShareCmd) -> Result<()> {
-    match action {
-        ShareCmd::List => {
-            let all = shares(paths);
-            if all.is_empty() {
-                println!(
-                    "no shared folders; share one with `onecloud share create <name> --folder <dir>`"
-                );
-            }
-            for (name, sp) in all {
-                let config = load(&sp)?;
-                println!("{name}  {}", config.folder.display());
-                println!("  id {}", config.root);
-                let mut e = engine(&sp, &config)?;
-                let me = e.device_key();
-                let chain = e.refresh_devices()?.clone();
-                let members = chain.members();
-                if !members.valid.contains_key(&me) {
-                    println!(
-                        "  waiting for approval; this device's fingerprint: {}",
-                        fingerprint(&me)
-                    );
-                    continue;
-                }
-                for (k, n) in &members.valid {
-                    let this = if *k == me { "  (this device)" } else { "" };
-                    println!("  {}  {n}{this}", fingerprint(k));
-                }
-                for r in e.requests()? {
-                    println!(
-                        "  asking to join: {}  {} (`onecloud share approve {name} {}`)",
-                        fingerprint(&r.device),
-                        r.name,
-                        fingerprint(&r.device)
-                    );
-                }
-            }
-            Ok(())
-        }
-        ShareCmd::Create {
-            name,
-            folder,
-            repo,
-            opts,
-            invite,
-            coordinator,
-        } => {
-            let main = load(paths)?;
-            if main.coordinator == SELF_HOSTED && coordinator.is_none() {
-                bail!(
-                    "sharing with other people isn't there yet for self-hosted accounts: in your \
-                     own bucket it would mean giving them your bucket's keys (on Hetzner, the whole \
-                     project's). It comes with per-person keys, or the hosted service in 1.0"
-                );
-            }
-            // the service keeps each account apart by its id; a shared
-            // directory holds one account, so a shared folder needs its own
-            let coordinator = match coordinator {
-                Some(c) if is_service(&c) => c,
-                Some(c) => absolute(Path::new(&c))?.to_string_lossy().into_owned(),
-                None if is_service(&main.coordinator) => main.coordinator.clone(),
-                None => format!("{}.shares/{name}", main.coordinator.trim_end_matches('/')),
-            };
-            if !is_service(&coordinator) && Path::new(&coordinator).join("account.json").exists() {
-                bail!(
-                    "{coordinator} already holds an account; give the shared folder its own --coordinator"
-                );
-            }
-            let sp = share_paths(paths, &name)?;
-            fs::create_dir_all(sp.config.parent().context("no shares directory")?)?;
-            let repo = match repo.as_deref() {
-                None | Some("onecloud") => {
-                    anyhow::ensure!(
-                        is_service(&main.coordinator),
-                        "with your own coordinator, give the shared folder's --repo"
-                    );
-                    RepoSpec::service(&main.coordinator)
-                }
-                Some(r) => RepoSpec {
-                    repository: r.to_string(),
-                    options: opts.into_iter().collect(),
-                    signer: None,
-                },
-            };
-            let config = Config {
-                device: member_name(),
-                folder: absolute(&folder)?,
-                coordinator,
-                repo,
-                root: String::new(),
-                limits: main.limits.clone(),
-                settings: false,
-                notifications: main.notifications,
-                folders: None,
-                coordination: None,
-                bucket_key_seq: 0,
-            };
-            init(&sp, config, None, None, invite, Some(&name))
-        }
-        ShareCmd::Join {
-            id,
-            name,
-            folder,
-            coordinator,
-            repo,
-            opts,
-        } => {
-            let main = load(paths)?;
-            if main.coordinator == SELF_HOSTED && coordinator.is_none() {
-                bail!(
-                    "sharing with other people isn't there yet for self-hosted accounts: in your \
-                     own bucket it would mean giving them your bucket's keys (on Hetzner, the whole \
-                     project's). It comes with per-person keys, or the hosted service in 1.0"
-                );
-            }
-            let coordinator = match coordinator {
-                Some(c) if is_service(&c) => c,
-                Some(c) => absolute(Path::new(&c))?.to_string_lossy().into_owned(),
-                None if is_service(&main.coordinator) => main.coordinator.clone(),
-                None => bail!("with shared directories, give the folder's --coordinator"),
-            };
-            let sp = share_paths(paths, &name)?;
-            fs::create_dir_all(sp.config.parent().context("no shares directory")?)?;
-            let repo = match repo {
-                Some(r) if r != "onecloud" => RepoSpec {
-                    repository: r,
-                    options: opts.into_iter().collect(),
-                    signer: None,
-                },
-                _ if is_service(&coordinator) => RepoSpec::service(&coordinator),
-                // an own bucket's location comes sealed with the key
-                _ => RepoSpec {
-                    repository: String::new(),
-                    options: BTreeMap::new(),
-                    signer: None,
-                },
-            };
-            let config = Config {
-                device: member_name(),
-                folder: absolute(&folder)?,
-                coordinator,
-                repo,
-                root: String::new(),
-                limits: main.limits.clone(),
-                settings: false,
-                notifications: main.notifications,
-                folders: None,
-                coordination: None,
-                bucket_key_seq: 0,
-            };
-            init(&sp, config, Some(id), None, None, Some(&name))
-        }
-        ShareCmd::Approve { name, fingerprint } => devices(
-            &share_paths(paths, &name)?,
-            DevicesCmd::Approve { fingerprint },
-        ),
-        ShareCmd::Remove {
-            name,
-            fingerprint,
-            rotate,
-        } => devices(
-            &share_paths(paths, &name)?,
-            DevicesCmd::Revoke {
-                fingerprint,
-                rotate,
-            },
-        ),
-        ShareCmd::Leave { name } => {
-            let sp = share_paths(paths, &name)?;
-            let config = load(&sp)?;
-            fs::remove_file(&sp.config)?;
-            if sp.data.exists() {
-                fs::remove_dir_all(&sp.data)?;
-            }
-            println!(
-                "{name} no longer syncs here; the files in {} stay. Ask a member to remove this device \
-                 (`onecloud share remove`), so it can't come back with its key.",
-                config.folder.display()
-            );
-            Ok(())
-        }
-    }
-}
-
-/// One shared folder, for `status --json`.
-fn share_json(name: &str, sp: &Paths) -> Result<serde_json::Value> {
-    use serde_json::json;
-    let config = load(sp)?;
-    let mut e = engine(sp, &config)?;
-    let me = e.device_key();
-    let members = e.refresh_devices()?.members();
-    let list = |m: &std::collections::BTreeMap<String, String>| -> Vec<serde_json::Value> {
-        m.iter()
-            .map(|(k, n)| json!({ "fingerprint": fingerprint(k), "name": n, "this": *k == me }))
-            .collect()
-    };
-    let member = members.valid.contains_key(&me);
-    let requests: Vec<_> = if member {
-        e.requests()
-            .unwrap_or_default()
-            .iter()
-            .map(|r| json!({ "fingerprint": fingerprint(&r.device), "name": r.name }))
-            .collect()
-    } else {
-        Vec::new()
-    };
-    Ok(json!({
-        "name": name,
-        "id": config.root,
-        "folder": config.folder,
-        "fingerprint": fingerprint(&me),
-        "member": member,
-        "removed": members.revoked.contains_key(&me),
-        "devices": list(&members.valid),
-        "requests": requests,
     }))
 }
 
@@ -2557,8 +1972,7 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
                 c.retain(|k, _| !onecloud_core::repo::CREDENTIAL_OPTIONS.contains(&k.as_str()));
                 c.extend(key.clone());
             }
-            let signing = load_or_create_key(&paths.device_key())?;
-            coordinator(&trial, Some(trial.root.clone()), signing)?
+            coordinator(&trial)?
                 .anchor()
                 .context("the new key doesn't reach the bucket")?
                 .context("the new key reaches a bucket with no account in it")?;

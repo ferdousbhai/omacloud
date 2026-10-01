@@ -3,7 +3,7 @@
 //! read, the usual subcommands to act), so it holds no keys or state of its
 //! own and never races the daemon over them.
 //!
-//! `onecloud-app [overview|devices|shares|settings|secrets|recovery]` opens on
+//! `onecloud-app [overview|devices|settings|secrets|recovery]` opens on
 //! that page. `ONECLOUD_BIN` picks the CLI (default: `onecloud` on PATH) and
 //! `ONECLOUD_CONFIG` a config other than the default.
 
@@ -18,10 +18,6 @@ use gtk::{gio, glib};
 use serde_json::Value;
 
 const APP_ID: &str = "computer.onecloud.OneCloud";
-
-/// The hosted service is offered from 1.0; until then accounts are
-/// self-hosted.
-const HOSTED: bool = false;
 
 fn main() -> glib::ExitCode {
     let mut args = std::env::args();
@@ -101,7 +97,6 @@ struct Ui {
     devices: adw::Bin,
     settings: adw::Bin,
     secrets: adw::Bin,
-    shares: adw::Bin,
 }
 
 impl Ui {
@@ -138,7 +133,7 @@ impl Ui {
                     // no config yet: this computer needs setting up
                     Ok(s) if s["set_up"] == Value::Bool(false) => {
                         ui.overview.set_child(Some(&setup(&ui)));
-                        for bin in [&ui.devices, &ui.settings, &ui.secrets, &ui.shares] {
+                        for bin in [&ui.devices, &ui.settings, &ui.secrets] {
                             bin.set_child(Some(&not_set_up(
                                 "Set up this computer first, under Overview.",
                             )));
@@ -149,16 +144,9 @@ impl Ui {
                         ui.devices.set_child(Some(&devices(&ui, &s)));
                         ui.settings.set_child(Some(&settings(&ui, &s)));
                         ui.secrets.set_child(Some(&secrets(&ui, &s)));
-                        ui.shares.set_child(Some(&shares(&ui, &s)));
                     }
                     Err(e) => {
-                        for bin in [
-                            &ui.overview,
-                            &ui.devices,
-                            &ui.settings,
-                            &ui.secrets,
-                            &ui.shares,
-                        ] {
+                        for bin in [&ui.overview, &ui.devices, &ui.settings, &ui.secrets] {
                             bin.set_child(Some(&not_set_up(&e)));
                         }
                     }
@@ -205,8 +193,7 @@ fn build(app: &adw::Application, page: Option<&str>) {
         b.set_child(Some(&spinner));
         b
     };
-    let (overview_bin, devices_bin, settings_bin, secrets_bin, shares_bin) =
-        (bin(), bin(), bin(), bin(), bin());
+    let (overview_bin, devices_bin, settings_bin, secrets_bin) = (bin(), bin(), bin(), bin());
     stack.add_titled_with_icon(
         &overview_bin,
         Some("overview"),
@@ -219,15 +206,6 @@ fn build(app: &adw::Application, page: Option<&str>) {
         "Devices",
         "computer-symbolic",
     );
-    // sharing needs the hosted service for now (onecloud#8)
-    if HOSTED {
-        stack.add_titled_with_icon(
-            &shares_bin,
-            Some("shares"),
-            "Shared",
-            "folder-publicshare-symbolic",
-        );
-    }
     stack.add_titled_with_icon(
         &settings_bin,
         Some("settings"),
@@ -288,7 +266,6 @@ fn build(app: &adw::Application, page: Option<&str>) {
         devices: devices_bin,
         settings: settings_bin,
         secrets: secrets_bin,
-        shares: shares_bin,
     });
     stack.add_titled_with_icon(
         &recovery(&ui),
@@ -341,21 +318,6 @@ fn button(label: &str, class: Option<&str>) -> gtk::Button {
         b.add_css_class(c);
     }
     b
-}
-
-fn human(bytes: u64) -> String {
-    let units = ["B", "KB", "MB", "GB", "TB"];
-    let mut v = bytes as f64;
-    let mut i = 0;
-    while v >= 1000.0 && i < units.len() - 1 {
-        v /= 1000.0;
-        i += 1;
-    }
-    if i == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{v:.1} {}", units[i])
-    }
 }
 
 fn not_set_up(why: &str) -> adw::StatusPage {
@@ -572,7 +534,6 @@ fn s3_location(
 /// First run: start an account, or add this computer to one.
 fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
-    let secret = |k: &str, v: String| vec![(k.to_string(), v)];
 
     // create, own bucket
     let own = group(
@@ -735,31 +696,6 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     own.add(&create_own);
     page.add(&own);
 
-    // create, hosted
-    let hosted = group(
-        "New account, hosted",
-        "OneCloud stores your files, encrypted on this computer before they leave it.",
-    );
-    let invite = adw::PasswordEntryRow::builder()
-        .title("Invite code (during the beta)")
-        .build();
-    let create = button("Create", Some("suggested-action"));
-    {
-        let (ui, invite2) = (ui.clone(), invite.clone());
-        create.connect_clicked(move |_| {
-            run_init(
-                &ui,
-                Vec::new(),
-                secret("ONECLOUD_INVITE", invite2.text().to_string()),
-            );
-        });
-    }
-    invite.add_suffix(&create);
-    hosted.add(&invite);
-    if HOSTED {
-        page.add(&hosted);
-    }
-
     // join
     let join = group(
         "Add this computer to your account",
@@ -773,19 +709,6 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
         .build();
     join.add(&jcode);
     join.add(&code);
-    if HOSTED {
-        let account = entry("Hosted accounts: the account id, to ask for approval");
-        let ask = button("Ask", None);
-        let (ui, account2) = (ui.clone(), account.clone());
-        ask.connect_clicked(move |_| {
-            let id = account2.text().trim().to_string();
-            if !id.is_empty() {
-                run_init(&ui, vec!["--account".into(), id], Vec::new());
-            }
-        });
-        account.add_suffix(&ask);
-        join.add(&account);
-    }
     let join_button = button("Join", Some("suggested-action"));
     join_button.set_halign(gtk::Align::End);
     join_button.set_margin_top(12);
@@ -800,7 +723,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
             if !c.is_empty() {
                 env.push(("ONECLOUD_RECOVERY_CODE".to_string(), c));
             }
-            if env.is_empty() || (!HOSTED && env[0].0 != "ONECLOUD_JOIN_CODE") {
+            if env.first().is_none_or(|(k, _)| k != "ONECLOUD_JOIN_CODE") {
                 ui.toast("Paste the join code from one of your computers");
                 return;
             }
@@ -931,7 +854,6 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     let storage = group("Storage", "");
     let repo = &s["repo"];
     let place = match repo["kind"].as_str() {
-        Some("service") => "OneCloud".to_string(),
         Some("bucket") => {
             let host = text(&repo["endpoint"]);
             let host = host
@@ -942,27 +864,6 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         _ => "A folder or server of your own".to_string(),
     };
     storage.add(&row("Where", place.trim()));
-    if let (Some(used), Some(quota)) = (
-        s["storage"]["used"].as_u64(),
-        s["storage"]["quota"].as_u64(),
-    ) {
-        let r = row(
-            "Used",
-            &if quota == 0 {
-                human(used)
-            } else {
-                format!("{} of {}", human(used), human(quota))
-            },
-        );
-        if quota > 0 {
-            let bar = gtk::LevelBar::for_interval(0.0, 1.0);
-            bar.set_value((used as f64 / quota as f64).min(1.0));
-            bar.set_width_request(160);
-            bar.set_valign(gtk::Align::Center);
-            r.add_suffix(&bar);
-        }
-        storage.add(&r);
-    }
     page.add(&storage);
 
     // for support and the curious
@@ -1612,244 +1513,4 @@ fn show_text(ui: &Rc<Ui>, heading: &str, body: &str, content: &str) {
         window.clipboard().set_text(&content);
     });
     dialog.present(Some(&ui.window));
-}
-
-/// Pick a folder, then hand its path to `then`.
-fn pick_folder(ui: &Rc<Ui>, then: impl FnOnce(String) + 'static) {
-    let dialog = gtk::FileDialog::builder()
-        .title("Choose a folder")
-        .modal(true)
-        .build();
-    dialog.select_folder(Some(&ui.window), None::<&gio::Cancellable>, move |r| {
-        if let Some(path) = r.ok().and_then(|f| f.path()) {
-            then(path.to_string_lossy().into_owned());
-        }
-    });
-}
-
-/// A row that shows a chosen folder, with a button to choose it.
-fn folder_row(ui: &Rc<Ui>, title: &str) -> (adw::ActionRow, Rc<std::cell::RefCell<String>>) {
-    let chosen = Rc::new(std::cell::RefCell::new(String::new()));
-    let r = row(title, "None chosen");
-    let choose = button("Choose…", Some("flat"));
-    {
-        let (ui, r2, chosen) = (ui.clone(), r.clone(), chosen.clone());
-        choose.connect_clicked(move |_| {
-            let (r3, chosen) = (r2.clone(), chosen.clone());
-            pick_folder(&ui, move |path| {
-                r3.set_subtitle(&path);
-                *chosen.borrow_mut() = path;
-            });
-        });
-    }
-    r.add_suffix(&choose);
-    (r, chosen)
-}
-
-fn shares(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
-    let page = adw::PreferencesPage::new();
-    let empty = Vec::new();
-    for sh in s["shares"].as_array().unwrap_or(&empty) {
-        let name = text(&sh["name"]);
-        let g = group(&name, &text(&sh["folder"]));
-        if let Some(err) = sh["error"].as_str() {
-            g.add(&row("Can't read it", err));
-            page.add(&g);
-            continue;
-        }
-        let leave = button("Leave…", Some("flat"));
-        {
-            let (ui, name) = (ui.clone(), name.clone());
-            leave.connect_clicked(move |_| {
-                let (ui2, name2) = (ui.clone(), name.clone());
-                ui.confirm(
-                    &format!("Stop syncing {name}?"),
-                    "Its files stay on this device. Ask a member to remove this device too, so it \
-                     can't come back with its key.",
-                    &[("leave", "Leave", adw::ResponseAppearance::Destructive)],
-                    move |_| ui2.act(&["onecloud", "share", "leave", &name2], "Left"),
-                );
-            });
-        }
-        g.set_header_suffix(Some(&leave));
-        if sh["removed"].as_bool() == Some(true) {
-            g.add(&row(
-                "Removed",
-                "A member removed this device; it no longer syncs.",
-            ));
-        } else if sh["member"].as_bool() != Some(true) {
-            g.add(&row(
-                "Waiting for approval",
-                &format!(
-                    "Send this fingerprint to whoever shared it: {}",
-                    text(&sh["fingerprint"])
-                ),
-            ));
-        } else {
-            for r in sh["requests"].as_array().unwrap_or(&empty) {
-                let (who, fp) = (text(&r["name"]), text(&r["fingerprint"]));
-                let rw = row(&format!("{who} asks to join"), &fp);
-                let approve = button("Approve…", Some("suggested-action"));
-                let (ui2, name2) = (ui.clone(), name.clone());
-                approve.connect_clicked(move |_| {
-                    let (ui3, name3, fp3) = (ui2.clone(), name2.clone(), fp.clone());
-                    ui2.confirm(
-                        &format!("Let {who} in?"),
-                        &format!(
-                            "Only if they told you, by a channel you trust, that their device shows:\n\n{fp}"
-                        ),
-                        &[("approve", "Approve", adw::ResponseAppearance::Suggested)],
-                        move |_| ui3.act(&["onecloud", "share", "approve", &name3, &fp3], "Approved"),
-                    );
-                });
-                rw.add_suffix(&approve);
-                g.add(&rw);
-            }
-            for d in sh["devices"].as_array().unwrap_or(&empty) {
-                let (who, fp) = (text(&d["name"]), text(&d["fingerprint"]));
-                let rw = row(&who, &fp);
-                if d["this"].as_bool() == Some(true) {
-                    let tag = gtk::Label::new(Some("This device"));
-                    tag.add_css_class("dim-label");
-                    rw.add_suffix(&tag);
-                } else {
-                    let remove = button("Remove…", Some("flat"));
-                    let (ui2, name2) = (ui.clone(), name.clone());
-                    remove.connect_clicked(move |_| {
-                        let (ui3, name3, fp3) = (ui2.clone(), name2.clone(), fp.clone());
-                        ui2.confirm(
-                            &format!("Remove {who} from {name2}?"),
-                            "They can't sync it anymore. Changing its key also locks them out of what \
-                             they haven't downloaded yet, and uploads the folder again.",
-                            &[
-                                ("remove", "Remove", adw::ResponseAppearance::Destructive),
-                                ("rotate", "Remove and Change Key", adw::ResponseAppearance::Destructive),
-                            ],
-                            move |id| {
-                                let mut argv = vec!["onecloud", "share", "remove", &name3, &fp3];
-                                if id == "rotate" {
-                                    argv.push("--rotate");
-                                }
-                                ui3.act(&argv, "Removed");
-                            },
-                        );
-                    });
-                    rw.add_suffix(&remove);
-                }
-                g.add(&rw);
-            }
-        }
-        page.add(&g);
-    }
-
-    // share a folder
-    let g = group(
-        "Share a folder",
-        "It gets its own key; people you invite see only this folder.",
-    );
-    let name = adw::EntryRow::builder().title("Name").build();
-    let (folder, chosen) = folder_row(ui, "Folder");
-    g.add(&name);
-    g.add(&folder);
-    let create = button("Share", Some("suggested-action"));
-    create.set_halign(gtk::Align::End);
-    create.set_margin_top(12);
-    {
-        let ui = ui.clone();
-        create.connect_clicked(move |_| {
-            let (n, f) = (name.text().to_string(), chosen.borrow().clone());
-            if n.is_empty() || f.is_empty() {
-                ui.toast("Give it a name and choose a folder");
-                return;
-            }
-            let ui2 = ui.clone();
-            run_then(
-                &["onecloud", "share", "create", &n, "--folder", &f],
-                Vec::new(),
-                None,
-                move |r| {
-                    match r {
-                        Err(e) => ui2.toast(&e),
-                        Ok(out) => {
-                            let id = out
-                                .split_whitespace()
-                                .find(|w| w.len() == 64 && w.chars().all(|c| c.is_ascii_hexdigit()))
-                                .unwrap_or_default();
-                            show_text(
-                                &ui2,
-                                "Shared",
-                                "Send this id to the people you share it with. They join with \
-                                 `onecloud share join`, or under Shared in this app, and tell you the \
-                                 fingerprint their device shows.",
-                                id,
-                            );
-                        }
-                    }
-                    ui2.refresh();
-                },
-            );
-        });
-    }
-    g.add(&create);
-    page.add(&g);
-
-    // join one
-    let g = group(
-        "Join a shared folder",
-        "With the id you were sent. You'll get a fingerprint to send back.",
-    );
-    let id = adw::EntryRow::builder().title("Id").build();
-    let jname = adw::EntryRow::builder()
-        .title("Name on this device")
-        .build();
-    let (jfolder, jchosen) = folder_row(ui, "Keep it in");
-    g.add(&id);
-    g.add(&jname);
-    g.add(&jfolder);
-    let join = button("Join", Some("suggested-action"));
-    join.set_halign(gtk::Align::End);
-    join.set_margin_top(12);
-    {
-        let ui = ui.clone();
-        join.connect_clicked(move |_| {
-            let (i, n, f) = (
-                id.text().trim().to_string(),
-                jname.text().to_string(),
-                jchosen.borrow().clone(),
-            );
-            if i.is_empty() || n.is_empty() || f.is_empty() {
-                ui.toast("Paste the id, give it a name and choose a folder");
-                return;
-            }
-            let ui2 = ui.clone();
-            run_then(
-                &["onecloud", "share", "join", &i, "--name", &n, "--folder", &f],
-                Vec::new(),
-                None,
-                move |r| {
-                    match r {
-                        Err(e) => ui2.toast(&e),
-                        Ok(out) => {
-                            let fp = out
-                                .lines()
-                                .find_map(|l| l.strip_prefix("this device's fingerprint: "))
-                                .unwrap_or_default()
-                                .to_string();
-                            show_text(
-                                &ui2,
-                                "Asked to join",
-                                "Send this fingerprint to whoever shared the folder, by a channel you \
-                                 trust. It syncs once they approve.",
-                                &fp,
-                            );
-                        }
-                    }
-                    ui2.refresh();
-                },
-            );
-        });
-    }
-    g.add(&join);
-    page.add(&g);
-    page
 }
