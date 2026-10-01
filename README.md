@@ -20,13 +20,21 @@ access.
 
 ## Install
 
-From a checkout, on Arch or Omarchy: `cd pkgbuild && makepkg -si`. It
-installs `onecloud` and a systemd user unit that keeps the folder in sync
-for every user who ran `onecloud init`. A signed package repository will
-follow, as for icloud-notes.
+On Omarchy:
 
-`onecloud-app` is the app for all of this: devices and join requests,
-settings sync, secrets and recovery shares. The daemon also notifies you
+```sh
+curl -fsSL https://github.com/ferdousbhai/onecloud/releases/latest/download/install.sh | sudo bash
+```
+
+It adds the signed `[onecloud]` package repository (key fingerprint
+`5213 0299 581D AD68 5226 900C A89C A1A6 A1E7 4251`) and installs OneCloud;
+from then on `omarchy update` keeps it current. Then open OneCloud from the
+app launcher to set up the computer. The package also brings a systemd user
+unit that keeps your folders in sync for every user who set up OneCloud. To
+build from a checkout instead: `cd pkgbuild && makepkg -si`.
+
+The OneCloud app (`onecloud-app`) is where you manage all of this: devices
+and join requests, folders, Omarchy settings, keys and recovery shares. The daemon also notifies you
 when a device asks to join, a setting needs a choice, or this device was
 removed; "Open" goes to the right page (`notifications = false` in the
 config turns them off).

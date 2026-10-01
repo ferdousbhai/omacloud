@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.1 (unreleased)
+## 0.0.1 (2026-10-01)
 
 The first release, as OneCloud: self-hosted. Everything lives in your own S3 bucket
 (Hetzner, R2, B2, MinIO), coordination included, and nobody sits in between.

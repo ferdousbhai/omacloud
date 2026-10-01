@@ -58,3 +58,12 @@ keyring; scripts that make test accounts clear their keyring entries on exit
 - Kill test processes by exact name (`pkill -x`) or PID; a `pkill -f`
   pattern can match the shell running it.
 - Guard `rm -rf` paths built from variables: `"${dir:?}"/...`.
+
+## Releases
+
+`scripts/release.sh <version>` (from a clean `master`, with the version in
+`Cargo.toml` and `CHANGELOG.md`) tags, builds and signs the package and the
+`[onecloud]` repository database, publishes them with `install.sh` as a
+GitHub release, then `scripts/verify-release.sh` installs it in a clean Arch
+container and takes the release back down if that fails. Signing needs the
+package-signing key whose fingerprint `install.sh` pins.

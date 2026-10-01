@@ -1,7 +1,7 @@
 # Maintainer: Ferdous Bhai <https://github.com/ferdousbhai>
 #
 # Builds from this checkout; a plain `makepkg` in this directory builds the
-# package locally. Signed releases will follow icloud-notes' workflow.
+# package locally. scripts/release.sh builds, signs and publishes releases.
 
 pkgname=onecloud
 pkgver=0.0.0.r4
