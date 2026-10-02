@@ -450,8 +450,9 @@ struct Provider {
 const PROVIDERS: [Provider; 4] = [
     Provider {
         name: "Hetzner Object Storage",
-        steps: "1. In the Hetzner Console, open Object Storage and create a bucket: private, \
-                Object Lock disabled.\n2. Under Security, S3 credentials, generate credentials and \
+        steps: "1. In the Hetzner Console, open Object Storage and create a bucket with any \
+                name. Leave the other settings as they are (Object Lock stays disabled).\n\
+                2. Under Security, S3 credentials, generate credentials and \
                 copy both keys. Hetzner shows the secret key only once.",
         link: "https://console.hetzner.com/projects",
     },
@@ -464,7 +465,7 @@ const PROVIDERS: [Provider; 4] = [
     },
     Provider {
         name: "Backblaze B2",
-        steps: "1. In Backblaze, create a private bucket and note its S3 endpoint, like \
+        steps: "1. In Backblaze, create a bucket (Files in Bucket: Private) and note its S3 endpoint, like \
                 s3.eu-central-003.backblazeb2.com.\n2. Under Application Keys, add a key with read \
                 and write access to that bucket only, and copy its keyID and applicationKey.",
         link: "https://secure.backblaze.com/b2_buckets.htm",

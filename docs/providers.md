@@ -8,7 +8,7 @@ same steps.
 
 Whatever the provider:
 
-- Make the bucket **private**.
+- Keep the bucket private (the usual default), so only your keys reach it.
 - Make a key that can read and write **that bucket**. If the provider can
   limit a key to one bucket, do: a key that reaches only this bucket is all
   a lost computer could ever reach.
@@ -24,9 +24,9 @@ rotation, plain restic restores, a computer removed and the bucket key
 changed, object lock with a second bucket.
 
 1. In the [Hetzner Console](https://console.hetzner.com/projects), open
-   Object Storage and create a bucket: private, Object Lock disabled. Pick
-   the location you'll choose in OneCloud (Falkenstein, Nuremberg or
-   Helsinki).
+   Object Storage and create a bucket with any name, leaving the other
+   settings as they are: Object Lock disabled, visibility private. Note its location
+   (Falkenstein, Nuremberg or Helsinki): you pick the same in OneCloud.
 2. Under Security, S3 credentials, generate credentials and copy both keys.
 
 Notes:
