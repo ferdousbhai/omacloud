@@ -62,6 +62,15 @@ enum Cmd {
         /// Where computers keep in step [default: `bucket`, beside the files]
         #[arg(long, hide = true)]
         coordinator: Option<String>,
+        /// Folders of home to sync on this computer, comma separated [default:
+        /// Desktop,Documents,Pictures]. The usual folders left out (Music,
+        /// Videos, Downloads, ...) are skipped here even if another computer
+        /// syncs them
+        #[arg(long, value_delimiter = ',')]
+        folders: Option<Vec<String>>,
+        /// Also sync Omarchy settings (`onecloud settings on`)
+        #[arg(long)]
+        settings: bool,
         /// Name for this device [default: the hostname]
         #[arg(long)]
         device: Option<String>,
@@ -363,6 +372,16 @@ struct FolderChoice {
 /// What syncs by default, as iCloud's Desktop & Documents and Photos.
 const DEFAULT_FOLDERS: &[&str] = &["Desktop", "Documents", "Pictures"];
 
+/// The folders of home a computer is asked about.
+const USUAL_FOLDERS: &[&str] = &[
+    "Desktop",
+    "Documents",
+    "Pictures",
+    "Music",
+    "Videos",
+    "Downloads",
+];
+
 /// This machine's names for the XDG user folders, where they differ from
 /// the English names the account uses (`Documents` -> `Dokumente`). Only
 /// folders directly in home count.
@@ -392,6 +411,28 @@ fn xdg_names(home: &Path) -> BTreeMap<String, String> {
         (direct && local != *name).then(|| ((*name).to_string(), local))
     })
     .collect()
+}
+
+/// The usual folders this computer points at home itself (Omarchy's
+/// `XDG_DESKTOP_DIR="$HOME/"`): there is no such folder to sync.
+fn xdg_at_home(home: &Path) -> Vec<String> {
+    let dirs = fs::read_to_string(
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map_or_else(|| home.join(".config"), PathBuf::from)
+            .join("user-dirs.dirs"),
+    )
+    .unwrap_or_default();
+    [("DESKTOP", "Desktop"), ("DOWNLOAD", "Downloads")]
+        .iter()
+        .filter(|(key, _)| {
+            dirs.lines().any(|l| {
+                l.trim()
+                    .strip_prefix(&format!("XDG_{key}_DIR="))
+                    .is_some_and(|v| matches!(v.trim_matches('"'), "$HOME" | "$HOME/"))
+            })
+        })
+        .map(|(_, name)| (*name).to_string())
+        .collect()
 }
 
 fn yes() -> bool {
@@ -847,6 +888,8 @@ fn main() -> Result<()> {
             repo,
             opts,
             coordinator,
+            folders: chosen,
+            settings,
             device,
             recovery_code,
             coordination_bucket,
@@ -899,14 +942,32 @@ fn main() -> Result<()> {
             let (folder, folders) = match folder {
                 Some(f) => (absolute(&f)?, None),
                 None => {
-                    let add = DEFAULT_FOLDERS.iter().map(|s| (*s).to_string()).collect();
-                    (
-                        home_dir()?,
-                        Some(FolderChoice {
-                            add,
-                            skip: Default::default(),
-                        }),
-                    )
+                    // folders this computer points at home itself don't exist
+                    let home = home_dir()?;
+                    let at_home = xdg_at_home(&home);
+                    // chosen: those sync here, and the other usual ones are
+                    // skipped here even if the account has them
+                    let skip = chosen.as_ref().map_or_else(Default::default, |c| {
+                        USUAL_FOLDERS
+                            .iter()
+                            .filter(|u| !c.iter().any(|n| n == *u))
+                            .filter(|u| !at_home.iter().any(|h| h == *u))
+                            .map(|u| (*u).to_string())
+                            .collect()
+                    });
+                    let add = chosen
+                        .map_or_else(
+                            || DEFAULT_FOLDERS.iter().map(|s| (*s).to_string()).collect(),
+                            |c| {
+                                c.into_iter()
+                                    .filter(|n| !n.trim().is_empty())
+                                    .collect::<std::collections::BTreeSet<_>>()
+                            },
+                        )
+                        .into_iter()
+                        .filter(|n| !at_home.contains(n))
+                        .collect();
+                    (home, Some(FolderChoice { add, skip }))
                 }
             };
             let device = device.unwrap_or_else(hostname);
@@ -917,7 +978,7 @@ fn main() -> Result<()> {
                 repo,
                 root: String::new(),
                 limits: Limits::default(),
-                settings: false,
+                settings,
                 notifications: true,
                 folders,
                 coordination: None,
@@ -1739,12 +1800,28 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
         "account": config.root,
         "account_fingerprint": fingerprint(&config.root),
         "folder": config.folder,
-        "folders": config.folders.as_ref().map(|f| json!({
-            "synced": e.folder_list().into_iter()
-                .map(|(name, path)| json!({ "name": name, "path": path }))
-                .collect::<Vec<_>>(),
-            "skipped": f.skip,
-        })),
+        "folders": config.folders.as_ref().map(|f| {
+            let synced = e.folder_list();
+            // the usual folders this computer doesn't sync, with where they'd be
+            let local = xdg_names(&config.folder);
+            let at_home = xdg_at_home(&config.folder);
+            let others: Vec<_> = USUAL_FOLDERS
+                .iter()
+                .filter(|u| !synced.iter().any(|(n, _)| n == *u) && !f.skip.contains(**u))
+                .filter(|u| !at_home.iter().any(|h| h == *u))
+                .map(|u| {
+                    let path = config.folder.join(local.get(*u).map_or(*u, String::as_str));
+                    json!({ "name": u, "path": path })
+                })
+                .collect();
+            json!({
+                "synced": synced.into_iter()
+                    .map(|(name, path)| json!({ "name": name, "path": path }))
+                    .collect::<Vec<_>>(),
+                "skipped": f.skip,
+                "others": others,
+            })
+        }),
         "repo": {
             "kind": kind,
             "bucket": repo.options.get("bucket"),

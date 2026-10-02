@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.0.5 (2026-10-02)
+
+Choosing what syncs, as on iCloud.
+
+- Setup asks what to sync, with switches and sizes: Documents, Pictures,
+  Music, Videos, Downloads and Omarchy settings. Documents, Pictures and
+  Omarchy settings start on. Desktop is offered only where it's a folder of
+  its own (Omarchy points it at your home).
+- Overview has the same switches any time, with Open buttons and sizes, and
+  Add Folder for any other folder in your home. Switching a folder off asks
+  first, then keeps its files on this computer.
+- Anything named like `name.nosync` stays on its computer, as on iCloud.
+- `onecloud init --folders Documents,Pictures --settings` for the same from
+  the terminal.
+- Setup's Hetzner steps no longer read "private" as a bucket name.
+
 ## 0.0.4 (2026-10-01)
 
 - Reproducible builds: two builds of the same tag give byte-identical

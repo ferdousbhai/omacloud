@@ -60,10 +60,16 @@ file.
 
 ## What syncs
 
-- **Folders:** Desktop, Documents and Pictures, in place, on every computer.
+- **Folders:** you choose, as on iCloud: setup shows switches for Desktop,
+  Documents, Pictures, Music, Videos and Downloads with their sizes
+  (Documents and Pictures start on), and Overview has the same switches
+  later, plus Add Folder for any other folder in your home. Switching one
+  off on a computer keeps its files there and stops syncing it there only.
   Folders match by what they are, so a German computer's `Dokumente` is
-  another's `Documents`. The app's Overview (or `onecloud folders add
-  Music`, `onecloud folders skip Pictures`) changes which.
+  another's `Documents`. From the terminal: `onecloud folders add Music`,
+  `onecloud folders skip Pictures`.
+- **Not this file:** anything named like `name.nosync` stays on its
+  computer, as on iCloud.
 - **Omarchy settings:** the shared files in Omarchy's dots manifest
   (bindings, look and feel, terminals, `.bashrc`), never machine-local ones
   like `monitors.lua`. Edits on two machines merge; when they can't, the app

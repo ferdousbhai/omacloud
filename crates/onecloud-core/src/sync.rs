@@ -1619,7 +1619,7 @@ impl Engine {
                 let base = Trees::new(repo)
                     .lookup(base_tree, &path)?
                     .filter(Node::is_file);
-                let ancestor = base.as_ref().map(&dump).transpose()?.unwrap_or_default();
+                let ancestor = base.as_ref().map(dump).transpose()?.unwrap_or_default();
                 let (ours, theirs) = (fs::read(&dest)?, dump(&r)?);
                 _ = local.remove(&path);
                 if let Some(merged) = settings::merge(&ancestor, &ours, &theirs) {

@@ -16,8 +16,11 @@ pub const TEMP_PREFIX: &str = ".~onecloud-";
 /// Rules file at the root of a synced folder.
 pub const FOLDER_FILE: &str = ".onecloudignore";
 
-/// Always ignored: our temp files, editor swap files, desktop junk.
+/// Always ignored: our temp files, editor swap files, desktop junk, and, as
+/// in iCloud, anything named `*.nosync`: a file or folder that stays on this
+/// computer.
 pub const DEFAULTS: &[&str] = &[
+    "*.nosync",
     ".~onecloud-*",
     "*.swp",
     "*.swx",
@@ -106,6 +109,11 @@ mod tests {
         no("server/keep.log", false);
         no("notes.md", false);
         no(FOLDER_FILE, false);
+        // as in iCloud: a name ending in .nosync stays on this computer
+        yes("photos/raw.nosync", true);
+        yes("photos/raw.nosync/img.cr3", false);
+        yes("cache.db.nosync", false);
+        no("nosync.md", false);
         Ok(())
     }
 }

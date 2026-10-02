@@ -535,6 +535,8 @@ fn s3_location(
 /// First run: start an account, or add this computer to one.
 fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
+    let (what, sync_args) = choose_what_syncs();
+    page.add(&what);
 
     // create, own bucket
     let own = group(
@@ -636,7 +638,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     create_own.set_halign(gtk::Align::End);
     create_own.set_margin_top(12);
     {
-        let ui = ui.clone();
+        let (ui, sync_args) = (ui.clone(), sync_args.clone());
         create_own.connect_clicked(move |_| {
             let location = s3_location(
                 provider.selected() as usize,
@@ -685,6 +687,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
                 args.push("--coordination-bucket".into());
                 args.push(cb);
             }
+            args.extend(sync_args());
             // the secret through the environment: a command line is readable
             // by other processes
             run_init(
@@ -728,7 +731,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
                 ui.toast("Paste the join code from one of your computers");
                 return;
             }
-            run_init(&ui, Vec::new(), env);
+            run_init(&ui, sync_args(), env);
         });
     }
     join.add(&join_button);
@@ -761,61 +764,7 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     let mut folders_group = None;
     let mut folder_group_row = None;
     if folders.is_object() {
-        // chosen folders of home, as iCloud syncs Desktop and Documents
-        let g = group(
-            "Folders",
-            "These folders of your home sync on every device. Skipping one keeps its files here \
-             and stops syncing it on this device only.",
-        );
-        let empty = Vec::new();
-        for f in folders["synced"].as_array().unwrap_or(&empty) {
-            let (name, path) = (text(&f["name"]), text(&f["path"]));
-            let shown = std::env::var("HOME")
-                .ok()
-                .and_then(|h| path.strip_prefix(&h).map(|rest| format!("~{rest}")))
-                .unwrap_or_else(|| path.clone());
-            let r = row(&name, &shown);
-            r.add_suffix(&open_button(path));
-            let skip = button("Skip…", Some("flat"));
-            let (ui2, name2) = (ui.clone(), name.clone());
-            skip.connect_clicked(move |_| {
-                let (ui3, name3) = (ui2.clone(), name2.clone());
-                ui2.confirm(
-                    &format!("Stop syncing {name2} here?"),
-                    "Its files stay on this device, and other devices keep syncing it.",
-                    &[("skip", "Skip", adw::ResponseAppearance::Destructive)],
-                    move |_| ui3.act(&["onecloud", "folders", "skip", &name3], "Skipped here"),
-                );
-            });
-            r.add_suffix(&skip);
-            g.add(&r);
-        }
-        for f in folders["skipped"].as_array().unwrap_or(&empty) {
-            let name = text(f);
-            let r = row(&name, "Skipped on this device");
-            let again = button("Sync Here", Some("flat"));
-            let (ui2, name2) = (ui.clone(), name.clone());
-            again.connect_clicked(move |_| {
-                ui2.act(&["onecloud", "folders", "unskip", &name2], "Syncing");
-            });
-            r.add_suffix(&again);
-            g.add(&r);
-        }
-        let add = adw::EntryRow::builder()
-            .title("Add a folder of home, like Music")
-            .show_apply_button(true)
-            .build();
-        {
-            let ui2 = ui.clone();
-            add.connect_apply(move |e| {
-                let name = e.text().trim().to_string();
-                if !name.is_empty() {
-                    ui2.act(&["onecloud", "folders", "add", &name], "Added");
-                }
-            });
-        }
-        g.add(&add);
-        folders_group = Some(g);
+        folders_group = Some(what_syncs(ui, s));
     } else {
         let folder = text(&s["folder"]);
         let folder_row = row("Folder", &folder);
@@ -908,6 +857,275 @@ fn ago(t: u64) -> String {
         3600..86400 => n(s / 3600, "hour"),
         _ => n(s / 86400, "day"),
     }
+}
+
+/// `~/Documents` for a path in home.
+fn short_path(path: &str) -> String {
+    std::env::var("HOME")
+        .ok()
+        .and_then(|h| path.strip_prefix(&h).map(|rest| format!("~{rest}")))
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// "2.4 GB", for a size in bytes.
+fn human(bytes: u64) -> String {
+    let units = ["bytes", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1000.0 && unit < units.len() - 1 {
+        size /= 1000.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} bytes")
+    } else {
+        format!("{size:.1} {}", units[unit])
+    }
+}
+
+/// Show `path` and, once measured, its size as `row`'s subtitle.
+fn subtitle_with_size(row: &adw::ActionRow, path: &str) {
+    let shown = short_path(path);
+    row.set_subtitle(&shown);
+    if !std::path::Path::new(path).is_dir() {
+        return;
+    }
+    let row = row.clone();
+    run_then(&["du", "-sb", path], Vec::new(), None, move |r| {
+        if let Some(bytes) = r
+            .ok()
+            .and_then(|out| out.split_whitespace().next()?.parse::<u64>().ok())
+        {
+            row.set_subtitle(&format!("{shown} · {}", human(bytes)));
+        }
+    });
+}
+
+/// An iCloud-style switch row: `on` says what it shows; flipping it calls
+/// `flip` with the wanted state, and the page is rebuilt from the result.
+fn switch_row(title: &str, on: bool, flip: impl Fn(bool) + 'static) -> adw::ActionRow {
+    let row = adw::ActionRow::builder().title(title).build();
+    let switch = gtk::Switch::builder()
+        .active(on)
+        .valign(gtk::Align::Center)
+        .build();
+    switch.connect_state_set(move |_, want| {
+        flip(want);
+        // the state follows once the change is made and the page refreshed
+        glib::Propagation::Stop
+    });
+    row.add_suffix(&switch);
+    row.set_activatable_widget(Some(&switch));
+    row
+}
+
+/// What syncs on this computer: the usual folders of home, the ones the
+/// account added, and Omarchy settings, each with a switch, as iCloud lists
+/// what it keeps in step.
+fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
+    let g = group(
+        "On this computer",
+        "Switch a folder off to keep its files here and stop syncing it on this computer; \
+         your other computers keep it. Anything named like name.nosync stays on this \
+         computer only.",
+    );
+    let empty = Vec::new();
+    let folders = &s["folders"];
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut rows: Vec<(String, String, &'static str)> = Vec::new();
+    for f in folders["synced"].as_array().unwrap_or(&empty) {
+        rows.push((text(&f["name"]), text(&f["path"]), "synced"));
+    }
+    for f in folders["skipped"].as_array().unwrap_or(&empty) {
+        let name = text(f);
+        let path = format!("{home}/{name}");
+        rows.push((name, path, "skipped"));
+    }
+    for f in folders["others"].as_array().unwrap_or(&empty) {
+        rows.push((text(&f["name"]), text(&f["path"]), "off"));
+    }
+    // the usual order, then the account's own additions
+    let order = |n: &str| {
+        [
+            "Desktop",
+            "Documents",
+            "Pictures",
+            "Music",
+            "Videos",
+            "Downloads",
+        ]
+        .iter()
+        .position(|u| *u == n)
+        .unwrap_or(99)
+    };
+    rows.sort_by(|a, b| order(&a.0).cmp(&order(&b.0)).then(a.0.cmp(&b.0)));
+    for (name, path, state) in rows {
+        let (ui2, name2) = (ui.clone(), name.clone());
+        let r = switch_row(&name, state == "synced", move |want| {
+            let name = name2.clone();
+            if want {
+                let verb = if state == "skipped" { "unskip" } else { "add" };
+                ui2.act(&["onecloud", "folders", verb, &name], "Syncing");
+            } else {
+                let ui3 = ui2.clone();
+                let ui4 = ui2.clone();
+                let dialog = adw::AlertDialog::new(
+                    Some(&format!("Stop syncing {name} here?")),
+                    Some(
+                        "Its files stay on this computer, and your other computers keep syncing it.",
+                    ),
+                );
+                dialog.add_response("cancel", "Cancel");
+                dialog.add_response("skip", "Stop Syncing");
+                dialog.set_response_appearance("skip", adw::ResponseAppearance::Destructive);
+                dialog.set_close_response("cancel");
+                dialog.connect_response(None, move |_, id| {
+                    if id == "skip" {
+                        ui3.act(
+                            &["onecloud", "folders", "skip", &name],
+                            "Stopped syncing here",
+                        );
+                    } else {
+                        ui4.refresh();
+                    }
+                });
+                dialog.present(Some(&ui2.window));
+            }
+        });
+        subtitle_with_size(&r, &path);
+        if state == "synced" {
+            let open = gtk::Button::builder()
+                .icon_name("folder-open-symbolic")
+                .tooltip_text("Open")
+                .valign(gtk::Align::Center)
+                .css_classes(["flat"])
+                .build();
+            let (window, path) = (ui.window.clone(), path.clone());
+            open.connect_clicked(move |_| {
+                gtk::FileLauncher::new(Some(&gio::File::for_path(&path))).launch(
+                    Some(&window),
+                    None::<&gio::Cancellable>,
+                    |_| {},
+                );
+            });
+            r.add_prefix(&open);
+        }
+        g.add(&r);
+    }
+    // Omarchy settings, beside the folders, as iCloud lists more than files
+    let settings_on = s["settings"]["on"].as_bool().unwrap_or(false);
+    let ui2 = ui.clone();
+    let settings = switch_row("Omarchy settings", settings_on, move |want| {
+        let verb = if want { "on" } else { "off" };
+        ui2.act(
+            &["onecloud", "settings", verb],
+            if want {
+                "Omarchy settings sync"
+            } else {
+                "Omarchy settings stay here"
+            },
+        );
+    });
+    settings.set_subtitle("Bindings, themes, terminal and shell setup");
+    g.add(&settings);
+
+    let add = button("Add Folder…", Some("flat"));
+    let ui2 = ui.clone();
+    add.connect_clicked(move |_| {
+        let dialog = gtk::FileDialog::builder()
+            .title("Choose a folder in your home")
+            .modal(true)
+            .build();
+        let home = std::env::var("HOME").unwrap_or_default();
+        dialog.set_initial_folder(Some(&gio::File::for_path(&home)));
+        let ui3 = ui2.clone();
+        dialog.select_folder(Some(&ui2.window), None::<&gio::Cancellable>, move |r| {
+            let Some(path) = r.ok().and_then(|f| f.path()) else {
+                return;
+            };
+            match (path.parent(), path.file_name()) {
+                (Some(parent), Some(name)) if parent == std::path::Path::new(&home) => {
+                    let name = name.to_string_lossy().to_string();
+                    ui3.act(&["onecloud", "folders", "add", &name], "Syncing");
+                }
+                _ => ui3.toast("Choose a folder directly in your home, like ~/Projects"),
+            }
+        });
+    });
+    g.set_header_suffix(Some(&add));
+    g
+}
+
+/// The setup page's choice of what syncs, as iCloud asks on a new Mac:
+/// switches for the usual folders and Omarchy settings, with their sizes.
+/// Returns the group and what to add to `onecloud init`.
+fn choose_what_syncs() -> (adw::PreferencesGroup, Rc<dyn Fn() -> Vec<String>>) {
+    let g = group(
+        "What to sync",
+        "Change any of these later on Overview. Anything named like name.nosync stays on \
+         this computer only.",
+    );
+    let home = std::env::var("HOME").unwrap_or_default();
+    // where this computer keeps each (a German one's Documents is Dokumente)
+    // None when this computer points the folder at home itself, as Omarchy
+    // does with Desktop: there's nothing to sync
+    let local = |name: &str| -> Option<String> {
+        let key = match name {
+            "Downloads" => "DOWNLOAD".to_string(),
+            other => other.to_uppercase(),
+        };
+        let dirs =
+            std::fs::read_to_string(format!("{home}/.config/user-dirs.dirs")).unwrap_or_default();
+        let set = dirs
+            .lines()
+            .find_map(|l| {
+                l.trim()
+                    .strip_prefix(&format!("XDG_{key}_DIR="))
+                    .map(str::to_string)
+            })
+            .map(|v| v.trim_matches('"').replace("$HOME", &home));
+        match set {
+            Some(v) if v.trim_end_matches('/') == home => None,
+            Some(v) if !v.is_empty() => Some(v),
+            _ => Some(format!("{home}/{name}")),
+        }
+    };
+    let mut switches = Vec::new();
+    for (name, on) in [
+        ("Desktop", true),
+        ("Documents", true),
+        ("Pictures", true),
+        ("Music", false),
+        ("Videos", false),
+        ("Downloads", false),
+    ] {
+        let Some(path) = local(name) else {
+            continue;
+        };
+        let row = adw::SwitchRow::builder().title(name).active(on).build();
+        subtitle_with_size(row.upcast_ref(), &path);
+        g.add(&row);
+        switches.push((name, row));
+    }
+    let settings = adw::SwitchRow::builder()
+        .title("Omarchy settings")
+        .subtitle("Bindings, themes, terminal and shell setup")
+        .active(true)
+        .build();
+    g.add(&settings);
+    let args = move || {
+        let chosen: Vec<&str> = switches
+            .iter()
+            .filter(|(_, r)| r.is_active())
+            .map(|(n, _)| *n)
+            .collect();
+        let mut args = vec!["--folders".to_string(), chosen.join(",")];
+        if settings.is_active() {
+            args.push("--settings".into());
+        }
+        args
+    };
+    (g, Rc::new(args))
 }
 
 fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
