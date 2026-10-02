@@ -939,6 +939,40 @@ fn main() -> Result<()> {
                     },
                 },
             };
+            // no bucket given: make a private one with a random name
+            let mut repo = repo;
+            if repo.repository == "opendal:s3" && !repo.options.contains_key("bucket") {
+                let opt = |k: &str| repo.options.get(k).cloned().unwrap_or_default();
+                let (endpoint, region) = (opt("endpoint"), opt("region"));
+                anyhow::ensure!(
+                    !endpoint.is_empty(),
+                    "give the storage's endpoint: --opt endpoint=..."
+                );
+                let region = if region.is_empty() {
+                    "auto".to_string()
+                } else {
+                    region
+                };
+                let mut made = None;
+                for _ in 0..3 {
+                    let name = onecloud_core::bucket::new_bucket_name();
+                    if onecloud_core::bucket::create_bucket(
+                        &endpoint,
+                        &region,
+                        &opt("access_key_id"),
+                        &opt("secret_access_key"),
+                        &name,
+                    )? == onecloud_core::bucket::Created::Ours
+                    {
+                        made = Some(name);
+                        break;
+                    }
+                }
+                let name = made.context("couldn't find a free bucket name; try again")?;
+                println!("created bucket {name}");
+                repo.options.insert("bucket".into(), name);
+                repo.options.entry("region".into()).or_insert(region);
+            }
             let (folder, folders) = match folder {
                 Some(f) => (absolute(&f)?, None),
                 None => {

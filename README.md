@@ -29,9 +29,11 @@ instead: `cd pkgbuild && makepkg -si`.
 
 Open **OneCloud** from the app launcher (Super + Space).
 
-**Your first computer:** pick your storage provider and follow the two steps
-the app shows: create a private bucket, and a key that can read and write
-it. Paste the bucket name and both keys, and click Create Account. The app
+**Your first computer:** pick your storage provider and follow the steps the
+app shows. With Hetzner that's one page: click Get a Key, generate
+credentials there, and paste both keys back; OneCloud makes its own private
+bucket. With R2 or B2, make a bucket and a key just for it, and paste the
+bucket name and both keys. Then click Create Account. The app
 then shows your **recovery code** once: write it down and keep it offline.
 With it you can add a computer when no other is at hand and recover
 everything; without it and without a computer, nobody can. [docs/providers.md](docs/providers.md) has the

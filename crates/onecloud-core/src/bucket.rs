@@ -292,3 +292,141 @@ impl Coordinator for BucketCoordinator {
         Ok(())
     }
 }
+
+/// A name for a new bucket: `onecloud-` and ten random letters and digits,
+/// so it says nothing about whose it is.
+#[must_use]
+pub fn new_bucket_name() -> String {
+    use rand::Rng;
+    const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let mut rng = rand::rngs::OsRng;
+    let tail: String = (0..10)
+        .map(|_| CHARS[rng.gen_range(0..CHARS.len())] as char)
+        .collect();
+    format!("onecloud-{tail}")
+}
+
+/// What became of a bucket creation.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Created {
+    /// Made now, or already this key's.
+    Ours,
+    /// Someone else has the name: pick another.
+    Taken,
+}
+
+/// Create the private bucket `name` at `endpoint` (an S3 endpoint such as
+/// `https://fsn1.your-objectstorage.com`, path style), signing with the
+/// key. Providers that want the location spelled out get it on a second
+/// try.
+///
+/// # Errors
+///
+/// If the provider refuses for another reason, such as a key that can't
+/// create buckets, or can't be reached.
+pub fn create_bucket(
+    endpoint: &str,
+    region: &str,
+    access_key: &str,
+    secret: &str,
+    name: &str,
+) -> Result<Created> {
+    let mut answer = put_bucket(endpoint, region, access_key, secret, name, "")?;
+    if answer.0 >= 400 && answer.1.contains("LocationConstraint") {
+        let body = format!(
+            "<CreateBucketConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\
+             <LocationConstraint>{region}</LocationConstraint></CreateBucketConfiguration>"
+        );
+        answer = put_bucket(endpoint, region, access_key, secret, name, &body)?;
+    }
+    match answer {
+        (200..=299, _) => Ok(Created::Ours),
+        (_, text) if text.contains("BucketAlreadyOwnedByYou") => Ok(Created::Ours),
+        (_, text) if text.contains("BucketAlreadyExists") => Ok(Created::Taken),
+        (status, text) => {
+            let code = text
+                .split("<Code>")
+                .nth(1)
+                .and_then(|t| t.split("</Code>").next())
+                .unwrap_or("");
+            match code {
+                "SignatureDoesNotMatch" | "InvalidAccessKeyId" => anyhow::bail!(
+                    "the provider refused the key: check the access key and the secret key"
+                ),
+                "AccessDenied" => anyhow::bail!(
+                    "this key can't create buckets: make one at the provider and give its name"
+                ),
+                "TooManyBuckets" => anyhow::bail!(
+                    "the provider allows no more buckets here: delete one, or give an existing \
+                     bucket's name"
+                ),
+                _ => anyhow::bail!("the provider didn't create the bucket ({status} {code})"),
+            }
+        }
+    }
+}
+
+/// PUT /`name` signed with AWS signature version 4. Returns the status and
+/// the response body.
+fn put_bucket(
+    endpoint: &str,
+    region: &str,
+    access_key: &str,
+    secret: &str,
+    name: &str,
+    body: &str,
+) -> Result<(u16, String)> {
+    use hmac::{Hmac, Mac};
+    use sha2::{Digest, Sha256};
+    let hmac = |key: &[u8], data: &str| -> Vec<u8> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("any key length");
+        mac.update(data.as_bytes());
+        mac.finalize().into_bytes().to_vec()
+    };
+    let endpoint = endpoint.trim_end_matches('/');
+    let host = endpoint
+        .split_once("://")
+        .map_or(endpoint, |(_, rest)| rest)
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    let now = rustic_core::jiff::Timestamp::now();
+    let stamp = now.strftime("%Y%m%dT%H%M%SZ").to_string();
+    let day = &stamp[..8];
+    let payload = hex::encode(Sha256::digest(body.as_bytes()));
+    let signed_headers = "host;x-amz-content-sha256;x-amz-date";
+    let canonical = format!(
+        "PUT\n/{name}\n\nhost:{host}\nx-amz-content-sha256:{payload}\nx-amz-date:{stamp}\n\n\
+         {signed_headers}\n{payload}"
+    );
+    let scope = format!("{day}/{region}/s3/aws4_request");
+    let to_sign = format!(
+        "AWS4-HMAC-SHA256\n{stamp}\n{scope}\n{}",
+        hex::encode(Sha256::digest(canonical.as_bytes()))
+    );
+    let mut key = hmac(format!("AWS4{secret}").as_bytes(), day);
+    for part in [region, "s3", "aws4_request"] {
+        key = hmac(&key, part);
+    }
+    let signature = hex::encode(hmac(&key, &to_sign));
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+    let mut response = agent
+        .put(&format!("{endpoint}/{name}"))
+        .header("x-amz-date", &stamp)
+        .header("x-amz-content-sha256", &payload)
+        .header(
+            "authorization",
+            &format!(
+                "AWS4-HMAC-SHA256 Credential={access_key}/{scope}, \
+                 SignedHeaders={signed_headers}, Signature={signature}"
+            ),
+        )
+        .send(body)
+        .with_context(|| format!("reaching {endpoint}"))?;
+    let status = response.status().as_u16();
+    let text = response.body_mut().read_to_string().unwrap_or_default();
+    Ok((status, text))
+}

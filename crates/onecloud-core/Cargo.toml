@@ -26,6 +26,8 @@ ignore.workspace = true
 libc.workspace = true
 rayon.workspace = true
 diffy = "0.5.2"
+hmac = "0.12"
+ureq = "3.4.2"
 
 [dev-dependencies]
 serde_json.workspace = true

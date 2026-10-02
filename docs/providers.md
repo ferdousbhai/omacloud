@@ -8,7 +8,9 @@ same steps.
 
 Whatever the provider:
 
-- Keep the bucket private (the usual default), so only your keys reach it.
+- With Hetzner or other S3 storage, OneCloud can make the bucket itself;
+  you only make a key. Otherwise keep the bucket private (the usual
+  default), so only your keys reach it.
 - Make a key that can read and write **that bucket**. If the provider can
   limit a key to one bucket, do: a key that reaches only this bucket is all
   a lost computer could ever reach.
@@ -23,11 +25,12 @@ Tested end to end (2026-09-30, Falkenstein): setup, joining, sync, key
 rotation, plain restic restores, a computer removed and the bucket key
 changed, object lock with a second bucket.
 
-1. In the [Hetzner Console](https://console.hetzner.com/projects), open
-   Object Storage and create a bucket with any name, leaving the other
-   settings as they are: Object Lock disabled, visibility private. Note its location
-   (Falkenstein, Nuremberg or Helsinki): you pick the same in OneCloud.
-2. Under Security, S3 credentials, generate credentials and copy both keys.
+1. In the [Hetzner Console](https://console.hetzner.com/projects) (the app's
+   Get a Key button opens it), open your project, then Security, S3
+   credentials, and Generate credentials.
+2. Paste both keys into OneCloud's setup. OneCloud makes a private bucket
+   for itself, without object lock, in the location you pick. To use a
+   bucket you made yourself, switch on "Use a bucket I already have".
 
 Notes:
 

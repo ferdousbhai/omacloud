@@ -445,16 +445,18 @@ struct Provider {
     name: &'static str,
     steps: &'static str,
     link: &'static str,
+    /// Its keys can make the bucket: OneCloud does, unless told one to use.
+    makes_bucket: bool,
 }
 
 const PROVIDERS: [Provider; 4] = [
     Provider {
         name: "Hetzner Object Storage",
-        steps: "1. In the Hetzner Console, open Object Storage and create a bucket with any \
-                name. Leave the other settings as they are (Object Lock stays disabled).\n\
-                2. Under Security, S3 credentials, generate credentials and \
-                copy both keys. Hetzner shows the secret key only once.",
+        steps: "1. Click Get a Key, open your project, then Security, S3 credentials, and \
+                Generate credentials. Hetzner shows the secret key only once.\n\
+                2. Paste both keys below. OneCloud makes a private bucket for itself.",
         link: "https://console.hetzner.com/projects",
+        makes_bucket: true,
     },
     Provider {
         name: "Cloudflare R2",
@@ -462,6 +464,7 @@ const PROVIDERS: [Provider; 4] = [
                 create a token with Object Read & Write on that bucket and copy its Access Key ID \
                 and Secret Access Key. Your account ID is on the R2 overview page.",
         link: "https://dash.cloudflare.com/?to=/:account/r2/overview",
+        makes_bucket: false,
     },
     Provider {
         name: "Backblaze B2",
@@ -469,12 +472,14 @@ const PROVIDERS: [Provider; 4] = [
                 s3.eu-central-003.backblazeb2.com.\n2. Under Application Keys, add a key with read \
                 and write access to that bucket only, and copy its keyID and applicationKey.",
         link: "https://secure.backblaze.com/b2_buckets.htm",
+        makes_bucket: false,
     },
     Provider {
         name: "Other S3 storage",
-        steps: "Any S3-compatible storage works, such as MinIO. You need its endpoint, its region, \
-                a bucket, and a key that can read and write that bucket.",
+        steps: "Any S3-compatible storage works, such as MinIO. You need its endpoint, its region \
+                and a key that can read and write. OneCloud makes a bucket, or uses one you name.",
         link: "",
+        makes_bucket: true,
     },
 ];
 
@@ -556,7 +561,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
         .subtitle(PROVIDERS[0].steps)
         .subtitle_selectable(true)
         .build();
-    let open = button("Open", Some("flat"));
+    let open = button("Get a Key", Some("flat"));
     open.set_valign(gtk::Align::Center);
     steps.add_suffix(&open);
     own.add(&steps);
@@ -571,6 +576,9 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
         .build();
     let endpoint = entry("Endpoint");
     let region = entry("Region (blank for auto)");
+    let existing = adw::SwitchRow::builder()
+        .title("Use a bucket I already have")
+        .build();
     let bucket = entry("Bucket name");
     let key_id = entry("Access key ID");
     let key = adw::PasswordEntryRow::builder()
@@ -592,12 +600,13 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
         eu.upcast_ref(),
         endpoint.upcast_ref(),
         region.upcast_ref(),
-        bucket.upcast_ref(),
         key_id.upcast_ref(),
     ] {
         own.add(w);
     }
     own.add(&key);
+    own.add(&existing);
+    own.add(&bucket);
     own.add(&advanced);
     let show = {
         let (steps, location, account, eu, endpoint, region, open) = (
@@ -609,10 +618,18 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
             region.clone(),
             open.clone(),
         );
+        let (existing, bucket, advanced) = (existing.clone(), bucket.clone(), advanced.clone());
         move |i: usize| {
             let p = &PROVIDERS[i.min(PROVIDERS.len() - 1)];
             steps.set_subtitle(p.steps);
             open.set_visible(!p.link.is_empty());
+            open.set_label(if p.makes_bucket { "Get a Key" } else { "Open" });
+            // a bucket to name: always where OneCloud can't make one,
+            // otherwise only when asked for
+            existing.set_visible(p.makes_bucket);
+            let named = !p.makes_bucket || existing.is_active();
+            bucket.set_visible(named);
+            advanced.set_visible(named);
             location.set_visible(i == 0);
             account.set_visible(i == 1);
             eu.set_visible(i == 1);
@@ -625,8 +642,16 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
             region.set_visible(i == 3);
         }
     };
+    let show = Rc::new(show);
     show(0);
-    provider.connect_selected_notify(move |c| show(c.selected() as usize));
+    {
+        let show = show.clone();
+        provider.connect_selected_notify(move |c| show(c.selected() as usize));
+    }
+    {
+        let provider = provider.clone();
+        existing.connect_active_notify(move |_| show(provider.selected() as usize));
+    }
     {
         let (provider, window) = (provider.clone(), ui.window.clone());
         open.connect_clicked(move |_| {
@@ -660,17 +685,22 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
                 key_id.text().trim().to_string(),
                 key.text().trim().to_string(),
             );
-            if [&b, &k, &sk].iter().any(|v| v.is_empty()) {
-                ui.toast("Fill in the bucket name and both keys");
+            if k.is_empty() || sk.is_empty() {
+                ui.toast("Paste both keys");
+                return;
+            }
+            // no bucket named: OneCloud makes one (`init` without one)
+            let named = bucket.is_visible();
+            if named && b.is_empty() {
+                ui.toast("Fill in the bucket's name");
                 return;
             }
             let mut args = vec!["--repo".to_string(), "opendal:s3".to_string()];
-            for (name, value) in [
-                ("endpoint", e),
-                ("bucket", b),
-                ("region", r),
-                ("access_key_id", k),
-            ] {
+            let mut opts = vec![("endpoint", e), ("region", r), ("access_key_id", k)];
+            if named {
+                opts.push(("bucket", b));
+            }
+            for (name, value) in opts {
                 args.push("--opt".into());
                 args.push(format!("{name}={value}"));
             }
@@ -679,7 +709,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
             args.push("--coordinator".into());
             args.push("bucket".into());
             let cb = coord_bucket.text().trim().to_string();
-            if advanced.enables_expansion() {
+            if named && advanced.enables_expansion() {
                 if cb.is_empty() {
                     ui.toast("Fill in the second bucket's name, or turn off object lock");
                     return;

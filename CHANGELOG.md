@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.0.6 (2026-10-02)
+
+Setting up with Hetzner is one page.
+
+- Get a Key opens the Hetzner Console; generate credentials there and paste
+  both keys. OneCloud makes a private bucket for itself (`onecloud-` and a
+  random name), so there's no bucket to create, name or configure. "Use a
+  bucket I already have" is still there.
+- `onecloud init --repo opendal:s3` without `--opt bucket=` makes the
+  bucket, for any S3 storage whose key can.
+- Plain errors when the provider refuses the key, or the key can't create
+  buckets.
+- With R2 and B2 you still make a bucket and a key just for it: a key that
+  could create buckets there would reach every bucket in the account.
+
 ## 0.0.5 (2026-10-02)
 
 Choosing what syncs, as on iCloud.
