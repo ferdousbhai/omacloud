@@ -58,7 +58,7 @@ ls dist/"$repo-$version"-*.pkg.tar.zst >/dev/null \
     cp "$repo.$name.tar.gz" "$repo.$name"
     cp "$repo.$name.tar.gz.sig" "$repo.$name.sig"
   done
-  gpg --batch --armor --export "$fingerprint" >"$repo-signing-key.asc"
+  gpg --batch --armor --export-filter keep-uid="uid =~ Omacloud" --export "$fingerprint" >"$repo-signing-key.asc"
   cp ../install.sh install.sh
 )
 
