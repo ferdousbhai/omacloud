@@ -69,9 +69,6 @@ if [[ ! $SIGNING_KEY_FINGERPRINT =~ ^[0-9A-F]{40}$ ]]; then
   exit 1
 fi
 
-echo "Adding the [$REPO] repository"
-add_signed_repo "$REPO" "$RELEASES" "$SIGNING_KEY_FINGERPRINT"
-
 # Before its rename this was OneCloud, from an [onecloud] repository with
 # its own pacman.conf Include and Omarchy hook: those go, and so does the
 # old package (its setup doesn't carry over; set up again in the app).
@@ -93,7 +90,11 @@ remove_onecloud() {
   [[ -n $home ]] && rm -f "$home/.config/omarchy/hooks/pre-refresh-pacman.d/onecloud"
   return 0
 }
+# first: syncing would fail on the old repository, which no longer exists
 remove_onecloud
+
+echo "Adding the [$REPO] repository"
+add_signed_repo "$REPO" "$RELEASES" "$SIGNING_KEY_FINGERPRINT"
 
 echo "Installing omacloud"
 if command -v omarchy-pkg-add >/dev/null; then
