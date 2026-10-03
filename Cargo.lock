@@ -2877,7 +2877,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "onecloud"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -2896,7 +2896,7 @@ dependencies = [
 
 [[package]]
 name = "onecloud-app"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "gtk4",
  "libadwaita",
@@ -2905,7 +2905,7 @@ dependencies = [
 
 [[package]]
 name = "onecloud-core"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "bytes",

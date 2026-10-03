@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.0.7 (2026-10-03)
+
+- Fix: background sync was killed a few minutes in when the provider closed
+  an idle connection (Hetzner does after a minute or two): the next request
+  raised SIGPIPE, which OneCloud had set to end the process. It's ignored
+  again, so a closed connection is an error the daemon retries; output piped
+  into `head` still ends quietly.
+- The daemon's log no longer repeats the storage library's progress lines
+  every few seconds.
+
 ## 0.0.6 (2026-10-02)
 
 Setting up with Hetzner is one page.

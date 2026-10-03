@@ -873,13 +873,27 @@ fn run_sync(engine: &mut Engine, waiting: &mut bool, alerts: Option<&alerts::Ale
 }
 
 fn main() -> Result<()> {
-    // printing into a closed pipe (`onecloud devices | head`) ends quietly
-    // instead of panicking
-    // SAFETY: restoring the default signal disposition before any threads start
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
-    }
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // printing into a closed pipe (`onecloud devices | head`) ends quietly.
+    // Not through SIGPIPE: a network connection the provider closed is a
+    // broken pipe too, and the default disposition would kill the daemon on
+    // its next request instead of letting it retry.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let message = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        if message.contains("failed printing to stdout") && message.contains("Broken pipe") {
+            std::process::exit(0);
+        }
+        default_hook(info);
+    }));
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info,rustic_core=warn"),
+    )
+    .init();
     let cli = Cli::parse();
     let paths = Paths::new(cli.config)?;
     match cli.cmd {
