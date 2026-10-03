@@ -503,8 +503,8 @@ impl<BE: DecryptWriteBackend> RawPacker<BE> {
     /// * If converting the header length to u32 fails
     /// * If the header could not be written
     fn save(&mut self) -> RusticResult<()> {
-        // onecloud spike: pad the pack to a Padmé size with a random blob
-        if std::env::var_os("ONECLOUD_PADME").is_some() {
+        // omacloud spike: pad the pack to a Padmé size with a random blob
+        if std::env::var_os("OMACLOUD_PADME").is_some() {
             self.pad()?;
         }
         // write header
@@ -530,7 +530,7 @@ impl<BE: DecryptWriteBackend> RawPacker<BE> {
         Ok(())
     }
 
-    /// onecloud spike: append one random, unreferenced blob so the finished
+    /// omacloud spike: append one random, unreferenced blob so the finished
     /// pack is exactly a Padmé size. It's a normal indexed blob (id = hash of
     /// its plaintext), so restic and rustic readers see a valid pack.
     fn pad(&mut self) -> RusticResult<()> {

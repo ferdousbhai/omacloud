@@ -2,3 +2,4 @@
 /pkgbuild/src/
 /pkgbuild/pkg/
 /pkgbuild/*.pkg.tar.zst
+/dist/

@@ -1,0 +1,38 @@
+[package]
+name = "omacloud-core"
+description = "Omacloud sync engine: live sync on restic repositories"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+opendal.workspace = true
+tokio.workspace = true
+rustic_core.workspace = true
+rustic_backend.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
+sha2.workspace = true
+crypto_box.workspace = true
+hex.workspace = true
+log.workspace = true
+bytes = "1"
+ignore.workspace = true
+libc.workspace = true
+rayon.workspace = true
+diffy = "0.5.2"
+hmac = "0.12"
+ureq = "3.4.2"
+
+[dev-dependencies]
+serde_json.workspace = true
+env_logger.workspace = true
+tempfile.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
+hex.workspace = true

@@ -1,15 +1,15 @@
 [workspace]
 resolver = "3"
-members = ["crates/onecloud-core", "crates/onecloud", "crates/onecloud-app"]
+members = ["crates/omacloud-core", "crates/omacloud", "crates/omacloud-app"]
 
 [workspace.package]
-version = "0.0.7"
+version = "0.0.8"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/ferdousbhai/onecloud"
+repository = "https://github.com/ferdousbhai/omacloud"
 
 [workspace.dependencies]
-onecloud-core = { path = "crates/onecloud-core" }
+omacloud-core = { path = "crates/omacloud-core" }
 rustic_core = "0.13"
 rustic_backend = "0.7"
 opendal = { version = "0.58", default-features = false, features = ["blocking", "services-s3", "services-fs"] }
@@ -33,6 +33,6 @@ log = "0.4"
 env_logger = "0.11"
 tempfile = "3"
 
-# rustic_core 0.13 plus pack padding and splice_tree, see vendor/rustic_core/ONECLOUD.md
+# rustic_core 0.13 plus pack padding and splice_tree, see vendor/rustic_core/OMACLOUD.md
 [patch.crates-io]
 rustic_core = { path = "vendor/rustic_core" }

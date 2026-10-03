@@ -1,14 +1,14 @@
 # Storage providers
 
-OneCloud keeps everything in an S3 bucket you rent. You pay the provider for
-what you store and transfer, at their prices; OneCloud itself charges
+Omacloud keeps everything in an S3 bucket you rent. You pay the provider for
+what you store and transfer, at their prices; Omacloud itself charges
 nothing. Any S3-compatible storage works. These are the ones checked so far,
-and what to watch for with each. The OneCloud app's setup page shows the
+and what to watch for with each. The Omacloud app's setup page shows the
 same steps.
 
 Whatever the provider:
 
-- With Hetzner or other S3 storage, OneCloud can make the bucket itself;
+- With Hetzner or other S3 storage, Omacloud can make the bucket itself;
   you only make a key. Otherwise keep the bucket private (the usual
   default), so only your keys reach it.
 - Make a key that can read and write **that bucket**. If the provider can
@@ -16,7 +16,7 @@ Whatever the provider:
   a lost computer could ever reach.
 - Copy the secret key when it's shown; most providers show it only once.
 - Leave **object lock** off unless you want delete protection. With it on,
-  OneCloud needs a second, plain bucket for keeping your computers in step
+  Omacloud needs a second, plain bucket for keeping your computers in step
   (the switch at the bottom of the setup page, or `--coordination-bucket`).
 
 ## Hetzner Object Storage
@@ -28,7 +28,7 @@ changed, object lock with a second bucket.
 1. In the [Hetzner Console](https://console.hetzner.com/projects) (the app's
    Get a Key button opens it), open your project, then Security, S3
    credentials, and Generate credentials.
-2. Paste both keys into OneCloud's setup. OneCloud makes a private bucket
+2. Paste both keys into Omacloud's setup. Omacloud makes a private bucket
    for itself, without object lock, in the location you pick. To use a
    bucket you made yourself, switch on "Use a bucket I already have".
 
@@ -36,9 +36,9 @@ Notes:
 
 - Hetzner bills a monthly base price while you have any Object Storage,
   plus usage beyond what it includes; see their pricing page.
-- Its keys reach every bucket in the project. To keep OneCloud's key away
-  from other buckets, give OneCloud a project of its own.
-- With object lock, Hetzner can't do the create-only writes OneCloud uses
+- Its keys reach every bucket in the project. To keep Omacloud's key away
+  from other buckets, give Omacloud a project of its own.
+- With object lock, Hetzner can't do the create-only writes Omacloud uses
   to keep computers in step, so the second bucket is required there.
 
 ## Cloudflare R2
@@ -57,7 +57,7 @@ Notes:
 - A bucket created in the EU jurisdiction has its own endpoint: turn on
   "The bucket is in the EU jurisdiction" in setup.
 - R2 has no object lock; its bucket locks give the same delete protection,
-  and OneCloud keeps working under them.
+  and Omacloud keeps working under them.
 - R2 doesn't charge for downloads, which helps when a new computer pulls
   everything.
 
@@ -75,5 +75,5 @@ bucket.
 ## Other S3 storage (MinIO and others)
 
 You need the endpoint, the region (or `auto`), a bucket, and a key that can
-read and write it. For keeping computers in step OneCloud needs create-only
+read and write it. For keeping computers in step Omacloud needs create-only
 writes (`If-None-Match: *`) on the bucket; MinIO and SeaweedFS have them.

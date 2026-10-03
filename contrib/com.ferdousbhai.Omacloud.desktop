@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Omacloud
+GenericName=Cloud Sync
+Comment=Folders, devices, settings sync, secrets and recovery for Omacloud
+Exec=omacloud-app
+Icon=folder-remote
+Terminal=false
+Categories=Settings;Network;FileTransfer;GTK;
+Keywords=sync;backup;cloud;devices;recovery;
+StartupNotify=true

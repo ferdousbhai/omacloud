@@ -1,6 +1,6 @@
-# How OneCloud works
+# How Omacloud works
 
-OneCloud keeps Desktop, Documents and Pictures (and any folder of home you
+Omacloud keeps Desktop, Documents and Pictures (and any folder of home you
 add) in sync on every Omarchy computer, with Omarchy settings, package lists
 and ssh and gpg keys alongside, every version kept, end to end encrypted.
 This page describes what protects your data and what each party can and
@@ -19,13 +19,13 @@ Files live in a restic repository, written through
 [rustic_core](https://github.com/rustic-rs/rustic_core) (`repo.rs`). Restic
 encrypts contents, file names and directory structure (AES-256-CTR with
 Poly1305-AES), deduplicates, and keeps every version as a snapshot. Two
-patches (`vendor/rustic_core/ONECLOUD.md`) pad pack files to Padmé sizes, so
+patches (`vendor/rustic_core/OMACLOUD.md`) pad pack files to Padmé sizes, so
 an object's size says little about the files in it, and let a sync rewrite
 one subtree of a snapshot without walking the whole folder.
 
-Because it's plain restic, you can always leave: `onecloud export` prints the
+Because it's plain restic, you can always leave: `omacloud export` prints the
 repository location and password, and restic or rustic restores everything
-without OneCloud.
+without Omacloud.
 
 ## Keys
 
@@ -44,7 +44,7 @@ without OneCloud.
   *epoch*: a new repository with a new key, sealed only to the remaining
   members, with every snapshot copied over so history stays readable. The
   removed computer keeps only what it had already seen.
-- **Secrets bundle.** ssh and gpg keys never sync as files. `onecloud secrets
+- **Secrets bundle.** ssh and gpg keys never sync as files. `omacloud secrets
   save` seals them to the root (`secrets.rs`), so only the recovery code
   opens them: no computer, not even a member, can read another computer's
   keys.
@@ -72,7 +72,7 @@ desktop keyring rather than a file. A lost computer is cut off by changing
 that key (`bucket_key.rs`): one computer publishes the new key sealed to the
 current members and the root, the others switch on their next sync and say
 so, and once all have, you delete the old key at your provider. A computer
-that was away through the whole change catches up with `onecloud bucket
+that was away through the whole change catches up with `omacloud bucket
 set-key --here-only`.
 
 With delete protection on the bucket (object lock, R2 bucket locks), sync
@@ -81,7 +81,7 @@ works as usual, and old epochs are deleted once their retention ends.
 ## Settings
 
 Omarchy's dots manifest lists which files of home are shared between
-machines and which stay local (`settings.rs`). OneCloud syncs the shared
+machines and which stay local (`settings.rs`). Omacloud syncs the shared
 ones, inside the same encrypted history, with three-way merges and a backup
 of anything it replaces. A change made on two machines that doesn't merge is
 held for you to choose (Keep Mine or Keep Theirs). Settings sync stands down
@@ -91,7 +91,7 @@ when another dotfile manager owns those files.
 
 - **Your storage provider** sees encrypted objects, their sizes (padded) and
   when they're written.
-- **The OneCloud project** sees nothing: there is no OneCloud server.
+- **The Omacloud project** sees nothing: there is no Omacloud server.
 - **A removed computer** keeps what it had synced before removal, and can
   reach the bucket until its key changes.
 

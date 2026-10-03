@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cut a release from this machine: tag it, build the package, sign it and the
-# [onecloud] pacman repository database with the local package-signing key,
+# [omacloud] pacman repository database with the local package-signing key,
 # and publish them as one GitHub release. Computers that ran install.sh get it
 # through `omarchy update`.
 #
@@ -13,8 +13,8 @@
 # container; if that fails, the release and tag are taken back down.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-repo=onecloud
-gh_repo=ferdousbhai/onecloud
+repo=omacloud
+gh_repo=ferdousbhai/omacloud
 
 version=${1:-}
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Usage: scripts/release.sh <major.minor.patch>" >&2; exit 1; }
@@ -36,7 +36,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace >/dev/null 2>&1 || { cargo test --workspace 2>&1 | grep -E 'FAILED|panicked|^error' >&2; echo "Tests failed; not releasing." >&2; exit 1; }
 
-git tag -a "$tag" -m "OneCloud $version"
+git tag -a "$tag" -m "Omacloud $version"
 undo_tag() { git tag -d "$tag" >/dev/null 2>&1 || true; }
 
 rm -rf dist
@@ -51,7 +51,7 @@ ls dist/"$repo-$version"-*.pkg.tar.zst >/dev/null \
 (
   cd dist
   repo-add --sign --verify "$repo.db.tar.gz" ./*.pkg.tar.zst
-  # repo-add leaves the names pacman asks for (onecloud.db, .files and their
+  # repo-add leaves the names pacman asks for (omacloud.db, .files and their
   # .sig) as symlinks, which a GitHub release cannot hold: copy them.
   for name in db files; do
     rm -f "$repo.$name" "$repo.$name.sig"
@@ -65,8 +65,8 @@ ls dist/"$repo-$version"-*.pkg.tar.zst >/dev/null \
 git push -q origin "$tag"
 notes=$(awk -v v="## $version" '$0 ~ "^"v {on=1; next} /^## / && on {exit} on' CHANGELOG.md)
 notes+=$'\n\nInstall on Omarchy, then updates arrive through `omarchy update`:\n\n'
-notes+='```'$'\n''curl -fsSL https://github.com/ferdousbhai/onecloud/releases/latest/download/install.sh | sudo bash'$'\n''```'
-gh release create "$tag" dist/* --repo "$gh_repo" --title "OneCloud $version" --notes "$notes" --latest
+notes+='```'$'\n''curl -fsSL https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh | sudo bash'$'\n''```'
+gh release create "$tag" dist/* --repo "$gh_repo" --title "Omacloud $version" --notes "$notes" --latest
 echo "Published $tag: https://github.com/$gh_repo/releases/tag/$tag"
 
 # A release is shipped only once its installer installs it. If it doesn't,

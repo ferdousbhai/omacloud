@@ -2864,20 +2864,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "once_cell"
-version = "1.21.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
-
-[[package]]
-name = "once_cell_polyfill"
-version = "1.70.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
-
-[[package]]
-name = "onecloud"
-version = "0.0.7"
+name = "omacloud"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -2887,7 +2875,7 @@ dependencies = [
  "libc",
  "log",
  "notify",
- "onecloud-core",
+ "omacloud-core",
  "serde",
  "serde_json",
  "tempfile",
@@ -2895,8 +2883,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "onecloud-app"
-version = "0.0.7"
+name = "omacloud-app"
+version = "0.0.8"
 dependencies = [
  "gtk4",
  "libadwaita",
@@ -2904,8 +2892,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "onecloud-core"
-version = "0.0.7"
+name = "omacloud-core"
+version = "0.0.8"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2931,6 +2919,18 @@ dependencies = [
  "tokio",
  "ureq",
 ]
+
+[[package]]
+name = "once_cell"
+version = "1.21.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "once_cell_polyfill"
+version = "1.70.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "opaque-debug"

@@ -3,17 +3,17 @@
 # Builds from this checkout; a plain `makepkg` in this directory builds the
 # package locally. scripts/release.sh builds, signs and publishes releases.
 
-pkgname=onecloud
+pkgname=omacloud
 pkgver=0.0.0.r4
 pkgrel=1
-pkgdesc='OneCloud: your files and settings on every computer, end to end encrypted'
+pkgdesc='Omacloud: your files and settings on every computer, end to end encrypted'
 arch=('x86_64')
-url='https://github.com/ferdousbhai/onecloud'
+url='https://github.com/ferdousbhai/omacloud'
 license=('MIT')
 options=('!debug' '!lto')
 depends=('glibc' 'libgcc' 'gtk4' 'libadwaita' 'libsecret')
 makedepends=('cargo' 'git')
-optdepends=('restic: restore without onecloud (see `onecloud export`)')
+optdepends=('restic: restore without omacloud (see `omacloud export`)')
 
 # The version is the git tag: v0.1.0 builds 0.1.0, and a commit past it
 # builds 0.1.0.r<count>.<sha> so `pacman -Q` says where a build came from.
@@ -39,26 +39,26 @@ build() {
   # dependency sources sit under the builder's home: name them neutrally,
   # so the binaries carry no username and rebuild the same anywhere
   export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
-  cargo build --frozen --release -p onecloud -p onecloud-app
+  cargo build --frozen --release -p omacloud -p omacloud-app
 }
 
 check() {
   cd "$srcdir/$pkgname"
   export RUSTUP_TOOLCHAIN=stable
-  cargo test --frozen --release -p onecloud-core --lib
+  cargo test --frozen --release -p omacloud-core --lib
 }
 
 package() {
   cd "$srcdir/$pkgname"
-  install -Dm755 target/release/onecloud "$pkgdir/usr/bin/onecloud"
-  install -Dm755 target/release/onecloud-app "$pkgdir/usr/bin/onecloud-app"
-  install -Dm644 contrib/computer.onecloud.OneCloud.desktop \
-    "$pkgdir/usr/share/applications/computer.onecloud.OneCloud.desktop"
-  install -Dm644 contrib/onecloud.service "$pkgdir/usr/lib/systemd/user/onecloud.service"
+  install -Dm755 target/release/omacloud "$pkgdir/usr/bin/omacloud"
+  install -Dm755 target/release/omacloud-app "$pkgdir/usr/bin/omacloud-app"
+  install -Dm644 contrib/com.ferdousbhai.Omacloud.desktop \
+    "$pkgdir/usr/share/applications/com.ferdousbhai.Omacloud.desktop"
+  install -Dm644 contrib/omacloud.service "$pkgdir/usr/lib/systemd/user/omacloud.service"
   # Enabled for every user by the package, so an update through pacman
-  # turns it on too; the unit's condition skips users without onecloud.
+  # turns it on too; the unit's condition skips users without omacloud.
   install -dm755 "$pkgdir/usr/lib/systemd/user/default.target.wants"
-  ln -s ../onecloud.service "$pkgdir/usr/lib/systemd/user/default.target.wants/onecloud.service"
+  ln -s ../omacloud.service "$pkgdir/usr/lib/systemd/user/default.target.wants/omacloud.service"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

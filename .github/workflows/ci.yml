@@ -20,12 +20,12 @@ jobs:
       - name: Restore with plain restic
         run: |
           sudo apt-get install -y restic
-          cargo build -p onecloud
-          scripts/restic-compat.sh target/debug/onecloud
+          cargo build -p omacloud
+          scripts/restic-compat.sh target/debug/omacloud
       - name: Sync through S3 (SeaweedFS)
         env:
           S3_ENDPOINT: http://localhost:8333
-          S3_BUCKET: onecloud-ci
+          S3_BUCKET: omacloud-ci
           S3_KEY: ci
           S3_SECRET: ci-secret
         run: |
@@ -34,6 +34,6 @@ jobs:
             chrislusf/seaweedfs server -s3 -s3.config=/etc/s3.json -dir=/data
           for i in $(seq 1 60); do curl -s -o /dev/null localhost:8333 && break; sleep 1; done
           curl -sf -X PUT --aws-sigv4 "aws:amz:us-east-1:s3" --user ci:ci-secret "$S3_ENDPOINT/$S3_BUCKET"
-          scripts/s3-sync.sh target/debug/onecloud
+          scripts/s3-sync.sh target/debug/omacloud
       - name: Bucket key change, one computer offline
-        run: scripts/bucket-key.sh target/debug/onecloud
+        run: scripts/bucket-key.sh target/debug/omacloud

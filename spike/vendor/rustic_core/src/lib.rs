@@ -123,8 +123,8 @@ pub mod repofile;
 pub(crate) mod repository;
 /// Virtual File System support - allows to act on the repository like on a file system
 pub mod vfs;
-/// onecloud fork: change driven tree writes
-pub mod onecloud;
+/// omacloud fork: change driven tree writes
+pub mod omacloud;
 
 // re-export jiff
 pub use jiff;

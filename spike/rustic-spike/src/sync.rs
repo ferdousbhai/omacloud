@@ -25,7 +25,7 @@ use anyhow::{Result, anyhow};
 use rustic_core::{
     Credentials, IndexedFullStatus, Repository, RepositoryOptions, SnapshotOptions, TreeId,
     jiff::{Timestamp, tz::TimeZone},
-    onecloud::Edit,
+    omacloud::Edit,
     repofile::{MasterKey, Metadata, Node, NodeType, SnapshotId},
 };
 
@@ -240,7 +240,7 @@ impl<'a> Device<'a> {
         };
         let parent = dest.parent().unwrap();
         fs::create_dir_all(parent)?;
-        let tmp = parent.join(format!(".~onecloud-{}", node.name().to_string_lossy()));
+        let tmp = parent.join(format!(".~omacloud-{}", node.name().to_string_lossy()));
         let mut f = fs::File::create(&tmp)?;
         repo.dump(node, &mut f)?;
         if let Some(mtime) = node.meta.mtime {

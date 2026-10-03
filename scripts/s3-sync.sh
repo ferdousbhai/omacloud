@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
 # Two devices sync through an S3 repository and converge.
 #
-#   S3_ENDPOINT=http://localhost:8333 S3_BUCKET=onecloud-ci \
-#   S3_KEY=... S3_SECRET=... scripts/s3-sync.sh [path/to/onecloud]
+#   S3_ENDPOINT=http://localhost:8333 S3_BUCKET=omacloud-ci \
+#   S3_KEY=... S3_SECRET=... scripts/s3-sync.sh [path/to/omacloud]
 #
 # The bucket (or S3_ROOT inside it) must exist and be empty.
 set -euo pipefail
 
-ONECLOUD=${1:-target/debug/onecloud}
+OMACLOUD=${1:-target/debug/omacloud}
 : "${S3_ENDPOINT:?} ${S3_BUCKET:?} ${S3_KEY:?} ${S3_SECRET:?}"
 work=$(mktemp -d)
 cleanup() {
   for f in "$work"/*.toml "$work"/inbucket/*.toml; do
-    secret-tool clear service onecloud config "$f" 2>/dev/null || true
+    secret-tool clear service omacloud config "$f" 2>/dev/null || true
   done
   rm -rf "${work:?}"
 }
 trap cleanup EXIT
-oc() { local dev=$1; shift; "$ONECLOUD" --config "$work/$dev.toml" "$@"; }
+oc() { local dev=$1; shift; "$OMACLOUD" --config "$work/$dev.toml" "$@"; }
 s3=(--repo opendal:s3 --opt "endpoint=$S3_ENDPOINT" --opt "bucket=$S3_BUCKET"
     --opt "access_key_id=$S3_KEY"
     --opt "region=${S3_REGION:-us-east-1}")
 [ -n "${S3_ROOT:-}" ] && s3+=(--opt "root=$S3_ROOT")
 
-ONECLOUD_SECRET_ACCESS_KEY=$S3_SECRET oc a init --folder "$work/A" "${s3[@]}" --coordinator "$work/coord" --device a >/dev/null 2>&1
+OMACLOUD_SECRET_ACCESS_KEY=$S3_SECRET oc a init --folder "$work/A" "${s3[@]}" --coordinator "$work/coord" --device a >/dev/null 2>&1
 # b asks to join, knowing nothing of the bucket; a approves it by fingerprint
 oc b init --folder "$work/B" --coordinator "$work/coord" --device b >/dev/null 2>&1
 fp=$(oc b device-key 2>/dev/null | sed -n 's/^fingerprint //p')
@@ -52,7 +52,7 @@ echo "after rotation" >"$work/A/docs/rotated.txt"
 oc a sync >/dev/null 2>&1
 oc b sync >/dev/null 2>&1
 diff -r --no-dereference "$work/A" "$work/B"
-oc b export 2>/dev/null | grep -q "root = \"${S3_ROOT:-}/onecloud-e1\""
+oc b export 2>/dev/null | grep -q "root = \"${S3_ROOT:-}/omacloud-e1\""
 echo "s3 sync: ok"
 
 # coordination in the bucket too, and a new
@@ -60,9 +60,9 @@ echo "s3 sync: ok"
 nw="$work/inbucket"
 mkdir -p "$nw/A"
 echo "mine alone" >"$nw/A/mine.txt"
-ns() { local dev=$1; shift; "$ONECLOUD" --config "$nw/$dev.toml" "$@"; }
+ns() { local dev=$1; shift; "$OMACLOUD" --config "$nw/$dev.toml" "$@"; }
 root_opt=${S3_ROOT:-}/inbucket
-ONECLOUD_SECRET_ACCESS_KEY=$S3_SECRET ns a init --folder "$nw/A" "${s3[@]}" --opt "root=$root_opt" --coordinator bucket --device a >/dev/null 2>&1
+OMACLOUD_SECRET_ACCESS_KEY=$S3_SECRET ns a init --folder "$nw/A" "${s3[@]}" --opt "root=$root_opt" --coordinator bucket --device a >/dev/null 2>&1
 ns a sync >/dev/null 2>&1
 code=$(ns a join-code 2>/dev/null)
 fp=$(ns b init --folder "$nw/B" --join-code "$code" --device b 2>&1 | sed -n "s/^this device's fingerprint: //p")

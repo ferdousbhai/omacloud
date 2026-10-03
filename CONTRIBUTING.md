@@ -29,21 +29,21 @@ libadwaita-1-dev`).
 
 ## The app without a desktop
 
-Run `gtk4-broadwayd :7`, start `onecloud-app <page>` with
+Run `gtk4-broadwayd :7`, start `omacloud-app <page>` with
 `GDK_BACKEND=broadway BROADWAY_DISPLAY=:7`, and open `http://localhost:8087`
 in a browser kept open for a few seconds (the page renders after it
-connects). Clicks through Broadway are unreliable; `onecloud-app devices`
-opens a page directly. `ONECLOUD_CONFIG` and `ONECLOUD_BIN` point the app at
+connects). Clicks through Broadway are unreliable; `omacloud-app devices`
+opens a page directly. `OMACLOUD_CONFIG` and `OMACLOUD_BIN` point the app at
 a test account and a local build.
 
 ## Secrets
 
 Secrets never go on a command line, where other processes can read them:
-`ONECLOUD_RECOVERY_CODE`, `ONECLOUD_JOIN_CODE` and
-`ONECLOUD_SECRET_ACCESS_KEY` come from the environment, or a prompt that
+`OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE` and
+`OMACLOUD_SECRET_ACCESS_KEY` come from the environment, or a prompt that
 doesn't echo. A computer's bucket key lives in the desktop
 keyring; scripts that make test accounts clear their keyring entries on exit
-(`ONECLOUD_KEYRING=0` keeps keys in the config file instead).
+(`OMACLOUD_KEYRING=0` keeps keys in the config file instead).
 
 ## Shell hygiene
 
@@ -55,7 +55,7 @@ keyring; scripts that make test accounts clear their keyring entries on exit
 
 `scripts/release.sh <version>` (from a clean `master`, with the version in
 `Cargo.toml` and `CHANGELOG.md`) tags, builds and signs the package and the
-`[onecloud]` repository database, publishes them with `install.sh` as a
+`[omacloud]` repository database, publishes them with `install.sh` as a
 GitHub release, then `scripts/verify-release.sh` installs it in a clean Arch
 container and takes the release back down if that fails. Signing needs the
 package-signing key whose fingerprint `install.sh` pins.
@@ -70,7 +70,7 @@ Arch's `makerepropkg` rebuilds a package in a clean chroot from its
 `.BUILDINFO` and compares; by hand:
 
 ```sh
-git clone --branch v<version> https://github.com/ferdousbhai/onecloud && cd onecloud/pkgbuild
+git clone --branch v<version> https://github.com/ferdousbhai/omacloud && cd omacloud/pkgbuild
 SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) makepkg --nocheck
 # then compare usr/bin/* with the released package's
 ```
