@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.10 (unreleased)
+## 0.0.10 (2026-10-05)
 
 A lost computer is cut off from Omacloud storage too.
 
