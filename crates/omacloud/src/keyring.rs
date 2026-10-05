@@ -1,4 +1,4 @@
-//! A self-hosted computer's bucket key, kept in the desktop keyring (the
+//! A computer's bucket key, kept in the desktop keyring (the
 //! Secret Service, through `secret-tool`) instead of the config file.
 //!
 //! One entry per config file. Without a keyring (no Secret Service, or

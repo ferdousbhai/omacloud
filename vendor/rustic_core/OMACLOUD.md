@@ -1,6 +1,6 @@
 # Vendored rustic_core
 
-crates.io rustic_core 0.13.0 plus the two patches in `spike/upstream`:
+crates.io rustic_core 0.13.0 plus the two patches in `vendor/upstream-patches`:
 
 - `0001-pack-padding.patch`: `pack_padding` repo config option (Padmé padded packs)
 - `0002-tree-splice.patch`: `Repository::splice_tree`, `TreeEdit`, `Repository::save_snapshot`

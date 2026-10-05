@@ -1,4 +1,5 @@
-//! Coordination in the user's own bucket: nothing in between.
+//! Coordination in the account's bucket, beside the files: a bucket of the
+//! user's own, or their folder of Omacloud storage behind its gateway.
 //!
 //! The same layout as [`crate::DirCoordinator`] (`heads/`, `devices/`,
 //! `epochs/`, `grants/`, `requests/`, `account.json`), as objects. An append

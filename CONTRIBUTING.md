@@ -12,7 +12,9 @@ cargo test --workspace
 ```
 
 The GTK app needs `gtk4` and `libadwaita` (CI installs `libgtk-4-dev
-libadwaita-1-dev`).
+libadwaita-1-dev`). After changing `server/`, run `npm run check` there
+(types and unit tests) and `scripts/gateway-sync.sh`; deploy with
+`server/deploy.sh`.
 
 ## End to end scripts
 

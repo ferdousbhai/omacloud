@@ -1,6 +1,6 @@
 # Upstream patches for rustic_core
 
-Two changes that came out of the phase 0 spikes, prepared against
+Two changes Omacloud carries in `vendor/rustic_core`, prepared against
 rustic-rs/rustic_core `main` (647d00f, 0.13.0 plus three commits). Each is a
 separate patch and PR. Not submitted: opening them is our first public
 contact with the rustic project, so it waits for a go ahead.
@@ -32,8 +32,8 @@ pack-padding, and that case doesn't enable padding.
 Found while porting: prune's repacker builds its pack sizer with
 `PackSizer::fixed`, which would have dropped padding on repacked packs. The
 patch carries the setting through (`PackSizer::with_padding`); the
-integration test covers it. The spike fork in `spike/vendor` switched
-padding on by environment variable, so it never hit this.
+integration test covers it. An earlier prototype switched padding on by
+environment variable, so it never hit this.
 
 Before opening either, read rustic's contribution guide
 (https://rustic.cli.rs/docs/contributing-to-rustic.html) and consider opening

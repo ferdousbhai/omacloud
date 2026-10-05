@@ -580,7 +580,7 @@ fn save(paths: &Paths, config: &Config) -> Result<()> {
     if let Some(dir) = paths.config.parent() {
         fs::create_dir_all(dir)?;
     }
-    // private: with no service, it holds the bucket's keys
+    // private: without a keyring, it holds the bucket's keys
     let tmp = paths.config.with_extension("toml.tmp");
     fs::OpenOptions::new()
         .write(true)
@@ -593,8 +593,8 @@ fn save(paths: &Paths, config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// `coordinator = "bucket"`: no service; coordination lives in the user's
-/// own storage.
+/// `coordinator = "bucket"`: coordination lives in the account's bucket,
+/// beside the files (a bucket of the user's own, or Omacloud storage).
 const SELF_HOSTED: &str = "bucket";
 
 /// Where `config`'s computers keep in step: its bucket, or a shared
@@ -978,7 +978,7 @@ fn main() -> Result<()> {
                 (Some(c), _, _) => c,
                 (None, None, Some(r)) if r.starts_with("opendal:") => SELF_HOSTED.to_string(),
                 (None, None, _) => bail!(
-                    "omacloud keeps your files in your own bucket: give it with \
+                    "sign in to Omacloud storage with `--hosted`, or give a bucket of your own with \
                      `--repo opendal:s3 --opt endpoint=... --opt bucket=... --opt access_key_id=...` \
                      (the secret key is asked for, or comes from OMACLOUD_SECRET_ACCESS_KEY), or join an account with `--join-code` \
                      (from `omacloud join-code` on one of its computers). The Omacloud app \
@@ -2015,7 +2015,7 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Result<()> {
 /// `bucket`, with the same endpoint and keys), under `omacloud-coordination`.
 fn coordination_beside(repo: &RepoSpec, bucket: Option<&str>) -> Result<BTreeMap<String, String>> {
     let scheme = repo.repository.strip_prefix("opendal:").context(
-        "with no service, the repository must be a bucket (`--repo opendal:s3 --opt ...`)",
+        "coordinating in the bucket needs the repository to be one (`--repo opendal:s3 --opt ...`)",
     )?;
     let mut opts: BTreeMap<String, String> = repo
         .options

@@ -136,8 +136,8 @@ pub enum HeadError {
 }
 
 /// Orders and relays heads, device entries and join requests. Implementations:
-/// a directory (tests, LAN, development) and, later, the per account Durable
-/// Object. It is trusted for availability only.
+/// the account's bucket ([`crate::BucketCoordinator`]) and a directory (tests,
+/// development). It is trusted for availability only.
 pub trait Coordinator: Send + Sync {
     /// The latest head, if any.
     fn head(&self) -> Result<Option<Head>>;

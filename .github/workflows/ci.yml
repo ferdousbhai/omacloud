@@ -37,3 +37,21 @@ jobs:
           scripts/s3-sync.sh target/debug/omacloud
       - name: Bucket key change, one computer offline
         run: scripts/bucket-key.sh target/debug/omacloud
+
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      # types from cloudflare.config.ts, the type check and the unit tests
+      - run: npm run check
+        env:
+          CF_SEND_TELEMETRY: "false"

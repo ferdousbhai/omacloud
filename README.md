@@ -106,23 +106,26 @@ somewhere of your own first.
 ## A lost computer
 
 Remove it under Devices (or `omacloud devices revoke <fingerprint>`). It
-can't sync anymore, but it still holds your bucket's key, so the app goes on
+can't sync anymore, and can't read anything written after its removal.
+With your own bucket it still holds the bucket's key, so the app goes on
 to change it: make a new key at your provider and enter it. Every other
 computer switches on its next sync, Devices shows when all have, and then
 you delete the old key at your provider. A computer that was away through
 the whole change catches up with `omacloud bucket set-key --access-key-id
 <id> --here-only`. `omacloud rotate` also moves everything to a new
-encryption key.
+encryption key. With Omacloud storage, changing the storage key a removed
+computer holds isn't possible yet (see docs/design.md, Not yet).
 
 Losing the recovery code with every computer locks you out, so `omacloud
 recovery split --threshold 3 --shares 5` (or Recovery in the app) can split
 it among people you trust; any three of them rebuild it.
 
-With delete protection on the bucket (object lock), sync works as usual and
-old data is removed once its retention ends. Keep the bucket without object
-lock, or give Omacloud a second, plain bucket for keeping your computers in
-step (`--coordination-bucket`, or the switch in the app): some providers
-can't do the create-only writes it needs on a locked bucket.
+With your own bucket and delete protection on it (object lock), sync works
+as usual and old data is removed once its retention ends. Keep the bucket
+without object lock, or give Omacloud a second, plain bucket for keeping
+your computers in step (`--coordination-bucket`, or the switch in the app):
+some providers can't do the create-only writes it needs on a locked
+bucket.
 
 ## Configuration
 
@@ -154,8 +157,9 @@ edits.
 | `crates/omacloud-core` | sync engine (`sync.rs`), signed heads (`head.rs`), device chain (`devices.rs`, `account.rs`), repository keys and rotation (`epoch.rs`), coordination in your bucket (`bucket.rs`, `bucket_key.rs`) |
 | `crates/omacloud` | CLI and `watch` daemon |
 | `crates/omacloud-app` | the Omacloud app (GTK4, libadwaita), driving the CLI |
-| `vendor/rustic_core` | rustic_core 0.13 plus pack padding and `splice_tree` (upstream PRs in `spike/upstream`) |
+| `vendor/rustic_core` | rustic_core 0.13 plus pack padding and `splice_tree` (upstream PRs in `vendor/upstream-patches`) |
 | `scripts/` | end to end checks (see CONTRIBUTING.md) and the release scripts |
+| `server/` | Omacloud storage: the Cloudflare Worker behind Sign In with Google (see its README) |
 | `contrib/` | the systemd user unit and the desktop entry |
 | `pkgbuild/PKGBUILD` | Arch package, built from the committed checkout |
 | `install.sh` | the installer each release ships |

@@ -1,8 +1,8 @@
-# Storage providers
+# Your own storage
 
-Omacloud keeps everything in an S3 bucket you rent. You pay the provider for
-what you store and transfer, at their prices; Omacloud itself charges
-nothing. Any S3-compatible storage works. These are the ones checked so far,
+Instead of signing in to Omacloud storage, you can keep everything in an S3
+bucket you rent yourself. You pay the provider for what you store and
+transfer, at their prices; Omacloud itself charges nothing. Any S3-compatible storage works. These are the ones checked so far,
 and what to watch for with each. The Omacloud app's setup page shows the
 same steps.
 
