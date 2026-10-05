@@ -11,6 +11,7 @@ use std::{
 };
 
 mod alerts;
+mod hosted;
 mod keyring;
 mod power;
 
@@ -88,6 +89,10 @@ enum Cmd {
         /// Join Code in the app) on one of your computers
         #[arg(long, env = "OMACLOUD_JOIN_CODE", hide_env_values = true)]
         join_code: Option<String>,
+        /// Keep your files on Omacloud storage instead of a bucket of your
+        /// own: sign in with Google in the browser
+        #[arg(long, conflicts_with_all = ["repo", "opts", "join_code", "coordination_bucket"])]
+        hosted: bool,
     },
     /// Print a code another computer joins this account with (`omacloud
     /// init --join-code`). It holds the bucket's key: pass it privately
@@ -745,6 +750,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<()> {
     let mut key_at: Option<Instant> = None;
     let config_mtime = || fs::metadata(&paths.config).and_then(|m| m.modified()).ok();
     let mut config_seen = config_mtime();
+    let (mut seen_marker, mut full_at, mut folders_changed) = (None, None, false);
     loop {
         // `omacloud folders` edits the config: follow it without a restart
         let now = config_mtime();
@@ -757,6 +763,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<()> {
             {
                 info!("folder choice changed");
                 engine.set_folders(choice.add, choice.skip);
+                folders_changed = true;
             }
         }
         // folders appear as the account adds them
@@ -783,9 +790,29 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<()> {
                 if paused { "pausing" } else { "resuming" }
             );
         }
-        if !paused {
-            if !run_sync(&mut engine, &mut waiting, alerts.as_ref()) {
-                return Ok(());
+        // idle: one look at the change marker instead of a sync, with a full
+        // sync now and then in case a write didn't mark itself
+        let marker = if paused {
+            None
+        } else {
+            engine.remote_marker().ok().flatten()
+        };
+        let idle = !engine.has_pending()
+            && !folders_changed
+            && marker.is_some()
+            && marker == seen_marker
+            && full_at.is_some_and(|t: Instant| t.elapsed() < FULL_SYNC);
+        if !paused && !idle {
+            folders_changed = false;
+            match run_sync(&mut engine, &mut waiting, alerts.as_ref()) {
+                Synced::Stop => return Ok(()),
+                Synced::Ok => {
+                    // the marker read before syncing: anything written
+                    // since moves it again
+                    seen_marker = marker;
+                    full_at = Some(Instant::now());
+                }
+                Synced::Failed => seen_marker = None,
             }
             // a self-hosted account's new bucket key: switch, reconnect
             if key_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
@@ -823,14 +850,27 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<()> {
     }
 }
 
-/// One sync; false when sync must stop until a human looks.
-fn run_sync(engine: &mut Engine, waiting: &mut bool, alerts: Option<&alerts::Alerts>) -> bool {
+/// How long an idle device goes without a full sync, change marker or not.
+const FULL_SYNC: Duration = Duration::from_secs(600);
+
+/// What came of a sync.
+enum Synced {
+    Ok,
+    /// Try again at the next check.
+    Failed,
+    /// Sync must stop until a human looks.
+    Stop,
+}
+
+/// One sync.
+fn run_sync(engine: &mut Engine, waiting: &mut bool, alerts: Option<&alerts::Alerts>) -> Synced {
     match engine.sync() {
         Ok(st) => {
             *waiting = false;
             if st != omacloud_core::Stats::default() {
                 info!("synced: {st:?}");
             }
+            return Synced::Ok;
         }
         Err(e) if e.downcast_ref::<Membership>() == Some(&Membership::NotApproved) => {
             if !*waiting {
@@ -864,12 +904,12 @@ fn run_sync(engine: &mut Engine, waiting: &mut bool, alerts: Option<&alerts::Ale
             {
                 a.removed();
             }
-            return false;
+            return Synced::Stop;
         }
         Err(e) if key_refused(&e) => warn!("{KEY_REFUSED}: {e:#}"),
         Err(e) => warn!("sync failed, will retry: {e:#}"),
     }
-    true
+    Synced::Failed
 }
 
 fn main() -> Result<()> {
@@ -908,7 +948,28 @@ fn main() -> Result<()> {
             recovery_code,
             coordination_bucket,
             join_code,
+            hosted,
         } => {
+            // Omacloud storage: signing in gives the bucket and its key
+            let (repo, opts) = if hosted {
+                let service = std::env::var("OMACLOUD_SERVICE_URL")
+                    .unwrap_or_else(|_| hosted::SERVICE.to_string());
+                let s = hosted::sign_in(&service)?;
+                println!("signed in as {}", s.email);
+                let opts = [
+                    ("endpoint", s.endpoint),
+                    ("region", s.region),
+                    ("bucket", s.bucket),
+                    ("access_key_id", s.access_key_id),
+                    ("secret_access_key", s.secret_access_key),
+                ];
+                (
+                    Some("opendal:s3".to_string()),
+                    opts.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+                )
+            } else {
+                (repo, opts)
+            };
             // a join code says where the account coordinates
             let joined = join_code.as_deref().map(parse_join_code).transpose()?;
             // in the bucket, unless a shared directory is given

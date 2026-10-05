@@ -212,6 +212,14 @@ pub trait Coordinator: Send + Sync {
     fn key_acks(&self, _seq: u64) -> Result<Vec<String>> {
         Ok(Vec::new())
     }
+
+    /// A token that changes whenever anything here is written, for
+    /// coordinators that keep one: an idle device checks it, one cheap
+    /// request, instead of syncing. None: there's no such token, sync to
+    /// find out.
+    fn marker(&self) -> Result<Option<String>> {
+        Ok(None)
+    }
 }
 
 /// Everything as files in a directory: `heads/`, `devices/`, `epochs/`,

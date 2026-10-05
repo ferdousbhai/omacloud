@@ -4,13 +4,14 @@ Your files and settings on every Omarchy computer, end to end encrypted.
 Desktop, Documents and Pictures sync in place, as iCloud does; Omarchy
 settings, package lists and ssh and gpg keys follow; every version is kept.
 
-Everything lives in a storage bucket you rent from a provider such as
-Hetzner, Cloudflare R2 or Backblaze B2: you pay the provider for the space
-you use, and Omacloud itself charges nothing. Your computers talk to your
-bucket and to nothing else, and everything is encrypted before it leaves
-them. Underneath it's plain restic, so you can always restore without
-Omacloud. [docs/design.md](docs/design.md) explains how it protects your
-data.
+Sign in with Google and your files are kept on Omacloud storage
+([omacloud.computer](https://omacloud.computer), in the EU, by invitation for
+now), or keep them in a storage bucket you rent yourself from a provider
+such as Hetzner, Cloudflare R2 or Backblaze B2. Either way everything is
+encrypted on your computer before it leaves it: the storage only ever holds
+what it can't read. Underneath it's plain restic, so you can always restore
+without Omacloud. [docs/design.md](docs/design.md) explains how it protects
+your data.
 
 ## Install
 
@@ -29,8 +30,9 @@ instead: `cd pkgbuild && makepkg -si`.
 
 Open **Omacloud** from the app launcher (Super + Space).
 
-**Your first computer:** pick your storage provider and follow the steps the
-app shows. With Hetzner that's one page: click Get a Key, generate
+**Your first computer:** click Sign In with Google to use Omacloud storage,
+and you're done but for writing down your recovery code (below). Or, to use
+your own storage, pick your provider and follow the steps the app shows. With Hetzner that's one page: click Get a Key, generate
 credentials there, and paste both keys back; Omacloud makes its own private
 bucket. With R2 or B2, make a bucket and a key just for it, and paste the
 bucket name and both keys. Then click Create Account. The app
@@ -44,9 +46,13 @@ has it, open Devices and click Show Join Code. Paste the code into the new
 computer's app, and approve the new computer by its fingerprint. The join
 code holds your bucket's key, so pass it only between your own computers.
 
+With Omacloud storage, signing in on another computer works too: it asks
+to join, and you approve it by its fingerprint as above.
+
 From the command line, the same is:
 
 ```sh
+omacloud init --hosted                              # Omacloud storage: sign in with Google
 omacloud init --repo opendal:s3 --opt endpoint=https://fsn1.your-objectstorage.com \
   --opt region=fsn1 --opt bucket=<bucket> --opt access_key_id=<key id>   # asks for the secret key
 omacloud join-code                                  # on a computer you have

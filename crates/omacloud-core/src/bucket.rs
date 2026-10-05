@@ -9,8 +9,10 @@
 //! so a bucket with object lock keeps its coordination in a second, plain
 //! bucket).
 //!
-//! Devices learn of changes by polling, and cutting off a lost device's
-//! storage takes changing the bucket key, since every device holds it.
+//! Devices learn of changes by polling: every write also rewrites
+//! `changed`, so an idle device checks that one object instead of syncing.
+//! Cutting off a lost device's storage takes changing the bucket key, since
+//! every device holds it.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -38,6 +40,9 @@ fn runtime() -> &'static tokio::runtime::Runtime {
             .expect("a tokio runtime")
     })
 }
+
+/// Rewritten on every write; see the module docs.
+const CHANGED: &str = "changed";
 
 /// Parallel reads when catching up on a long history.
 const READERS: usize = 16;
@@ -97,7 +102,10 @@ impl BucketCoordinator {
             ..Default::default()
         };
         match self.op.write_options(key, serde_json::to_vec(value)?, opts) {
-            Ok(_) => Ok(true),
+            Ok(_) => {
+                self.touch();
+                Ok(true)
+            }
             Err(e)
                 if matches!(
                     e.kind(),
@@ -115,7 +123,19 @@ impl BucketCoordinator {
         self.op
             .write(key, serde_json::to_vec(value)?)
             .with_context(|| format!("writing {key}"))?;
+        self.touch();
         Ok(())
+    }
+
+    /// Something was written: rewrite `changed` so idle devices look. A
+    /// failure only delays them until their next full sync.
+    fn touch(&self) {
+        use rand::RngCore;
+        let mut nonce = [0u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut nonce);
+        if let Err(e) = self.op.write(CHANGED, hex::encode(nonce).into_bytes()) {
+            log::warn!("marking a change: {e}");
+        }
     }
 
     fn names(&self, dir: &str) -> Result<Vec<String>> {
@@ -289,7 +309,19 @@ impl Coordinator for BucketCoordinator {
         self.op
             .delete(&format!("requests/{device}.json"))
             .context("removing a join request")?;
+        self.touch();
         Ok(())
+    }
+    fn marker(&self) -> Result<Option<String>> {
+        let _guard = runtime().enter();
+        // its contents, random on every write: an ETag or a modification
+        // time isn't there on every storage, or is too coarse
+        match self.op.read(CHANGED) {
+            Ok(buf) => Ok(Some(String::from_utf8_lossy(&buf.to_vec()).into_owned())),
+            // nothing written since devices started marking changes
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(Some(String::new())),
+            Err(e) => Err(e).context("checking for changes"),
+        }
     }
 }
 

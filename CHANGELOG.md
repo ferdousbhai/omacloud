@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.0.9 (2026-10-05)
+
+Omacloud storage: sign in with Google and there's nothing else to set up.
+
+- Setup's first choice is Sign In with Google. Your files are kept on
+  Omacloud storage (omacloud.computer, in the EU), still encrypted on your
+  computer before they leave it; Omacloud can't read them. It's by
+  invitation for now. Your own bucket remains the other choice, as before.
+- Signing in on another computer of yours asks to join; approve it by its
+  fingerprint, as with a join code. `omacloud init --hosted` does the same
+  from the terminal.
+- An idle computer checks for changes with one small request instead of a
+  full sync: about a tenth of the requests, which saves battery and, with
+  providers that charge per request, money. A full sync still runs every
+  ten minutes.
+- New repositories keep pack files under 64 MiB, so no upload exceeds what
+  storage behind Cloudflare accepts.
+
 ## 0.0.8 (2026-10-03)
 
 OneCloud is now Omacloud: the app, the `omacloud` and `omacloud-app`

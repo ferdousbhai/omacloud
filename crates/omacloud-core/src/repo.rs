@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) type Repo = Repository<IndexedFullStatus>;
 
+/// The largest pack a new repository aims for, in MiB.
+const PACK_SIZE_LIMIT_MIB: u64 = 64;
+
 /// Where a repository lives: an opendal URL such as `opendal:s3` with its
 /// options (endpoint, bucket, keys), or a local path.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -98,7 +101,13 @@ impl RepoSpec {
         let repo = Repository::new(&RepositoryOptions::default(), &self.backends()?)?.init(
             &Credentials::password(password),
             &KeyOptions::default(),
-            &ConfigOptions::default().set_pack_padding(true),
+            &ConfigOptions::default()
+                .set_pack_padding(true)
+                // packs otherwise grow with the repository, without limit:
+                // kept small enough for storage that caps an upload at
+                // 100 MB, padding and one last chunk included
+                .set_datapack_size_limit(bytesize::ByteSize::mib(PACK_SIZE_LIMIT_MIB))
+                .set_treepack_size_limit(bytesize::ByteSize::mib(PACK_SIZE_LIMIT_MIB)),
         )?;
         Ok(repo.key())
     }

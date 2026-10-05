@@ -22,6 +22,10 @@ libadwaita-1-dev`).
   three characters. SeaweedFS supports the create-only writes coordination
   needs (`If-None-Match: *`), and `bucket-key.sh` starts its own container,
   with keys made through its admin shell so one can be deleted mid-test.
+- `scripts/gateway-sync.sh` runs Omacloud storage (`server/`) locally with
+  wrangler, SeaweedFS behind it (started in docker) and a stand-in for
+  Google: computers sync through it, sign in, and can't reach each other's
+  accounts. It needs node and python3.
 - `scripts/restic-compat.sh` needs restic on PATH; a wrapper around the
   `restic/restic` image with paths mounted 1:1 works.
 - Where `/tmp` is small, put `CARGO_TARGET_DIR` and SeaweedFS data under

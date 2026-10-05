@@ -6,12 +6,17 @@ and ssh and gpg keys alongside, every version kept, end to end encrypted.
 This page describes what protects your data and what each party can and
 can't do. The source files named here hold the details.
 
-## Your bucket, nobody in between
+## Where it's stored
 
-Everything lives in an S3 bucket you rent from a provider (Hetzner, R2, B2,
-MinIO): the files, and the records that keep your computers in step. Your
-computers talk to your bucket and to nothing else. The provider sees only
-encrypted objects.
+Everything lives in one S3 bucket: the files, and the records that keep
+your computers in step. It is either your own, rented from a provider
+(Hetzner, R2, B2, MinIO), and then your computers talk to it and to nothing
+else; or a folder of Omacloud storage, reached through the gateway at
+storage.omacloud.computer (`server/`) with the key your computer got when
+you signed in with Google. The gateway checks that key, keeps each account
+to its own folder of the bucket behind it, and enforces the account's
+quota. Either way the storage sees only encrypted objects, and nothing
+below depends on trusting it.
 
 ## Storage: plain restic
 
@@ -63,7 +68,9 @@ The heads, device chain and epoch records are objects in your bucket
 the bucket refuses if another computer took that position first. S3, R2,
 MinIO and Hetzner support it on buckets without versioning; a bucket with
 object lock keeps these records in a second, plain bucket
-(`--coordination-bucket`). Computers check for changes every few seconds.
+(`--coordination-bucket`). Every write also rewrites a small `changed`
+object; an idle computer checks that every few seconds, one request, and
+syncs when it moves, with a full sync every ten minutes regardless.
 
 ## Bucket keys
 
@@ -91,7 +98,9 @@ when another dotfile manager owns those files.
 
 - **Your storage provider** sees encrypted objects, their sizes (padded) and
   when they're written.
-- **The Omacloud project** sees nothing: there is no Omacloud server.
+- **Omacloud storage**, when you use it, is that provider: it sees the same,
+  plus your Google account's id and email. With your own bucket, the
+  Omacloud project sees nothing: there is no Omacloud server in the way.
 - **A removed computer** keeps what it had synced before removal, and can
   reach the bucket until its key changes.
 

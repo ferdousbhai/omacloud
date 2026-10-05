@@ -135,3 +135,40 @@ fn an_account_with_no_service() -> Result<()> {
     assert!(b.sync().is_err());
     Ok(())
 }
+
+#[test]
+fn every_write_moves_the_change_marker() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let t = tmp.path();
+    let repo = RepoSpec {
+        repository: t.join("repo").to_string_lossy().into_owned(),
+        options: BTreeMap::new(),
+    };
+    let coord_dir = t.join("coordination");
+    let ka = key();
+    let created = account::create(coordinator(&coord_dir)?.as_ref(), &repo, &ka, "a")?;
+    let mut a = engine(
+        coordinator(&coord_dir)?,
+        &created.root,
+        "a",
+        &ka,
+        &repo,
+        &t.join("A"),
+    )?;
+    a.sync()?;
+    let watcher = coordinator(&coord_dir)?;
+    let before = watcher.marker()?;
+    assert!(before.is_some());
+    // nothing written: the same marker
+    a.sync()?;
+    assert_eq!(watcher.marker()?, before);
+    // a push, and a join request: each moves it
+    fs::write(t.join("A/new.txt"), "new\n")?;
+    a.request_rescan();
+    assert!(a.sync()?.pushed > 0);
+    let after_push = watcher.marker()?;
+    assert_ne!(after_push, before);
+    account::request(coordinator(&coord_dir)?.as_ref(), &key(), "b")?;
+    assert_ne!(watcher.marker()?, after_push);
+    Ok(())
+}

@@ -19,6 +19,9 @@ hex.workspace = true
 ed25519-dalek.workspace = true
 libc.workspace = true
 serde_json = { workspace = true }
+sha2.workspace = true
+rand.workspace = true
+ureq = { version = "3.4.2", features = ["json"] }
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -1,0 +1,14 @@
+{
+	"compilerOptions": {
+		"target": "es2024",
+		"lib": ["es2024"],
+		"module": "es2022",
+		"moduleResolution": "bundler",
+		"types": ["./.cloudflare/types/index.d.ts", "node"],
+		"strict": true,
+		"noEmit": true,
+		"skipLibCheck": true,
+		"allowImportingTsExtensions": true
+	},
+	"include": ["src", "test", "cloudflare.config.ts", ".cloudflare/types"]
+}

@@ -509,6 +509,22 @@ impl Engine {
         Ok(&self.state.devices)
     }
 
+    /// The coordinator's change marker, if it keeps one (see
+    /// [`Coordinator::marker`]).
+    ///
+    /// # Errors
+    ///
+    /// If the coordinator can't be reached.
+    pub fn remote_marker(&self) -> Result<Option<String>> {
+        self.coord.marker()
+    }
+
+    /// Local changes noticed and not pushed yet.
+    #[must_use]
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
     /// Join requests waiting for approval.
     ///
     /// # Errors

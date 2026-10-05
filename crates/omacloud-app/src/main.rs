@@ -543,12 +543,33 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     let (what, sync_args) = choose_what_syncs();
     page.add(&what);
 
+    // Omacloud storage: sign in, nothing to rent or paste
+    let hosted = group(
+        "Start with Omacloud storage",
+        "Sign in with Google and Omacloud keeps your files on its storage in the EU. \
+         Everything is encrypted on this computer before it leaves, so Omacloud can't read it. \
+         Signing in on another computer asks this one to approve it.",
+    );
+    let sign_in = button("Sign In with Google", Some("suggested-action"));
+    sign_in.set_halign(gtk::Align::End);
+    sign_in.set_margin_top(12);
+    {
+        let (ui, sync_args) = (ui.clone(), sync_args.clone());
+        sign_in.connect_clicked(move |_| {
+            let mut args = vec!["--hosted".to_string()];
+            args.extend(sync_args());
+            run_init(&ui, args, Vec::new());
+        });
+    }
+    hosted.add(&sign_in);
+    page.add(&hosted);
+
     // create, own bucket
     let own = group(
-        "Start a new account",
-        "Omacloud keeps your files in a storage bucket you rent from a provider. You pay the \
-         provider for the space you use; Omacloud itself charges nothing. Everything is \
-         encrypted on this computer before it leaves, so the provider can't read it.",
+        "Or use your own storage",
+        "Keep your files in a storage bucket you rent from a provider. You pay the provider \
+         for the space you use; Omacloud itself charges nothing. Everything is encrypted on \
+         this computer before it leaves, so the provider can't read it.",
     );
     let names: Vec<&str> = PROVIDERS.iter().map(|p| p.name).collect();
     let provider = adw::ComboRow::builder()
@@ -659,7 +680,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
             gtk::UriLauncher::new(link).launch(Some(&window), None::<&gio::Cancellable>, |_| {});
         });
     }
-    let create_own = button("Create Account", Some("suggested-action"));
+    let create_own = button("Create Account", None);
     create_own.set_halign(gtk::Align::End);
     create_own.set_margin_top(12);
     {
