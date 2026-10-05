@@ -121,16 +121,32 @@ A computer that was away through the whole change catches up with
 Omacloud storage, `omacloud bucket set-key --here-only`, which signs in
 again. `omacloud rotate` also moves everything to a new encryption key.
 
-Losing the recovery code with every computer locks you out, so `omacloud
-recovery split --threshold 3 --shares 5` (or Recovery in the app) can split
-it among people you trust; any three of them rebuild it.
-
 With your own bucket and delete protection on it (object lock), sync works
 as usual and old data is removed once its retention ends. Keep the bucket
 without object lock, or give Omacloud a second, plain bucket for keeping
 your computers in step (`--coordination-bucket`, or the switch in the app):
 some providers can't do the create-only writes it needs on a locked
 bucket.
+
+## A trusted contact
+
+Losing the recovery code with every computer locks you out. With Omacloud
+storage, someone you trust can keep a card that gets you back in: under
+Recovery in the app, enter your recovery code and click Make a Card (or
+`omacloud recovery contact`), sign in with Google, then print the card and
+give it to them. The card works only together with your Google sign-in,
+so on its own it opens nothing, and Omacloud can't use its half without
+the card. Making a new card replaces the last one, and Remove Contact
+(`--remove`) voids it.
+
+To recover, on a new computer enter the card in setup, beside Sign In with
+Google (or `omacloud init --hosted --contact-card`). The computer joins
+your account and shows your recovery code again.
+
+With storage of your own, keep a copy of the recovery code with someone you
+trust, or split it among several: `omacloud recovery split --threshold 3
+--shares 5` makes five shares, any three of which rebuild it (`omacloud
+recovery combine`).
 
 ## Configuration
 

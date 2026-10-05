@@ -127,6 +127,20 @@ export function deleted(db: D1Database, accountId: string): Promise<unknown> {
 	return db.prepare("UPDATE accounts SET dirty = 1 WHERE id = ?").bind(accountId).run();
 }
 
+/** The account's trusted contact pad, if it has one. */
+export async function contactPad(db: D1Database, accountId: string): Promise<string | null> {
+	const row = await db
+		.prepare("SELECT contact_pad FROM accounts WHERE id = ?")
+		.bind(accountId)
+		.first<{ contact_pad: string | null }>();
+	return row?.contact_pad ?? null;
+}
+
+/** Keep a new pad for the account's trusted contact (an earlier card stops working), or none. */
+export function setContactPad(db: D1Database, accountId: string, pad: string | null): Promise<unknown> {
+	return db.prepare("UPDATE accounts SET contact_pad = ? WHERE id = ?").bind(pad, accountId).run();
+}
+
 /** A sign-in started by a computer listening on `port`; its id goes to Google as the state. */
 export async function startSignin(
 	db: D1Database,

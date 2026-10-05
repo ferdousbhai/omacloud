@@ -8,7 +8,7 @@ upload. `docs/design.md` has the model; `src/gateway.ts` says what gets
 through.
 
 - `src/`: the Worker. `migrations/`: the D1 schema (accounts, keys,
-  invites, sign-ins), applied with `cf d1 migrations apply <database id>`.
+  invites, sign-ins, trusted contact pads), applied with `cf d1 migrations apply <database id>`.
 - `cloudflare.config.ts`: the Worker's configuration, for `cf`.
 - `deploy.sh`: deploys with `cf`. Secrets are typed at a hidden prompt and
   piped to Cloudflare; the master key, which account keys derive from, is

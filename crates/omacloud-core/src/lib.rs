@@ -8,6 +8,7 @@
 pub mod account;
 pub mod bucket;
 pub mod bucket_key;
+pub mod contact;
 pub mod devices;
 pub mod epoch;
 pub mod head;

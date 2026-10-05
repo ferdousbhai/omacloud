@@ -41,10 +41,12 @@ pub fn public_hex(key: &SigningKey) -> String {
     hex::encode(key.verifying_key().as_bytes())
 }
 
+/// What recovery codes are written with: no 0, 1, i, l or o to mistake.
+pub(crate) const ALPHABET: &[u8] = b"23456789abcdefghjkmnpqrstuvwxyz";
+
 /// 28 random characters from an unambiguous alphabet, about 140 bits.
 #[must_use]
 pub fn random_secret() -> String {
-    const ALPHABET: &[u8] = b"23456789abcdefghjkmnpqrstuvwxyz";
     let mut rng = rand::rngs::OsRng;
     (0..28)
         .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char)

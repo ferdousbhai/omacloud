@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- A trusted contact: someone you trust, like your partner, keeps a printed
+  card that gets you back into your account if you lose your recovery code
+  and every computer. The card works only with your Google sign-in, so on
+  its own it opens nothing. Recovery in the app makes, prints and removes
+  it; on a new computer, enter the card beside Sign In with Google. Needs
+  Omacloud storage. From the terminal: `omacloud recovery contact` and
+  `omacloud init --hosted --contact-card`.
+- Setup's Sign In with Google takes a recovery code too, for when no
+  computer is left to approve a new one.
+- The app's Recovery page no longer splits the recovery code into shares;
+  `omacloud recovery split` and `combine` still do.
+
 ## 0.0.10 (2026-10-05)
 
 A lost computer is cut off from Omacloud storage too.

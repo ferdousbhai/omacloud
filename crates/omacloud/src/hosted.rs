@@ -3,7 +3,9 @@
 //!
 //! The browser signs in; the server sends it back to a port this computer
 //! listens on with a one-time code, which this computer trades, with a
-//! secret only it has, for the key.
+//! secret only it has, for the key, and for the account's trusted contact
+//! pad when it recovers with a contact's card. Keeping a new pad takes a
+//! sign-in too: the pad only goes to and from the account's Google identity.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -25,6 +27,16 @@ pub struct Storage {
     pub access_key_id: String,
     pub secret_access_key: String,
     pub email: String,
+    /// The trusted contact pad, when asked for and the account has one
+    #[serde(default)]
+    pub contact_pad: Option<String>,
+}
+
+/// A finished browser sign-in: the one-time code and the secret that
+/// redeems it.
+struct Grant {
+    code: String,
+    verifier: String,
 }
 
 fn random_hex(bytes: usize) -> String {
@@ -59,6 +71,74 @@ fn reply(mut stream: &TcpStream, status: &str, title: &str, text: &str) {
 
 /// Sign in with Google in the browser, and get this computer's key.
 pub fn sign_in(service: &str) -> Result<Storage> {
+    credentials(service, &browser(service)?, false)
+}
+
+/// [`sign_in`], and get the account's trusted contact pad too.
+pub fn sign_in_with_pad(service: &str) -> Result<Storage> {
+    credentials(service, &browser(service)?, true)
+}
+
+/// Sign in with Google and keep a new trusted contact pad for `account`
+/// (its bucket), or none. Returns the email signed in with.
+pub fn set_contact(service: &str, account: &str, pad: Option<&str>) -> Result<String> {
+    let grant = browser(service)?;
+    let mut response = post(
+        service,
+        "/api/contact",
+        &serde_json::json!({
+            "code": grant.code,
+            "verifier": grant.verifier,
+            "account": account,
+            "pad": pad,
+        }),
+    )?;
+    let answer: serde_json::Value = response.body_mut().read_json().unwrap_or_default();
+    let email = answer["email"].as_str().unwrap_or_default().to_string();
+    match response.status().as_u16() {
+        200 => Ok(email),
+        409 => bail!(
+            "{email} isn't the Google account this computer's storage belongs to: \
+             sign in with that one"
+        ),
+        status => bail!("that didn't work ({status}): try again"),
+    }
+}
+
+fn post(
+    service: &str,
+    path: &str,
+    body: &serde_json::Value,
+) -> Result<ureq::http::Response<ureq::Body>> {
+    let service = service.trim_end_matches('/');
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .build()
+        .into();
+    agent
+        .post(&format!("{service}{path}"))
+        .send_json(body)
+        .with_context(|| format!("reaching {service}"))
+}
+
+/// Trade a sign-in for this computer's key (and the contact pad).
+fn credentials(service: &str, grant: &Grant, contact: bool) -> Result<Storage> {
+    let mut response = post(
+        service,
+        "/api/credentials",
+        &serde_json::json!({ "code": grant.code, "verifier": grant.verifier, "contact": contact }),
+    )?;
+    if !response.status().is_success() {
+        bail!("sign-in didn't work ({}): try again", response.status());
+    }
+    response
+        .body_mut()
+        .read_json()
+        .context("reading the key from Omacloud")
+}
+
+/// Sign in with Google in the browser.
+fn browser(service: &str) -> Result<Grant> {
     let service = service.trim_end_matches('/');
     let listener = TcpListener::bind("127.0.0.1:0").context("listening for the browser")?;
     let port = listener.local_addr()?.port();
@@ -130,23 +210,7 @@ pub fn sign_in(service: &str) -> Result<Storage> {
         );
         bail!("{why}");
     };
-
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .http_status_as_error(false)
-        .build()
-        .into();
-    let mut response = agent
-        .post(&format!("{service}/api/credentials"))
-        .send_json(serde_json::json!({ "code": code, "verifier": verifier }))
-        .with_context(|| format!("reaching {service}"))?;
-    if !response.status().is_success() {
-        bail!("sign-in didn't work ({}): try again", response.status());
-    }
-    let storage: Storage = response
-        .body_mut()
-        .read_json()
-        .context("reading the key from Omacloud")?;
-    Ok(storage)
+    Ok(Grant { code, verifier })
 }
 
 fn capitalize(s: &str) -> String {

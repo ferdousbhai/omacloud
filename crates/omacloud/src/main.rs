@@ -93,6 +93,11 @@ enum Cmd {
         /// own: sign in with Google in the browser
         #[arg(long, conflicts_with_all = ["repo", "opts", "join_code", "coordination_bucket"])]
         hosted: bool,
+        /// With `--hosted`, when you have neither the recovery code nor a
+        /// computer: recover with your trusted contact's card (asked for, or
+        /// from OMACLOUD_CONTACT_CARD) and your Google sign-in
+        #[arg(long, requires = "hosted", conflicts_with = "recovery_code")]
+        contact_card: bool,
     },
     /// Print a code another computer joins this account with (`omacloud
     /// init --join-code`). It holds the bucket's key: pass it privately
@@ -158,8 +163,8 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<SecretsCmd>,
     },
-    /// Social recovery: split the recovery code among people you trust, or
-    /// rebuild it from their shares
+    /// Recovery with people you trust: a trusted contact's card, or the
+    /// recovery code split among several people
     Recovery {
         #[command(subcommand)]
         action: RecoveryCmd,
@@ -229,6 +234,15 @@ enum SecretsCmd {
 
 #[derive(Subcommand)]
 enum RecoveryCmd {
+    /// Make a card for someone you trust (with Omacloud storage). The card
+    /// and your Google sign-in together give back the recovery code (`init
+    /// --hosted --contact-card`); either alone opens nothing. Asks for the
+    /// recovery code; a new card replaces the last one
+    Contact {
+        /// Remove the trusted contact instead: their card stops working
+        #[arg(long)]
+        remove: bool,
+    },
     /// Split the recovery code into shares; any `threshold` of them rebuild
     /// it, fewer reveal nothing. Give each person one share
     Split {
@@ -665,7 +679,15 @@ fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
     Ok(e)
 }
 
-fn init(paths: &Paths, mut config: Config, recovery: Option<String>) -> Result<()> {
+/// How a recovering computer got the recovery code.
+#[derive(PartialEq, Eq)]
+enum Recovery {
+    Code,
+    /// From a trusted contact's card: shown again, as nobody has it now
+    Card,
+}
+
+fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>) -> Result<()> {
     if paths.config.exists() {
         bail!(
             "{} exists; this device is already set up",
@@ -677,7 +699,19 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<String>) -> Result<(
     let signing = load_or_create_key(&paths.device_key())?;
     let me = fingerprint(&public_hex(&signing));
     let coord = coordinator(&config)?;
-    let creating = coord.anchor()?.is_none();
+    let anchor = coord.anchor()?;
+    let creating = anchor.is_none();
+    if let (Some(anchor), Some((code, Recovery::Card))) = (&anchor, &recovery)
+        && public_hex(&omacloud_core::devices::root_key(code)?) != anchor.root
+    {
+        bail!(
+            "that card doesn't go with this account: it may be an earlier card, replaced by \
+             a newer one, or another account's"
+        );
+    }
+    if creating && matches!(recovery, Some((_, Recovery::Card))) {
+        bail!("there's no account here to recover: sign in with the Google account you used");
+    }
 
     let message = if creating {
         if config.repo.repository.is_empty() {
@@ -696,9 +730,17 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<String>) -> Result<(
              Other computers join with a code from `omacloud join-code`.",
             config.repo.repository, config.root, created.recovery_code, created.password
         )
-    } else if let Some(code) = recovery {
+    } else if let Some((code, how)) = recovery {
         config.root = account::join_with_recovery(coord.as_ref(), &code, &signing, &config.device)?;
-        "joined the account with the recovery code".to_string()
+        if how == Recovery::Card {
+            format!(
+                "joined the account with your trusted contact's card\n\n\
+                 recovery code: {code}\n\n\
+                 Write it down again and keep it offline. Your contact's card keeps working."
+            )
+        } else {
+            "joined the account with the recovery code".to_string()
+        }
     } else {
         config.root = account::request(coord.as_ref(), &signing, &config.device)?;
         format!(
@@ -959,14 +1001,28 @@ fn main() -> Result<()> {
             coordination_bucket,
             join_code,
             hosted,
+            contact_card,
         } => {
+            let mut recovery = recovery_code.map(|c| (c, Recovery::Code));
             // Omacloud storage: signing in gives the bucket and its key
             let service = hosted.then(|| {
                 std::env::var("OMACLOUD_SERVICE_URL")
                     .unwrap_or_else(|_| hosted::SERVICE.to_string())
             });
             let (repo, opts) = if let Some(service) = &service {
-                let s = hosted::sign_in(service)?;
+                let s = if contact_card {
+                    // checked before the browser opens: a typo is caught here
+                    let card = read_secret("OMACLOUD_CONTACT_CARD", "your contact's card")?;
+                    omacloud_core::contact::checked(&card)?;
+                    let s = hosted::sign_in_with_pad(service)?;
+                    let pad = s.contact_pad.as_deref().with_context(|| {
+                        format!("{} has no trusted contact: no card opens it", s.email)
+                    })?;
+                    recovery = Some((omacloud_core::contact::open(&card, pad)?, Recovery::Card));
+                    s
+                } else {
+                    hosted::sign_in(service)?
+                };
                 println!("signed in as {}", s.email);
                 let opts = [
                     ("endpoint", s.endpoint),
@@ -1114,7 +1170,7 @@ fn main() -> Result<()> {
                     None => coordination_beside(&config.repo, coordination_bucket.as_deref())?,
                 });
             }
-            init(&paths, config, recovery_code)
+            init(&paths, config, recovery)
         }
         Cmd::Sync => {
             let config = load(&paths)?;
@@ -1813,9 +1869,43 @@ fn read_secret(var: &str, what: &str) -> Result<String> {
     Ok(secret)
 }
 
+/// Where a computer on Omacloud storage signs in, and its account (the
+/// bucket).
+fn hosted_account(config: &Config) -> Option<(String, String)> {
+    let service = hosted_service(config)?;
+    Some((service, config.repo.options.get("bucket")?.clone()))
+}
+
 fn recovery(paths: &Paths, action: RecoveryCmd) -> Result<()> {
-    use omacloud_core::shamir;
+    use omacloud_core::{contact, shamir};
     match action {
+        RecoveryCmd::Contact { remove } => {
+            let config = load_without_key(paths)?;
+            let (service, account) = hosted_account(&config).context(
+                "a trusted contact needs Omacloud storage. With storage of your own, give \
+                 someone you trust a copy of your recovery code, or split it among several \
+                 (`omacloud recovery split`)",
+            )?;
+            if remove {
+                let email = hosted::set_contact(&service, &account, None)?;
+                println!("{email} has no trusted contact now: their card opens nothing");
+                return Ok(());
+            }
+            let code = read_recovery_code()?;
+            if public_hex(&omacloud_core::devices::root_key(&code)?) != config.root {
+                bail!("that recovery code belongs to another account");
+            }
+            let pad = contact::new_pad();
+            let card = contact::card(&code, &pad)?;
+            let email = hosted::set_contact(&service, &account, Some(&pad))?;
+            println!("{card}");
+            eprintln!(
+                "Give this card to the person you trust. If you lose your recovery code and \
+                 every computer, they read it to you, and `omacloud init --hosted \
+                 --contact-card` with a sign-in as {email} brings your account back. On its \
+                 own the card opens nothing. Earlier cards stop working."
+            );
+        }
         RecoveryCmd::Split { threshold, shares } => {
             let code = read_recovery_code()?;
             let root = public_hex(&omacloud_core::devices::root_key(&code)?);

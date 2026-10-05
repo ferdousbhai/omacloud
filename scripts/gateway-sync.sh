@@ -254,6 +254,42 @@ if oc hc init --hosted --folder "$work/HC" --device hc >"$work/hc.out" 2>&1; the
 fi
 grep -q "invitation" "$work/hc.out" || { cat "$work/hc.out"; exit 1; }
 echo "signed-in sync ok"
+# a trusted contact: alice makes a card, and a computer with nothing else
+# gets back in with it and her sign-in
+echo alice >"$work/who"
+code=$(sed -n 's/^recovery code: //p' "$work/ha.out")
+card=$(OMACLOUD_RECOVERY_CODE=$code oc ha recovery contact 2>"$work/contact.err") \
+  || { cat "$work/contact.err"; exit 1; }
+recover() { # device card
+  OMACLOUD_CONTACT_CARD=$2 oc "$1" init --hosted --contact-card --folder "$work/${1^^}" --device "$1" \
+    >"$work/$1.out" 2>&1
+}
+recover hd "$card" || { cat "$work/hd.out"; exit 1; }
+grep -q "recovery code: $code" "$work/hd.out" || { cat "$work/hd.out"; exit 1; }
+oc hd sync >"$work/hdsync.out" 2>&1 || { cat "$work/hdsync.out"; exit 1; }
+grep -q "from a signed-in computer" "$work/HD/note.txt" || { echo "hd didn't get the file"; exit 1; }
+# a mistyped card is caught before signing in
+typo=z${card:1}
+[ "$typo" = "$card" ] && typo=y${card:1}
+if recover hx "$typo"; then echo "a mistyped card worked"; exit 1; fi
+grep -q "mistyped" "$work/hx.out" || { cat "$work/hx.out"; exit 1; }
+# a new card replaces the last
+OMACLOUD_RECOVERY_CODE=$code oc ha recovery contact >/dev/null 2>"$work/contact.err" \
+  || { cat "$work/contact.err"; exit 1; }
+if recover he "$card"; then echo "a replaced card worked"; exit 1; fi
+grep -q "earlier card" "$work/he.out" || { cat "$work/he.out"; exit 1; }
+# another Google account can't change alice's contact
+d1 "INSERT INTO invites (email, created) VALUES ('bob@example.com', 0)"
+echo bob >"$work/who"
+if oc ha recovery contact --remove >"$work/bob.out" 2>&1; then echo "bob removed alice's contact"; exit 1; fi
+grep -q "isn't the Google account" "$work/bob.out" || { cat "$work/bob.out"; exit 1; }
+# removed: no card opens the account
+echo alice >"$work/who"
+oc ha recovery contact --remove >/dev/null 2>"$work/contact.err" \
+  || { cat "$work/contact.err"; exit 1; }
+if recover hf "$card"; then echo "a card worked with no contact"; exit 1; fi
+grep -q "no trusted contact" "$work/hf.out" || { cat "$work/hf.out"; exit 1; }
+echo "trusted contact ok"
 # the usage count, as the cron trigger runs it
 curl -sf "http://localhost:$gport/__scheduled" >/dev/null
 used=$(d1get "SELECT used FROM accounts WHERE id = '$a'")

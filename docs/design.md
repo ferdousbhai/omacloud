@@ -39,6 +39,15 @@ without Omacloud.
   computer. With it you can add a computer when no other is at hand, and
   recover the account. It can be split among people you trust, any `k` of
   `n` shares rebuilding it (Shamir's secret sharing, `shamir.rs`).
+- **Trusted contact.** With Omacloud storage, the recovery code is split in
+  two (`contact.rs`): Omacloud keeps a random pad, and a person you trust
+  keeps a card, the code plus the pad character by character (a one-time
+  pad over the code's alphabet, with four check characters). Either half
+  alone is uniformly random. The pad goes only to a Google sign-in of the
+  account, never to a storage key, so a computer holding a key (a removed
+  one, say) can't fetch or replace it. A new card replaces the pad, which
+  voids earlier cards. Omacloud together with the card could rebuild the
+  code; neither can alone.
 - **Device keys.** Each computer has its own signing key. The account's
   computers form a signed, hash-chained device chain: the root signs the
   first computer, and after that a computer counts only if the root or an
@@ -110,6 +119,8 @@ when another dotfile manager owns those files.
 - **Omacloud storage**, when you use it, is that provider: it sees the same,
   plus your Google account's id and email. With your own bucket, the
   Omacloud project sees nothing: there is no Omacloud server in the way.
+- **A trusted contact** holds a card that is random without the pad
+  Omacloud keeps, and Omacloud's pad is random without the card.
 - **A removed computer** keeps what it had synced before removal, and can
   reach the bucket until its key changes.
 

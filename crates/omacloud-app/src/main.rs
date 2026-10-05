@@ -1,7 +1,7 @@
-//! The Omacloud app: account, devices, settings sync, secrets and
-//! social recovery. It works through the `omacloud` CLI (`status --json` to
-//! read, the usual subcommands to act), so it holds no keys or state of its
-//! own and never races the daemon over them.
+//! The Omacloud app: account, devices, settings sync, secrets and a
+//! trusted contact for recovery. It works through the `omacloud` CLI
+//! (`status --json` to read, the usual subcommands to act), so it holds no
+//! keys or state of its own and never races the daemon over them.
 //!
 //! `omacloud-app [overview|devices|settings|secrets|recovery]` opens on
 //! that page. `OMACLOUD_BIN` picks the CLI (default: `omacloud` on PATH) and
@@ -97,6 +97,7 @@ struct Ui {
     devices: adw::Bin,
     settings: adw::Bin,
     secrets: adw::Bin,
+    recovery: adw::Bin,
 }
 
 impl Ui {
@@ -133,7 +134,7 @@ impl Ui {
                     // no config yet: this computer needs setting up
                     Ok(s) if s["set_up"] == Value::Bool(false) => {
                         ui.overview.set_child(Some(&setup(&ui)));
-                        for bin in [&ui.devices, &ui.settings, &ui.secrets] {
+                        for bin in [&ui.devices, &ui.settings, &ui.secrets, &ui.recovery] {
                             bin.set_child(Some(&not_set_up(
                                 "Set up this computer first, under Overview.",
                             )));
@@ -144,9 +145,16 @@ impl Ui {
                         ui.devices.set_child(Some(&devices(&ui, &s)));
                         ui.settings.set_child(Some(&settings(&ui, &s)));
                         ui.secrets.set_child(Some(&secrets(&ui, &s)));
+                        ui.recovery.set_child(Some(&recovery(&ui, &s)));
                     }
                     Err(e) => {
-                        for bin in [&ui.overview, &ui.devices, &ui.settings, &ui.secrets] {
+                        for bin in [
+                            &ui.overview,
+                            &ui.devices,
+                            &ui.settings,
+                            &ui.secrets,
+                            &ui.recovery,
+                        ] {
                             bin.set_child(Some(&not_set_up(&e)));
                         }
                     }
@@ -193,7 +201,8 @@ fn build(app: &adw::Application, page: Option<&str>) {
         b.set_child(Some(&spinner));
         b
     };
-    let (overview_bin, devices_bin, settings_bin, secrets_bin) = (bin(), bin(), bin(), bin());
+    let (overview_bin, devices_bin, settings_bin, secrets_bin, recovery_bin) =
+        (bin(), bin(), bin(), bin(), bin());
     stack.add_titled_with_icon(
         &overview_bin,
         Some("overview"),
@@ -266,9 +275,10 @@ fn build(app: &adw::Application, page: Option<&str>) {
         devices: devices_bin,
         settings: settings_bin,
         secrets: secrets_bin,
+        recovery: recovery_bin.clone(),
     });
     stack.add_titled_with_icon(
-        &recovery(&ui),
+        &recovery_bin,
         Some("recovery"),
         "Recovery",
         "system-users-symbolic",
@@ -550,6 +560,12 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
          Everything is encrypted on this computer before it leaves, so Omacloud can't read it. \
          Signing in on another computer asks this one to approve it.",
     );
+    // no computer left to approve this one: the recovery code, or the card
+    // a trusted contact keeps
+    let rescue = adw::PasswordEntryRow::builder()
+        .title("Lost every computer? Recovery code or contact's card")
+        .build();
+    hosted.add(&rescue);
     let sign_in = button("Sign In with Google", Some("suggested-action"));
     sign_in.set_halign(gtk::Align::End);
     sign_in.set_margin_top(12);
@@ -557,8 +573,24 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
         let (ui, sync_args) = (ui.clone(), sync_args.clone());
         sign_in.connect_clicked(move |_| {
             let mut args = vec!["--hosted".to_string()];
+            let mut env = Vec::new();
+            let typed = rescue.text().to_string();
+            match typed.chars().filter(char::is_ascii_alphanumeric).count() {
+                0 => {}
+                28 => env.push(("OMACLOUD_RECOVERY_CODE".to_string(), typed)),
+                32 => {
+                    args.push("--contact-card".to_string());
+                    env.push(("OMACLOUD_CONTACT_CARD".to_string(), typed));
+                }
+                _ => {
+                    ui.toast(
+                        "That's neither a recovery code (28 characters) nor a contact's card (32)",
+                    );
+                    return;
+                }
+            }
             args.extend(sync_args());
-            run_init(&ui, args, Vec::new());
+            run_init(&ui, args, env);
         });
     }
     hosted.add(&sign_in);
@@ -1652,144 +1684,187 @@ fn restore_secrets(ui: &Rc<Ui>, device: &str) {
     dialog.present(Some(&ui.window));
 }
 
-fn recovery(ui: &Rc<Ui>) -> adw::PreferencesPage {
+fn recovery(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
-
-    let split = group(
-        "Share your recovery code",
-        "Split it among people you trust. Any few of them together can rebuild it; \
-         fewer learn nothing about it. Give each person one share.",
+    if !s["hosted"].as_bool().unwrap_or(false) {
+        // no Omacloud storage to keep the other half
+        page.add(&group(
+            "Trusted contact",
+            "If you lose your recovery code and every computer, your files can't be recovered. \
+             With storage of your own, keep a copy of the recovery code with someone you trust, \
+             or split it among several people with `omacloud recovery split`.",
+        ));
+        return page;
+    }
+    let contact = group(
+        "Trusted contact",
+        "Someone you trust, like your partner, keeps a card that gets you back in if you lose \
+         your recovery code and every computer. The card works only together with your Google \
+         sign-in: on its own it opens nothing, and Omacloud can't use its half without the card.",
     );
-    let threshold = adw::SpinRow::with_range(2.0, 10.0, 1.0);
-    threshold.set_title("Shares needed");
-    threshold.set_value(3.0);
-    let shares = adw::SpinRow::with_range(2.0, 10.0, 1.0);
-    shares.set_title("Shares");
-    shares.set_value(5.0);
     let code = adw::PasswordEntryRow::builder()
         .title("Recovery code")
         .build();
-    split.add(&threshold);
-    split.add(&shares);
-    split.add(&code);
-    let make = button("Make Shares", Some("suggested-action"));
-    make.set_halign(gtk::Align::End);
-    make.set_margin_top(12);
+    contact.add(&code);
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    buttons.set_halign(gtk::Align::End);
+    buttons.set_margin_top(12);
+    let remove = button("Remove Contact", Some("flat"));
+    let make = button("Make a Card", Some("suggested-action"));
+    buttons.append(&remove);
+    buttons.append(&make);
     {
         let ui = ui.clone();
         make.connect_clicked(move |_| {
-            let (k, n) = (threshold.value().to_string(), shares.value().to_string());
             let env = vec![(
                 "OMACLOUD_RECOVERY_CODE".to_string(),
                 code.text().to_string(),
             )];
+            ui.toast("Sign in with Google in your browser to keep the card's other half");
             let ui2 = ui.clone();
             run_then(
-                &[
-                    "omacloud",
-                    "recovery",
-                    "split",
-                    "--threshold",
-                    &k,
-                    "--shares",
-                    &n,
-                ],
+                &["omacloud", "recovery", "contact"],
                 env,
                 None,
                 move |r| match r {
                     Err(e) => ui2.toast(&e),
-                    Ok(out) => {
-                        show_shares(&ui2, out.lines().filter(|l| !l.trim().is_empty()).collect())
-                    }
+                    Ok(out) => show_card(&ui2, out.trim()),
                 },
             );
         });
     }
-    split.add(&make);
-    page.add(&split);
-
-    let combine = group(
-        "Rebuild the recovery code",
-        "Paste the shares you collected, one per line.",
-    );
-    let input = gtk::TextView::builder()
-        .monospace(true)
-        .wrap_mode(gtk::WrapMode::Char)
-        .top_margin(8)
-        .bottom_margin(8)
-        .left_margin(8)
-        .right_margin(8)
-        .height_request(120)
-        .build();
-    let frame = gtk::Frame::new(None);
-    frame.set_child(Some(&input));
-    combine.add(&frame);
-    let rebuild = button("Rebuild", None);
-    rebuild.set_halign(gtk::Align::End);
-    rebuild.set_margin_top(12);
     {
         let ui = ui.clone();
-        rebuild.connect_clicked(move |_| {
-            let buf = input.buffer();
-            let pasted = buf
-                .text(&buf.start_iter(), &buf.end_iter(), false)
-                .to_string();
+        remove.connect_clicked(move |_| {
             let ui2 = ui.clone();
-            run_then(
-                &["omacloud", "recovery", "combine"],
-                Vec::new(),
-                Some(format!("{pasted}\n")),
-                move |r| match r {
-                    Err(e) => ui2.toast(&e),
-                    Ok(out) => show_text(
-                        &ui2,
-                        "Your recovery code",
-                        "Write it down and keep it offline.",
-                        out.trim(),
-                    ),
+            ui.confirm(
+                "Remove your trusted contact?",
+                "Their card stops working. You confirm with Google sign-in.",
+                &[("remove", "Remove", adw::ResponseAppearance::Destructive)],
+                move |_| {
+                    let ui3 = ui2.clone();
+                    run_then(
+                        &["omacloud", "recovery", "contact", "--remove"],
+                        Vec::new(),
+                        None,
+                        move |r| ui3.toast(&r.map_or_else(|e| e, |_| "Contact removed".into())),
+                    );
                 },
             );
         });
     }
-    combine.add(&rebuild);
-    page.add(&combine);
+    contact.add(&buttons);
+    page.add(&contact);
+    page.add(&group(
+        "If you lose everything",
+        "On a new computer, open Omacloud, enter your contact's card and sign in with Google. \
+         Making a new card replaces the last one.",
+    ));
     page
 }
 
-/// One row per share, each with its own copy button: each goes to a
-/// different person.
-fn show_shares(ui: &Rc<Ui>, shares: Vec<&str>) {
-    let list = gtk::ListBox::new();
-    list.add_css_class("boxed-list");
-    list.set_selection_mode(gtk::SelectionMode::None);
-    for (i, share) in shares.iter().enumerate() {
-        let r = row(&format!("Share {}", i + 1), share);
-        r.add_css_class("monospace");
-        let copy = gtk::Button::builder()
-            .icon_name("edit-copy-symbolic")
-            .tooltip_text("Copy")
-            .valign(gtk::Align::Center)
-            .css_classes(["flat"])
-            .build();
-        let (window, share) = (ui.window.clone(), (*share).to_string());
-        copy.connect_clicked(move |_| window.clipboard().set_text(&share));
-        r.add_suffix(&copy);
-        list.append(&r);
-    }
-    let scroll = gtk::ScrolledWindow::builder()
-        .child(&list)
-        .propagate_natural_height(true)
-        .max_content_height(420)
-        .width_request(560)
-        .hscrollbar_policy(gtk::PolicyType::Never)
+/// The contact's card, to print or copy: shown once.
+fn show_card(ui: &Rc<Ui>, card: &str) {
+    let label = gtk::Label::builder()
+        .label(card)
+        .selectable(true)
+        .wrap(true)
+        .css_classes(["title-2", "monospace"])
         .build();
     let dialog = adw::AlertDialog::new(
-        Some("Your shares"),
-        Some("Give each to a different person. None of them can open your account alone."),
+        Some("Your contact's card"),
+        Some(
+            "Print it or write it down, and give it to the person you trust. It isn't shown \
+             again: if it's lost, make a new one.",
+        ),
     );
-    dialog.set_extra_child(Some(&scroll));
-    dialog.add_response("close", "Done");
+    dialog.set_extra_child(Some(&label));
+    dialog.add_response("copy", "Copy");
+    dialog.add_response("print", "Print");
+    dialog.add_response("done", "Done");
+    dialog.set_response_appearance("print", adw::ResponseAppearance::Suggested);
+    dialog.set_close_response("done");
+    let (window, card) = (ui.window.clone(), card.to_string());
+    dialog.connect_response(None, move |d, id| match id {
+        "copy" => {
+            window.clipboard().set_text(&card);
+            d.present(Some(&window));
+        }
+        "print" => {
+            print_card(&window, &card);
+            d.present(Some(&window));
+        }
+        _ => {}
+    });
     dialog.present(Some(&ui.window));
+}
+
+/// Print the card as an index card (5 by 3 inches), with what it's for.
+fn print_card(window: &adw::ApplicationWindow, card: &str) {
+    let op = gtk::PrintOperation::new();
+    op.set_n_pages(1);
+    op.set_unit(gtk::Unit::Points);
+    op.set_job_name("Omacloud recovery card");
+    let groups: Vec<String> = card.split('-').map(str::to_string).collect();
+    op.connect_draw_page(move |_, ctx, _| {
+        let cr = ctx.cairo_context();
+        _ = draw_card(&cr, &groups);
+    });
+    if let Err(e) = op.run(gtk::PrintOperationAction::PrintDialog, Some(window)) {
+        eprintln!("printing: {e}");
+    }
+}
+
+fn draw_card(cr: &gtk::cairo::Context, groups: &[String]) -> Result<(), gtk::cairo::Error> {
+    use gtk::cairo::{FontSlant, FontWeight};
+    let (w, h) = (360.0, 216.0);
+    cr.set_source_rgb(0.0, 0.0, 0.0);
+    // a line to cut along
+    cr.set_line_width(0.5);
+    cr.set_dash(&[3.0, 3.0], 0.0);
+    cr.rectangle(0.5, 0.5, w, h);
+    cr.stroke()?;
+    cr.set_dash(&[], 0.0);
+    let line = |text: &str, x: f64, y: f64, face: &str, weight: FontWeight, size: f64| {
+        cr.select_font_face(face, FontSlant::Normal, weight);
+        cr.set_font_size(size);
+        cr.move_to(x, y);
+        cr.show_text(text)
+    };
+    line(
+        "Omacloud recovery card",
+        18.0,
+        30.0,
+        "Sans",
+        FontWeight::Bold,
+        14.0,
+    )?;
+    line(
+        "For: ________________________________",
+        18.0,
+        54.0,
+        "Sans",
+        FontWeight::Normal,
+        10.0,
+    )?;
+    let half = groups.len().div_ceil(2);
+    for (i, row) in groups.chunks(half.max(1)).enumerate() {
+        let y = 92.0 + 28.0 * f64::from(u8::try_from(i).unwrap_or(0));
+        line(&row.join("-"), 18.0, y, "Monospace", FontWeight::Bold, 20.0)?;
+    }
+    for (i, text) in [
+        "Keep this card safe. If the person named above loses access to their",
+        "Omacloud account, read these characters to them. On its own the card",
+        "opens nothing: it works only with their Google sign-in. A newer card",
+        "replaces this one.",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let y = 156.0 + 12.0 * f64::from(u8::try_from(i).unwrap_or(0));
+        line(text, 18.0, y, "Sans", FontWeight::Normal, 8.0)?;
+    }
+    Ok(())
 }
 
 /// Show text to copy.

@@ -26,6 +26,7 @@ export default {
 			if (req.method === "POST" && url.pathname === "/api/credentials") return await signin.credentials(req, env);
 			if (req.method === "POST" && url.pathname === "/api/keys") return await keys.create(req, env);
 			if (req.method === "POST" && url.pathname === "/api/keys/retire") return await keys.retire(req, env);
+			if (req.method === "POST" && url.pathname === "/api/contact") return await signin.contact(req, env);
 			return new Response("Not found\n", { status: 404 });
 		} catch (e) {
 			console.error(JSON.stringify({ path: url.pathname, error: String(e), stack: (e as Error).stack }));

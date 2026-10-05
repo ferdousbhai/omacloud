@@ -6,6 +6,11 @@
 // the browser on to the computer's port with a one-time code. The computer
 // trades that code and its secret for a storage key at /api/credentials.
 // Another program that sees the code can't use it without the secret.
+//
+// The same sign-in fetches the account's trusted contact pad, for a
+// computer recovering with a contact's card, or keeps a new one
+// (/api/contact): the pad only ever goes to whoever can sign in with the
+// account's Google identity, never to a storage key.
 
 import * as db from "./db.ts";
 import { encode } from "./sigv4.ts";
@@ -101,17 +106,29 @@ export async function back(url: URL, env: Env): Promise<Response> {
 	return toComputer(`code=${await db.grant(env.DB, id, account.id)}`);
 }
 
-export async function credentials(req: Request, env: Env): Promise<Response> {
+/** A pad as computers make them: 28 characters of the recovery code's alphabet. */
+export const validPad = (p: unknown): p is string =>
+	typeof p === "string" && /^[23456789abcdefghjkmnpqrstuvwxyz]{28}$/.test(p);
+
+/** A computer's request after signing in: its JSON, with the one-time code and its secret. */
+async function signedIn(req: Request): Promise<(Record<string, unknown> & { code: string; verifier: string }) | Response> {
 	const length = Number(req.headers.get("content-length") ?? "0");
 	if (!(length > 0 && length < 4096)) return Response.json({ error: "bad request" }, { status: 400 });
-	let r: { code?: unknown; verifier?: unknown };
+	let r: Record<string, unknown>;
 	try {
 		r = await req.json();
 	} catch {
 		return Response.json({ error: "bad request" }, { status: 400 });
 	}
-	if (typeof r.code !== "string" || typeof r.verifier !== "string")
+	if (typeof r !== "object" || r === null || typeof r.code !== "string" || typeof r.verifier !== "string")
 		return Response.json({ error: "bad request" }, { status: 400 });
+	return r as Record<string, unknown> & { code: string; verifier: string };
+}
+
+/** POST /api/credentials: a storage key for the account that signed in, and its contact pad if `contact` asks. */
+export async function credentials(req: Request, env: Env): Promise<Response> {
+	const r = await signedIn(req);
+	if (r instanceof Response) return r;
 	const accountId = await db.redeem(env.DB, r.code, r.verifier);
 	if (!accountId) return Response.json({ error: "sign in again" }, { status: 403 });
 	const account = await db.account(env.DB, accountId);
@@ -119,6 +136,11 @@ export async function credentials(req: Request, env: Env): Promise<Response> {
 	const key = await db.newKey(env.DB, accountId, db.masterKey(env));
 	console.log(JSON.stringify({ event: "new key", account: accountId, key: key.accessKeyId }));
 	const scheme = env.PUBLIC_URL.startsWith("http://") ? "http" : "https";
+	let contact = {};
+	if (r.contact === true) {
+		contact = { contact_pad: await db.contactPad(env.DB, accountId) };
+		console.log(JSON.stringify({ event: "contact pad fetched", account: accountId }));
+	}
 	return Response.json({
 		endpoint: `${scheme}://${env.STORAGE_HOST}`,
 		region: env.REGION,
@@ -126,5 +148,27 @@ export async function credentials(req: Request, env: Env): Promise<Response> {
 		access_key_id: key.accessKeyId,
 		secret_access_key: key.secret,
 		email: account.email,
+		...contact,
 	});
+}
+
+/**
+ * POST /api/contact: keep a new pad for the account's trusted contact, or
+ * none (`pad: null`). `account` is the account the computer belongs to, so
+ * signing in with another Google identity changes nothing.
+ */
+export async function contact(req: Request, env: Env): Promise<Response> {
+	const r = await signedIn(req);
+	if (r instanceof Response) return r;
+	if (typeof r.account !== "string" || !(r.pad === null || validPad(r.pad)))
+		return Response.json({ error: "bad request" }, { status: 400 });
+	const accountId = await db.redeem(env.DB, r.code, r.verifier);
+	if (!accountId) return Response.json({ error: "sign in again" }, { status: 403 });
+	const account = await db.account(env.DB, accountId);
+	if (!account || account.disabled) return Response.json({ error: "closed" }, { status: 403 });
+	if (accountId !== r.account)
+		return Response.json({ error: "another account", email: account.email }, { status: 409 });
+	await db.setContactPad(env.DB, accountId, r.pad);
+	console.log(JSON.stringify({ event: r.pad ? "contact pad set" : "contact pad removed", account: accountId }));
+	return Response.json({ email: account.email });
 }
