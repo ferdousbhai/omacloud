@@ -88,8 +88,14 @@ export function op(method: string, key: string | null, query: [string, string][]
 	return null;
 }
 
-/** The account whose key signed the request, or the refusal. */
-async function authenticate(req: Request, env: Env, path: string, query: string): Promise<Account | Response> {
+/** Who signed a request: the account, and the key it used. */
+export interface Signer {
+	account: Account;
+	accessKeyId: string;
+}
+
+/** The account whose key signed the request (to storage, or to the key API), or the refusal. */
+export async function authenticate(req: Request, env: Env, path: string, query: string): Promise<Signer | Response> {
 	if (query.includes("X-Amz-Signature")) return denied("Signed URLs aren't accepted");
 	const auth = parseAuth(req.headers.get("authorization") ?? "");
 	if (!auth) return denied("Sign requests with AWS signature version 4");
@@ -112,7 +118,7 @@ async function authenticate(req: Request, env: Env, path: string, query: string)
 	if (!same(await sign(secret, stamp, scope(auth), canonical), auth.signature))
 		return error(403, "SignatureDoesNotMatch", "The signature doesn't match this key");
 	if (account.disabled) return denied("This account is closed");
-	return account;
+	return { account, accessKeyId: auth.accessKeyId };
 }
 
 /** Requests to the storage host. */
@@ -120,8 +126,9 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext): Pro
 	const url = new URL(req.url);
 	const path = url.pathname;
 	const rawQuery = url.search.slice(1);
-	const account = await authenticate(req, env, path, rawQuery);
-	if (account instanceof Response) return account;
+	const signer = await authenticate(req, env, path, rawQuery);
+	if (signer instanceof Response) return signer;
+	const { account } = signer;
 
 	const query = queryPairs(rawQuery);
 	if (!query) return error(400, "InvalidArgument", "Bad query");

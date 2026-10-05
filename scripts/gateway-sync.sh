@@ -201,8 +201,9 @@ done
 mkdir -p "$work/bin"
 printf '#!/bin/sh\ncurl -sfL "$1" >/dev/null &\n' >"$work/bin/xdg-open"
 chmod +x "$work/bin/xdg-open"
+# keys stay in the config files, so the test can read them
 oc() { local dev=$1; shift; PATH="$work/bin:$PATH" OMACLOUD_SERVICE_URL="http://localhost:$gport" \
-  target/debug/omacloud --config "$work/$dev.toml" "$@"; }
+  OMACLOUD_KEYRING=0 target/debug/omacloud --config "$work/$dev.toml" "$@"; }
 
 d1 "INSERT INTO invites (email, created) VALUES ('alice@example.com', 0)"
 echo alice >"$work/who"
@@ -227,6 +228,25 @@ oc ha sync >/dev/null 2>&1
 for _ in $(seq 30); do [ -e "$work/HB/later.txt" ] && break; sleep 1; done
 kill "$watcher"
 [ -e "$work/HB/later.txt" ] || { echo "idle hb missed ha's change"; exit 1; }
+# a lost computer: ha removes hb and changes the key; once every computer
+# left is on the new key, the old keys are retired, and hb's own key no
+# longer reaches the storage
+read -r hbucket hbid hbsecret < <(python3 -c 'import tomllib,sys; c=tomllib.load(open(sys.argv[1],"rb"))["coordination"]; print(c["bucket"], c["access_key_id"], c["secret_access_key"])' "$work/hb.toml")
+as_hb() { S3_HOST=127.0.0.1:$gport S3_KEY=$hbid S3_SECRET=$hbsecret S3_REGION=omacloud python3 "$work/s3.py" "$@"; }
+[ "$(as_hb GET "/$hbucket" list-type=2 | head -1)" = 200 ] || { echo "hb's key should work before"; exit 1; }
+oc ha devices revoke "$fp" >/dev/null 2>&1
+oc ha bucket set-key >"$work/setkey.out" 2>&1 || { cat "$work/setkey.out"; exit 1; }
+oc ha bucket status >"$work/bstatus.out" 2>&1 || { cat "$work/bstatus.out"; exit 1; }
+grep -q "old keys are retired" "$work/bstatus.out" || { cat "$work/bstatus.out"; exit 1; }
+out=$(as_hb GET "/$hbucket" list-type=2)
+[ "$(head -1 <<<"$out")" = 403 ] || { echo "hb's key still works after retiring: $out"; exit 1; }
+echo "after the key change" >"$work/HA/after.txt"
+oc ha sync >/dev/null 2>&1 || { echo "ha can't sync on the new key"; exit 1; }
+# a computer whose key was retired under it signs in again and carries on
+oc ha bucket set-key --here-only >"$work/hereonly.out" 2>&1 || { cat "$work/hereonly.out"; exit 1; }
+echo "after signing in again" >"$work/HA/again.txt"
+oc ha sync >/dev/null 2>&1 || { echo "ha can't sync after signing in again"; exit 1; }
+echo "key change ok"
 # carol isn't invited
 echo carol >"$work/who"
 if oc hc init --hosted --folder "$work/HC" --device hc >"$work/hc.out" 2>&1; then

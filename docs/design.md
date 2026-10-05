@@ -82,10 +82,14 @@ so, and once all have, you delete the old key at your provider. A computer
 that was away through the whole change catches up with `omacloud bucket
 set-key --here-only`.
 
-With Omacloud storage the key is one the gateway issued at sign-in, and the
-gateway can't issue a replacement yet: a removed computer can't read what's
-written after its removal, but it can still reach the account's
-(encrypted) objects with its old key.
+With Omacloud storage, Omacloud issues the keys, the new one too: a
+computer asks for it with its current key (`server/src/keys.ts`) and
+publishes it as above, and once every computer has switched, one of them
+retires the account's other keys, a removed computer's among them. A
+removed computer could ask for keys or retire others in the meantime, but
+whatever it makes is retired with the rest, and a computer whose key was
+retired signs in with Google again (`bucket set-key --here-only`): at worst
+it makes the account's computers sign in again.
 
 With delete protection on the bucket (object lock, R2 bucket locks), sync
 works as usual, and old epochs are deleted once their retention ends.
@@ -107,16 +111,13 @@ when another dotfile manager owns those files.
   plus your Google account's id and email. With your own bucket, the
   Omacloud project sees nothing: there is no Omacloud server in the way.
 - **A removed computer** keeps what it had synced before removal, and can
-  reach the bucket until its key changes (with Omacloud storage, for now,
-  until the account is closed).
+  reach the bucket until its key changes.
 
 Nobody but your computers and your recovery code can read file contents,
 names, settings or keys.
 
 ## Not yet
 
-- Changing an Omacloud storage key, to cut a removed computer off the
-  storage as a bucket of your own allows.
 - Key transparency for device keys; until then, approvals compare
   fingerprints out of band.
 - Direct computer-to-computer sync on a local network.

@@ -273,16 +273,17 @@ enum Keep {
 enum BucketCmd {
     /// Show the latest key change and which computers switched to it
     Status,
-    /// Switch every computer to a new key (make it at your provider first;
-    /// keep the old one until `bucket status` says all switched, then delete
-    /// it there). The secret comes from OMACLOUD_SECRET_ACCESS_KEY, or is
-    /// asked for
+    /// Switch every computer to a new key. With your own bucket, make it at
+    /// your provider first, and keep the old one until `bucket status` says
+    /// all switched, then delete it there; the secret comes from
+    /// OMACLOUD_SECRET_ACCESS_KEY, or is asked for. With Omacloud storage,
+    /// Omacloud makes the key, and retires the old ones once all switched
     SetKey {
-        /// The new key's id
+        /// The new key's id (your own bucket)
         #[arg(long)]
-        access_key_id: String,
+        access_key_id: Option<String>,
         /// Only this computer: for one that missed the change because the old
-        /// key was already deleted
+        /// key was already deleted (with Omacloud storage, signs in again)
         #[arg(long)]
         here_only: bool,
     },
@@ -357,6 +358,12 @@ struct Config {
     /// The last bucket key change this device switched to
     #[serde(default, skip_serializing_if = "is_zero")]
     bucket_key_seq: u64,
+    /// Omacloud storage: where this account signed in (see `hosted`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    service: Option<String>,
+    /// Omacloud storage: the last key change whose old keys were retired
+    #[serde(default, skip_serializing_if = "is_zero")]
+    bucket_key_retired: u64,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -822,6 +829,9 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<()> {
                     Ok(false) => {}
                     Err(e) => warn!("checking for a new bucket key: {e:#}"),
                 }
+                if let Err(e) = retire_old_keys(paths, &mut engine) {
+                    warn!("retiring old storage keys: {e:#}");
+                }
             }
             if let Some(a) = alerts.as_mut() {
                 a.check(&mut engine);
@@ -951,10 +961,12 @@ fn main() -> Result<()> {
             hosted,
         } => {
             // Omacloud storage: signing in gives the bucket and its key
-            let (repo, opts) = if hosted {
-                let service = std::env::var("OMACLOUD_SERVICE_URL")
-                    .unwrap_or_else(|_| hosted::SERVICE.to_string());
-                let s = hosted::sign_in(&service)?;
+            let service = hosted.then(|| {
+                std::env::var("OMACLOUD_SERVICE_URL")
+                    .unwrap_or_else(|_| hosted::SERVICE.to_string())
+            });
+            let (repo, opts) = if let Some(service) = &service {
+                let s = hosted::sign_in(service)?;
                 println!("signed in as {}", s.email);
                 let opts = [
                     ("endpoint", s.endpoint),
@@ -1092,6 +1104,8 @@ fn main() -> Result<()> {
                 folders,
                 coordination: None,
                 bucket_key_seq: 0,
+                service,
+                bucket_key_retired: 0,
             };
             let mut config = config;
             if config.coordinator == SELF_HOSTED {
@@ -1871,7 +1885,7 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
                     json!({ "name": name, "fingerprint": fingerprint(k), "switched": acked.contains(k) })
                 })
                 .collect();
-            json!({ "seq": seq, "computers": computers })
+            json!({ "seq": seq, "computers": computers, "retired": config.bucket_key_retired >= seq })
         })
     } else {
         None
@@ -1939,6 +1953,7 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
         "synced_head": st.base.as_ref().map(|b| b.seq),
         "synced_at": (st.synced_at > 0).then_some(st.synced_at),
         "self_hosted": config.coordinator == SELF_HOSTED,
+        "hosted": hosted_service(&config).is_some(),
         "bucket_key": bucket_key,
         "epoch": st.secret.as_ref().map(|s| s.0),
         "this_device": { "fingerprint": fingerprint(&me), "role": role },
@@ -2058,7 +2073,8 @@ fn parse_join_code(code: &str) -> Result<(BTreeMap<String, String>, String)> {
 /// Why a self-hosted computer can't reach its bucket, and the way back.
 const KEY_REFUSED: &str = "the bucket refused this computer's key. If the account changed \
      its key while this computer was away, get the new key from your provider and run \
-     `omacloud bucket set-key --access-key-id <id> --here-only`";
+     `omacloud bucket set-key --access-key-id <id> --here-only` (with Omacloud storage, \
+     `omacloud bucket set-key --here-only` signs in again)";
 
 /// Switch this device to a newer bucket key, if one was published. True
 /// when it did: the caller reconnects with the new key.
@@ -2084,6 +2100,99 @@ fn follow_bucket_key(paths: &Paths, e: &mut Engine) -> Result<bool> {
     e.ack_bucket_key(seq)?;
     info!("switched to bucket key {seq}");
     Ok(true)
+}
+
+/// Where an Omacloud storage account signs in and asks for keys; None for a
+/// bucket of the user's own. Accounts set up before 0.0.10 didn't record it,
+/// but their storage is at the service's.
+fn hosted_service(config: &Config) -> Option<String> {
+    if config.coordinator != SELF_HOSTED {
+        return None;
+    }
+    config.service.clone().or_else(|| {
+        let endpoint = config.coordination.as_ref()?.get("endpoint")?;
+        (endpoint.trim_end_matches('/') == "https://storage.omacloud.computer")
+            .then(|| hosted::SERVICE.to_string())
+    })
+}
+
+/// The key a coordination location uses.
+fn key_of(config: &Config) -> Result<(String, String, String)> {
+    let c = config
+        .coordination
+        .as_ref()
+        .context("no coordination location in the config")?;
+    let get = |k: &str| c.get(k).cloned().unwrap_or_default();
+    Ok((
+        get("region"),
+        get("access_key_id"),
+        get("secret_access_key"),
+    ))
+}
+
+/// A new Omacloud storage key: asked for with this computer's key, or, when
+/// that key was retired (this computer missed a key change, or a removed one
+/// retired the rest), by signing in with Google again.
+fn hosted_key(
+    config: &Config,
+    service: &str,
+    here_only: bool,
+) -> Result<omacloud_core::bucket_key::Credentials> {
+    let (region, id, secret) = key_of(config)?;
+    let asked = if here_only || id.is_empty() {
+        hosted::Asked::Refused
+    } else {
+        hosted::new_key(service, &region, (&id, &secret))?
+    };
+    let (id, secret) = match asked {
+        hosted::Asked::Done(key) => key,
+        hosted::Asked::Refused => {
+            eprintln!("this computer's key isn't in use anymore: sign in again");
+            let s = hosted::sign_in(service)?;
+            anyhow::ensure!(
+                config.coordination.as_ref().and_then(|c| c.get("bucket")) == Some(&s.bucket),
+                "{} is a different Omacloud account from this computer's",
+                s.email
+            );
+            (s.access_key_id, s.secret_access_key)
+        }
+    };
+    Ok([
+        ("access_key_id".to_string(), id),
+        ("secret_access_key".to_string(), secret),
+    ]
+    .into())
+}
+
+/// Omacloud storage: once every computer is on the latest key, retire the
+/// account's other keys, a removed computer's among them. True when this
+/// computer retired them now.
+fn retire_old_keys(paths: &Paths, e: &mut Engine) -> Result<bool> {
+    let mut config = load(paths)?;
+    let Some(service) = hosted_service(&config) else {
+        return Ok(false);
+    };
+    let Some((seq, acked)) = e.bucket_key_status()? else {
+        return Ok(false);
+    };
+    // retired already, or this computer isn't on the latest key yet
+    if config.bucket_key_retired >= seq || config.bucket_key_seq < seq {
+        return Ok(false);
+    }
+    let members = e.refresh_devices()?.members();
+    if !members.valid.iter().all(|(k, _)| acked.contains(k)) {
+        return Ok(false);
+    }
+    let (region, id, secret) = key_of(&config)?;
+    match hosted::retire_others(&service, &region, (&id, &secret))? {
+        hosted::Asked::Done(n) => {
+            info!("retired {n} old storage keys after key change {seq}");
+            config.bucket_key_retired = seq;
+            save(paths, &config)?;
+            Ok(true)
+        }
+        hosted::Asked::Refused => anyhow::bail!("{KEY_REFUSED}"),
+    }
 }
 
 fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
@@ -2122,7 +2231,18 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
                             if done { "switched" } else { "not yet" }
                         );
                     }
-                    if waiting == 0 {
+                    if waiting == 0 && hosted_service(&config).is_some() {
+                        let config_now = load(paths)?;
+                        if config_now.bucket_key_retired >= seq || retire_old_keys(paths, &mut e)? {
+                            println!(
+                                "every computer switched, and the old keys are retired: a removed or lost computer is cut off"
+                            );
+                        } else {
+                            println!(
+                                "every computer switched; the old keys are retired by a computer on the new key"
+                            );
+                        }
+                    } else if waiting == 0 {
                         println!(
                             "every computer switched: delete the old key at your provider; a removed or lost computer is then cut off"
                         );
@@ -2136,22 +2256,33 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
             access_key_id,
             here_only,
         } => {
-            // the same key again would cut nobody off
-            anyhow::ensure!(
-                here_only
-                    || config
-                        .coordination
-                        .as_ref()
-                        .and_then(|c| c.get("access_key_id"))
-                        != Some(&access_key_id),
-                "{access_key_id} is the key in use: make a new one at your provider first"
-            );
-            let secret = read_secret("OMACLOUD_SECRET_ACCESS_KEY", "secret access key")?;
-            let key: omacloud_core::bucket_key::Credentials = [
-                ("access_key_id".to_string(), access_key_id),
-                ("secret_access_key".to_string(), secret),
-            ]
-            .into();
+            let key: omacloud_core::bucket_key::Credentials = match (
+                access_key_id,
+                hosted_service(&config),
+            ) {
+                (Some(access_key_id), _) => {
+                    // the same key again would cut nobody off
+                    anyhow::ensure!(
+                        here_only
+                            || config
+                                .coordination
+                                .as_ref()
+                                .and_then(|c| c.get("access_key_id"))
+                                != Some(&access_key_id),
+                        "{access_key_id} is the key in use: make a new one at your provider first"
+                    );
+                    let secret = read_secret("OMACLOUD_SECRET_ACCESS_KEY", "secret access key")?;
+                    [
+                        ("access_key_id".to_string(), access_key_id),
+                        ("secret_access_key".to_string(), secret),
+                    ]
+                    .into()
+                }
+                (None, Some(service)) => hosted_key(&config, &service, here_only)?,
+                (None, None) => anyhow::bail!(
+                    "give the new key: make it at your provider, then `--access-key-id <id>`"
+                ),
+            };
             // does the new key reach the bucket?
             let mut trial = config.clone();
             if let Some(c) = trial.coordination.as_mut() {
@@ -2176,11 +2307,19 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
             config = trial;
             config.bucket_key_seq = seq;
             save(paths, &config)?;
-            println!(
-                "key change {seq} published, sealed to this account's computers. Each switches on its \
-                 next sync; `omacloud bucket status` shows which have. Keep the old key until all have, \
-                 then delete it at your provider."
-            );
+            if hosted_service(&config).is_some() {
+                println!(
+                    "key change {seq} published, sealed to this account's computers. Each switches on \
+                     its next sync, and once all have, the old keys are retired: a removed computer is \
+                     then cut off. `omacloud bucket status` shows which have."
+                );
+            } else {
+                println!(
+                    "key change {seq} published, sealed to this account's computers. Each switches on its \
+                     next sync; `omacloud bucket status` shows which have. Keep the old key until all have, \
+                     then delete it at your provider."
+                );
+            }
         }
     }
     Ok(())

@@ -155,3 +155,52 @@ fn capitalize(s: &str) -> String {
         .map(|f| f.to_uppercase().chain(c).collect())
         .unwrap_or_default()
 }
+
+/// What the key API made of a request signed with this computer's key.
+pub enum Asked<T> {
+    Done(T),
+    /// The key isn't in use anymore: sign in again.
+    Refused,
+}
+
+/// A request to the key API at `path`, signed with `key`.
+fn ask(
+    service: &str,
+    path: &str,
+    region: &str,
+    key: (&str, &str),
+) -> Result<Asked<serde_json::Value>> {
+    let url = format!("{}{path}", service.trim_end_matches('/'));
+    let (status, text) =
+        omacloud_core::bucket::signed_request("POST", &url, region, key.0, key.1, "")?;
+    match status {
+        200 => Ok(Asked::Done(
+            serde_json::from_str(&text).context("reading Omacloud's answer")?,
+        )),
+        403 => Ok(Asked::Refused),
+        _ => bail!("Omacloud storage answered {status}: {}", text.trim()),
+    }
+}
+
+/// A new storage key for this account, asked for with the current one.
+pub fn new_key(service: &str, region: &str, key: (&str, &str)) -> Result<Asked<(String, String)>> {
+    Ok(match ask(service, "/api/keys", region, key)? {
+        Asked::Refused => Asked::Refused,
+        Asked::Done(v) => {
+            let field = |k: &str| {
+                v[k].as_str()
+                    .map(str::to_string)
+                    .with_context(|| format!("Omacloud's answer has no {k}"))
+            };
+            Asked::Done((field("access_key_id")?, field("secret_access_key")?))
+        }
+    })
+}
+
+/// Revoke every key of the account but `key`; how many went.
+pub fn retire_others(service: &str, region: &str, key: (&str, &str)) -> Result<Asked<u64>> {
+    Ok(match ask(service, "/api/keys/retire", region, key)? {
+        Asked::Refused => Asked::Refused,
+        Asked::Done(v) => Asked::Done(v["retired"].as_u64().unwrap_or(0)),
+    })
+}

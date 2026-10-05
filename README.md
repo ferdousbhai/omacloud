@@ -106,15 +106,20 @@ somewhere of your own first.
 ## A lost computer
 
 Remove it under Devices (or `omacloud devices revoke <fingerprint>`). It
-can't sync anymore, and can't read anything written after its removal.
-With your own bucket it still holds the bucket's key, so the app goes on
-to change it: make a new key at your provider and enter it. Every other
-computer switches on its next sync, Devices shows when all have, and then
-you delete the old key at your provider. A computer that was away through
-the whole change catches up with `omacloud bucket set-key --access-key-id
-<id> --here-only`. `omacloud rotate` also moves everything to a new
-encryption key. With Omacloud storage, changing the storage key a removed
-computer holds isn't possible yet (see docs/design.md, Not yet).
+can't sync anymore, but it still holds a key to your storage, so the app
+goes on to change that key.
+
+With Omacloud storage that takes no more: your other computers switch to a
+new key Omacloud makes, and once all have, the old keys are retired and the
+removed computer can't reach your storage (`omacloud bucket set-key` from
+the terminal). With your own bucket, make a new key at your provider and
+enter it; every other computer switches on its next sync, Devices shows
+when all have, and then you delete the old key at your provider.
+
+A computer that was away through the whole change catches up with
+`omacloud bucket set-key --access-key-id <id> --here-only`, or, with
+Omacloud storage, `omacloud bucket set-key --here-only`, which signs in
+again. `omacloud rotate` also moves everything to a new encryption key.
 
 Losing the recovery code with every computer locks you out, so `omacloud
 recovery split --threshold 3 --shares 5` (or Recovery in the app) can split

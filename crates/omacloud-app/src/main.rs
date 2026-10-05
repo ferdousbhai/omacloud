@@ -1214,6 +1214,8 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     }
 
     let self_hosted = s["self_hosted"].as_bool().unwrap_or(false);
+    // Omacloud storage: Omacloud makes the new key and retires the old ones
+    let hosted = s["hosted"].as_bool().unwrap_or(false);
     let me = &s["this_device"];
     let g = group(
         "Devices",
@@ -1244,12 +1246,18 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
                 let fp2 = fp.clone();
                 ui2.confirm(
                     &format!("Remove {name}?"),
-                    "It can't sync anymore, but it still holds your bucket's key. To lock it out, \
-                     make a new key at your provider and switch every computer to it: that's the \
-                     next step.",
+                    if hosted {
+                        "It can't sync anymore. Your other computers then switch to a new storage \
+                         key, and once they have, the old keys stop working: that locks it out of \
+                         your storage too."
+                    } else {
+                        "It can't sync anymore, but it still holds your bucket's key. To lock it out, \
+                         make a new key at your provider and switch every computer to it: that's the \
+                         next step."
+                    },
                     &[(
                         "remove",
-                        "Remove and Change Key…",
+                        if hosted { "Remove" } else { "Remove and Change Key…" },
                         adw::ResponseAppearance::Destructive,
                     )],
                     move |_| {
@@ -1262,7 +1270,7 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
                                 Err(e) => ui4.toast(&e),
                                 Ok(_) => {
                                     ui4.refresh();
-                                    change_bucket_key(&ui4);
+                                    change_bucket_key(&ui4, hosted);
                                 }
                             },
                         );
@@ -1312,7 +1320,7 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         page.add(&g);
     }
     if self_hosted {
-        page.add(&bucket_key(ui, &s["bucket_key"]));
+        page.add(&bucket_key(ui, &s["bucket_key"], hosted));
     }
     page
 }
@@ -1338,16 +1346,33 @@ fn show_join_code(ui: &Rc<Ui>) {
     );
 }
 
-/// A self-hosted account's bucket key: every computer holds it, so a lost
-/// one is locked out only by a new key, which the others switch to.
-fn bucket_key(ui: &Rc<Ui>, status: &Value) -> adw::PreferencesGroup {
+/// The account's bucket key: every computer holds it, so a lost one is
+/// locked out only by a new key, which the others switch to. With Omacloud
+/// storage, Omacloud makes the key and retires the old ones.
+fn bucket_key(ui: &Rc<Ui>, status: &Value, hosted: bool) -> adw::PreferencesGroup {
     let empty = Vec::new();
     let computers = status["computers"].as_array().unwrap_or(&empty);
     let waiting = computers
         .iter()
         .filter(|c| c["switched"].as_bool() != Some(true))
         .count();
-    let description = if status.is_null() {
+    let description = if hosted {
+        if status.is_null() {
+            "Every computer holds a key to your Omacloud storage. Removing a computer switches \
+             the others to a new one and retires the old keys."
+                .to_string()
+        } else if waiting == 0 && status["retired"].as_bool() == Some(true) {
+            "Every computer is on the latest key, and the old keys are retired.".to_string()
+        } else if waiting == 0 {
+            "Every computer is on the latest key; the old keys are retired in a moment.".to_string()
+        } else {
+            format!(
+                "{waiting} of {} computers still to switch; each does on its next sync. The old \
+                 keys are retired once all have.",
+                computers.len()
+            )
+        }
+    } else if status.is_null() {
         "Every computer holds your bucket's key. To lock out a lost one, make a new key at \
          your provider and switch to it here."
             .to_string()
@@ -1373,12 +1398,20 @@ fn bucket_key(ui: &Rc<Ui>, status: &Value) -> adw::PreferencesGroup {
     }
     let change = button("Change Key…", Some("flat"));
     let ui2 = ui.clone();
-    change.connect_clicked(move |_| change_bucket_key(&ui2));
+    change.connect_clicked(move |_| change_bucket_key(&ui2, hosted));
     g.set_header_suffix(Some(&change));
     g
 }
 
-fn change_bucket_key(ui: &Rc<Ui>) {
+fn change_bucket_key(ui: &Rc<Ui>, hosted: bool) {
+    if hosted {
+        // nothing to make or paste: Omacloud makes the key
+        ui.act(
+            &["omacloud", "bucket", "set-key"],
+            "Key changed: the other computers switch on their next sync",
+        );
+        return;
+    }
     let id = adw::EntryRow::builder().title("New access key").build();
     let secret = adw::PasswordEntryRow::builder()
         .title("New secret key")

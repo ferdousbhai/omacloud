@@ -97,6 +97,24 @@ export async function newKey(
 	return { accessKeyId: id, secret: await secretOf(master, id) };
 }
 
+/** How many of an account's keys aren't revoked. */
+export async function activeKeys(db: D1Database, accountId: string): Promise<number> {
+	const row = await db
+		.prepare("SELECT count(*) AS n FROM keys WHERE account = ? AND revoked IS NULL")
+		.bind(accountId)
+		.first<{ n: number }>();
+	return row?.n ?? 0;
+}
+
+/** Revoke every key of the account but `keep`; how many went. */
+export async function retireOthers(db: D1Database, accountId: string, keep: string): Promise<number> {
+	const r = await db
+		.prepare("UPDATE keys SET revoked = ? WHERE account = ? AND id != ? AND revoked IS NULL")
+		.bind(now(), accountId, keep)
+		.run();
+	return r.meta.changes;
+}
+
 /** Bytes just written: counted now, and counted properly at the next scan. */
 export function wrote(db: D1Database, accountId: string, bytes: number): Promise<unknown> {
 	return db

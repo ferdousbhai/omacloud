@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.0.10 (unreleased)
+
+A lost computer is cut off from Omacloud storage too.
+
+- Removing a computer from an Omacloud storage account switches the others
+  to a new storage key, which Omacloud makes, and once all have switched
+  the old keys are retired: the removed computer can't reach your storage.
+  No key to make or paste. `omacloud bucket set-key` does the same from the
+  terminal.
+- A computer whose storage key was retired while it was away signs in with
+  Google again: `omacloud bucket set-key --here-only`.
+
 ## 0.0.9 (2026-10-05)
 
 Omacloud storage: sign in with Google and there's nothing else to set up.

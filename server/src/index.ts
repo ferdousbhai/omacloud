@@ -3,6 +3,7 @@
 // to one bucket with a folder per account.
 
 import * as gateway from "./gateway.ts";
+import * as keys from "./keys.ts";
 import * as pages from "./pages.ts";
 import * as signin from "./signin.ts";
 import { countPage } from "./upstream.ts";
@@ -23,6 +24,8 @@ export default {
 			if (req.method === "GET" && url.pathname === "/signin") return await signin.start(url, env);
 			if (req.method === "GET" && url.pathname === "/auth/google/callback") return await signin.back(url, env);
 			if (req.method === "POST" && url.pathname === "/api/credentials") return await signin.credentials(req, env);
+			if (req.method === "POST" && url.pathname === "/api/keys") return await keys.create(req, env);
+			if (req.method === "POST" && url.pathname === "/api/keys/retire") return await keys.retire(req, env);
 			return new Response("Not found\n", { status: 404 });
 		} catch (e) {
 			console.error(JSON.stringify({ path: url.pathname, error: String(e), stack: (e as Error).stack }));

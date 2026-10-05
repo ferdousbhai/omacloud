@@ -409,6 +409,32 @@ fn put_bucket(
     name: &str,
     body: &str,
 ) -> Result<(u16, String)> {
+    let endpoint = endpoint.trim_end_matches('/');
+    signed_request(
+        "PUT",
+        &format!("{endpoint}/{name}"),
+        region,
+        access_key,
+        secret,
+        body,
+    )
+}
+
+/// A PUT or POST to `url` (no query; its path already encoded) signed with AWS
+/// signature version 4 for `region` and service `s3`. Returns the status and
+/// the response body.
+///
+/// # Errors
+///
+/// If the address can't be reached.
+pub fn signed_request(
+    method: &str,
+    url: &str,
+    region: &str,
+    access_key: &str,
+    secret: &str,
+    body: &str,
+) -> Result<(u16, String)> {
     use hmac::{Hmac, Mac};
     use sha2::{Digest, Sha256};
     let hmac = |key: &[u8], data: &str| -> Vec<u8> {
@@ -416,20 +442,18 @@ fn put_bucket(
         mac.update(data.as_bytes());
         mac.finalize().into_bytes().to_vec()
     };
-    let endpoint = endpoint.trim_end_matches('/');
-    let host = endpoint
-        .split_once("://")
-        .map_or(endpoint, |(_, rest)| rest)
-        .split('/')
-        .next()
-        .unwrap_or_default();
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let (host, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
     let now = rustic_core::jiff::Timestamp::now();
     let stamp = now.strftime("%Y%m%dT%H%M%SZ").to_string();
     let day = &stamp[..8];
     let payload = hex::encode(Sha256::digest(body.as_bytes()));
     let signed_headers = "host;x-amz-content-sha256;x-amz-date";
     let canonical = format!(
-        "PUT\n/{name}\n\nhost:{host}\nx-amz-content-sha256:{payload}\nx-amz-date:{stamp}\n\n\
+        "{method}\n{path}\n\nhost:{host}\nx-amz-content-sha256:{payload}\nx-amz-date:{stamp}\n\n\
          {signed_headers}\n{payload}"
     );
     let scope = format!("{day}/{region}/s3/aws4_request");
@@ -446,8 +470,12 @@ fn put_bucket(
         .http_status_as_error(false)
         .build()
         .into();
-    let mut response = agent
-        .put(&format!("{endpoint}/{name}"))
+    let request = match method {
+        "PUT" => agent.put(url),
+        "POST" => agent.post(url),
+        _ => anyhow::bail!("{method} isn't a signed request this makes"),
+    };
+    let mut response = request
         .header("x-amz-date", &stamp)
         .header("x-amz-content-sha256", &payload)
         .header(
@@ -458,7 +486,7 @@ fn put_bucket(
             ),
         )
         .send(body)
-        .with_context(|| format!("reaching {endpoint}"))?;
+        .with_context(|| format!("reaching {host}"))?;
     let status = response.status().as_u16();
     let text = response.body_mut().read_to_string().unwrap_or_default();
     Ok((status, text))
