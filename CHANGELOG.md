@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.0.11 (2026-10-05)
+
+A trusted contact can help you back into your account.
 
 - A trusted contact: someone you trust, like your partner, keeps a printed
   card that gets you back into your account if you lose your recovery code
@@ -13,6 +15,9 @@
   computer is left to approve a new one.
 - The app's Recovery page no longer splits the recovery code into shares;
   `omacloud recovery split` and `combine` still do.
+- A computer that joined after a storage key change (approved, or with the
+  recovery code) can sync: it no longer stops with "the new bucket key
+  wasn't sealed to this computer".
 
 ## 0.0.10 (2026-10-05)
 
