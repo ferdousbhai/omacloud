@@ -2089,6 +2089,14 @@ fn follow_bucket_key(paths: &Paths, e: &mut Engine) -> Result<bool> {
     if seq <= config.bucket_key_seq {
         return Ok(false);
     }
+    let Some(key) = key else {
+        // joined after the change, with a key at least as new: nothing to
+        // switch to
+        config.bucket_key_seq = seq;
+        save(paths, &config)?;
+        e.ack_bucket_key(seq)?;
+        return Ok(false);
+    };
     let coordination = config
         .coordination
         .as_mut()
@@ -2181,6 +2189,11 @@ fn retire_old_keys(paths: &Paths, e: &mut Engine) -> Result<bool> {
     }
     let members = e.refresh_devices()?.members();
     if !members.valid.iter().all(|(k, _)| acked.contains(k)) {
+        return Ok(false);
+    }
+    // only a computer on the key the change shared keeps it: one that
+    // joined after has a key of its own
+    if !matches!(e.latest_bucket_key()?, Some((s, Some(_))) if s == seq) {
         return Ok(false);
     }
     let (region, id, secret) = key_of(&config)?;

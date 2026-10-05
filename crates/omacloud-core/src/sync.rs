@@ -343,18 +343,31 @@ impl Engine {
     }
 
     /// The latest bucket key change, checked against the device chain and
-    /// opened for this device: `(number, key)`.
+    /// opened for this device: `(number, key)`. No key when this device
+    /// joined after the change: it came with a key at least as new.
     ///
     /// # Errors
     ///
-    /// If a record doesn't verify, or wasn't sealed to this device.
-    pub fn latest_bucket_key(&mut self) -> Result<Option<(u64, crate::bucket_key::Credentials)>> {
+    /// If a record doesn't verify, or wasn't sealed to this device although
+    /// it was a member then (it was removed before the change).
+    #[allow(clippy::type_complexity)]
+    pub fn latest_bucket_key(
+        &mut self,
+    ) -> Result<Option<(u64, Option<crate::bucket_key::Credentials>)>> {
         let Some(record) = self.coord.key_records()?.pop() else {
             return Ok(None);
         };
         self.state.devices.advance(self.coord.as_ref())?;
         record.verify(&self.state.devices)?;
-        Ok(Some((record.seq, record.open(&self.signing)?)))
+        let me = self.device_key();
+        let then = self.state.devices.members_at(record.devices);
+        if !record.keys.contains_key(&me)
+            && !then.valid.contains_key(&me)
+            && !then.revoked.contains_key(&me)
+        {
+            return Ok(Some((record.seq, None)));
+        }
+        Ok(Some((record.seq, Some(record.open(&self.signing)?))))
     }
 
     /// Say this device switched to key change `seq`.

@@ -120,14 +120,31 @@ fn an_account_with_no_service() -> Result<()> {
     ]
     .into();
     assert_eq!(a.change_bucket_key(&new_key)?, 1);
-    let (seq, key) = c.latest_bucket_key()?.expect("a key change");
-    assert_eq!((seq, &key), (1, &new_key));
+    let (seq, got) = c.latest_bucket_key()?.expect("a key change");
+    assert_eq!((seq, got.as_ref()), (1, Some(&new_key)));
     c.ack_bucket_key(seq)?;
     let (_, acked) = a.bucket_key_status()?.expect("a key change");
     assert!(acked.contains(&public_hex(&ka)) && acked.contains(&public_hex(&kc)));
     assert!(!acked.contains(&public_hex(&kb)));
     let err = b.latest_bucket_key().unwrap_err();
     assert!(format!("{err:#}").contains("removed"), "{err:#}");
+    // a computer joining after the change came with a key of its own
+    let kd = key();
+    account::join_with_recovery(
+        coordinator(&coord_dir)?.as_ref(),
+        &created.recovery_code,
+        &kd,
+        "d",
+    )?;
+    let mut d = engine(
+        coordinator(&coord_dir)?,
+        &root,
+        "d",
+        &kd,
+        &repo,
+        &t.join("D"),
+    )?;
+    assert_eq!(d.latest_bucket_key()?, Some((1, None)));
 
     assert_eq!(a.rotate()?.epoch, 1);
     c.sync()?;
