@@ -131,10 +131,10 @@ bucket.
 ## A trusted contact
 
 Losing the recovery code with every computer locks you out. With Omacloud
-storage, someone you trust can keep a card that gets you back in: under
-Recovery in the app, enter your recovery code and click Make a Card (or
-`omacloud recovery contact`), sign in with Google, then print the card and
-give it to them. The card works only together with your Google sign-in,
+storage, someone you trust can keep a recovery card that gets you back in:
+under Recovery in the app, enter your recovery code and click Create
+Recovery Card (or `omacloud recovery contact`), sign in with Google, then
+print the card and give it to them. The card works only together with your Google sign-in,
 so on its own it opens nothing, and Omacloud can't use its half without
 the card. Making a new card replaces the last one, and Remove Contact
 (`--remove`) voids it.

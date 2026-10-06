@@ -563,7 +563,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     // no computer left to approve this one: the recovery code, or the card
     // a trusted contact keeps
     let rescue = adw::PasswordEntryRow::builder()
-        .title("Lost every computer? Recovery code or contact's card")
+        .title("Lost every computer? Recovery code or recovery card")
         .build();
     hosted.add(&rescue);
     let sign_in = button("Sign In with Google", Some("suggested-action"));
@@ -584,7 +584,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
                 }
                 _ => {
                     ui.toast(
-                        "That's neither a recovery code (28 characters) nor a contact's card (32)",
+                        "That's neither a recovery code (28 characters) nor a recovery card (32)",
                     );
                     return;
                 }
@@ -1710,7 +1710,7 @@ fn recovery(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     buttons.set_halign(gtk::Align::End);
     buttons.set_margin_top(12);
     let remove = button("Remove Contact", Some("flat"));
-    let make = button("Make a Card", Some("suggested-action"));
+    let make = button("Create Recovery Card", Some("suggested-action"));
     buttons.append(&remove);
     buttons.append(&make);
     {
@@ -1757,7 +1757,7 @@ fn recovery(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     page.add(&contact);
     page.add(&group(
         "If you lose everything",
-        "On a new computer, open Omacloud, enter your contact's card and sign in with Google. \
+        "On a new computer, open Omacloud, enter the recovery card your contact keeps and sign in with Google. \
          Making a new card replaces the last one.",
     ));
     page
@@ -1772,7 +1772,7 @@ fn show_card(ui: &Rc<Ui>, card: &str) {
         .css_classes(["title-2", "monospace"])
         .build();
     let dialog = adw::AlertDialog::new(
-        Some("Your contact's card"),
+        Some("Recovery card"),
         Some(
             "Print it or write it down, and give it to the person you trust. It isn't shown \
              again: if it's lost, make a new one.",
