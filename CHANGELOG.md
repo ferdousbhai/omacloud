@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.12 (2026-10-06)
+
+- The Recovery page's button reads Create Recovery Card (it was Make a
+  Card), and the card is called a recovery card throughout the app.
+
 ## 0.0.11 (2026-10-05)
 
 A trusted contact can help you back into your account.
