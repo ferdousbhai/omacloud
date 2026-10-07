@@ -8,10 +8,11 @@ can't do. The source files named here hold the details.
 
 ## Where it's stored
 
-Everything lives in one S3 bucket: the files, and the records that keep
-your computers in step. It is either your own, rented from a provider
+Everything lives in one storage location: the files, and the records that keep
+your computers in step. It is either your own S3 bucket, rented from a provider
 (Hetzner, R2, B2, MinIO), and then your computers talk to it and to nothing
-else; or a folder of Omacloud storage, reached through the gateway at
+else; an App folder in your own Dropbox, reached directly through its API; or
+a folder of Omacloud storage, reached through the gateway at
 storage.omacloud.computer (`server/`) with the key your computer got when
 you signed in with Google. The gateway checks that key, keeps each account
 to its own folder of the bucket behind it, and enforces the account's
@@ -72,9 +73,10 @@ computer that pushed it. Every computer remembers the last head it verified,
 so whoever can write to the bucket can't roll history back, withhold it,
 fork it or forge it without the other computers noticing.
 
-The heads, device chain and epoch records are objects in your bucket
-(`bucket.rs`). Appending is a create-only write (`If-None-Match: *`), which
-the bucket refuses if another computer took that position first. S3, R2,
+The heads, device chain and epoch records are objects in your storage
+(`bucket.rs`). Appending is a create-only write (`If-None-Match: *` on S3,
+Dropbox `files/upload` with add mode and strict conflicts), which
+the storage refuses if another computer took that position first. S3, R2,
 MinIO and Hetzner support it on buckets without versioning; a bucket with
 object lock keeps these records in a second, plain bucket
 (`--coordination-bucket`). Every write also rewrites a small `changed`
@@ -90,6 +92,13 @@ current members and the root, the others switch on their next sync and say
 so, and once all have, you delete the old key at your provider. A computer
 that was away through the whole change catches up with `omacloud bucket
 set-key --here-only`.
+
+With Dropbox, the shared key is an offline OAuth refresh token for an App
+folder scoped app. To remove a computer's storage access, one member
+authorizes the app again. The new token is sealed to the remaining members
+as above. The initiating computer temporarily keeps the old token in a
+private local file and revokes it with Dropbox's API after every remaining
+computer acknowledges the new one. It must stay available until then.
 
 With Omacloud storage, Omacloud issues the keys, the new one too: a
 computer asks for it with its current key (`server/src/keys.ts`) and
@@ -134,7 +143,8 @@ when another dotfile manager owns those files.
 - **A trusted contact** holds a card that is random without the pad
   Omacloud keeps, and Omacloud's pad is random without the card.
 - **A removed computer** keeps what it had synced before removal, and can
-  reach the bucket until its key changes.
+  reach storage until its bucket key changes or its old Dropbox token is
+  revoked.
 
 Nobody but your computers and your recovery code can read file contents,
 names, settings or keys.

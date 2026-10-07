@@ -29,7 +29,7 @@ diffy = "0.5.2"
 hmac = "0.12"
 # rustic_core's pack size settings take its ByteSize
 bytesize = "2"
-ureq = "3.4.2"
+ureq = { version = "3.4.2", features = ["json"] }
 
 [dev-dependencies]
 serde_json.workspace = true

@@ -7,7 +7,8 @@ settings, package lists and ssh and gpg keys follow; every version is kept.
 Sign in with Google and your files are kept on Omacloud storage
 ([omacloud.computer](https://omacloud.computer), in the EU, by invitation for
 now), or keep them in a storage bucket you rent yourself from a provider
-such as Hetzner, Cloudflare R2 or Backblaze B2. Either way everything is
+such as Hetzner, Cloudflare R2 or Backblaze B2, or use your own Dropbox app.
+Either way everything is
 encrypted on your computer before it leaves it: the storage only ever holds
 what it can't read. Underneath it's plain restic, so you can always restore
 without Omacloud. [docs/design.md](docs/design.md) explains how it protects
@@ -37,6 +38,8 @@ credentials there, and paste both keys back; Omacloud makes its own private
 bucket. With R2 or B2, make a bucket and a key just for it, and paste the
 bucket name and both keys. Then click Create Account. The app
 then shows your **recovery code** once: write it down and keep it offline.
+With Dropbox, create an App folder scoped app, enable the four file read and
+write scopes, then enter its app key and secret and authorize it from setup.
 With it you can add a computer when no other is at hand and recover
 everything; without it and without a computer, nobody can. [docs/providers.md](docs/providers.md) has the
 steps and notes for each storage provider.
@@ -55,6 +58,7 @@ From the command line, the same is:
 omacloud init --hosted                              # Omacloud storage: sign in with Google
 omacloud init --repo opendal:s3 --opt endpoint=https://fsn1.your-objectstorage.com \
   --opt region=fsn1 --opt bucket=<bucket> --opt access_key_id=<key id>   # asks for the secret key
+omacloud init --repo opendal:dropbox --opt client_id=<app key>  # asks for the app secret and authorization code
 omacloud join-code                                  # on a computer you have
 omacloud init --join-code <code>                    # on the new one (or OMACLOUD_JOIN_CODE)
 omacloud devices approve <fingerprint>              # back on the first
@@ -62,9 +66,10 @@ omacloud devices approve <fingerprint>              # back on the first
 
 Secrets never go on the command line: the secret key, recovery code and
 join code come from a prompt that doesn't echo, or from
-`OMACLOUD_SECRET_ACCESS_KEY`, `OMACLOUD_RECOVERY_CODE` and
-`OMACLOUD_JOIN_CODE`. The bucket's key is kept in the desktop keyring, not a
-file.
+`OMACLOUD_SECRET_ACCESS_KEY`, `OMACLOUD_DROPBOX_CLIENT_SECRET`,
+`OMACLOUD_DROPBOX_AUTH_CODE`, `OMACLOUD_RECOVERY_CODE` and
+`OMACLOUD_JOIN_CODE`. Storage credentials are kept in the desktop keyring,
+or in a private config file when a keyring is unavailable.
 
 ## What syncs
 
@@ -108,6 +113,11 @@ somewhere of your own first.
 Remove it under Devices (or `omacloud devices revoke <fingerprint>`). It
 can't sync anymore, but it still holds a key to your storage, so the app
 goes on to change that key.
+
+With Dropbox, authorize your app again when the device is removed. The other
+computers switch to the new token; Omacloud then revokes the old one. Keep
+the computer that started the change available until `omacloud bucket status`
+shows the old token is revoked.
 
 With Omacloud storage that takes no more: your other computers switch to a
 new key Omacloud makes, and once all have, the old keys are retired and the

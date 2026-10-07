@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Dropbox is available as your own storage. Create an App folder scoped
+  Dropbox app, authorize it from setup, and Omacloud keeps its encrypted
+  repository and coordination records there. Other computers join by code;
+  after removing one, a new authorization is shared with the remaining
+  computers and the old token is revoked when they have switched.
 - Deleting can be undone on Omacloud storage. Whatever your computers
   delete or replace there is kept for 14 days, encrypted like everything
   else and not counted in your quota, so if a removed computer or someone

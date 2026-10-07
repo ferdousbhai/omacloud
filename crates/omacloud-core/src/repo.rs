@@ -37,6 +37,9 @@ pub const CREDENTIAL_OPTIONS: &[&str] = &[
     "application_key_id",
     "application_key",
     "password",
+    "access_token",
+    "refresh_token",
+    "client_secret",
 ];
 
 /// Backend options that are this device's own business (transfer limits),
@@ -88,6 +91,11 @@ impl RepoSpec {
     fn raw_backends(&self) -> Result<RepositoryBackends> {
         let mut options = self.options.clone();
         _ = options.remove("bandwidth");
+        if self.repository == "opendal:dropbox" {
+            // Rustic creates 256 data directories in parallel. Limit API
+            // calls during that setup and during later pack uploads.
+            options.entry("connections".into()).or_insert("4".into());
+        }
         if !self.is_bucket() {
             options.retain(|k, _| !LOCAL_OPTIONS.contains(&k.as_str()));
         }
@@ -98,6 +106,9 @@ impl RepoSpec {
     }
 
     pub fn init(&self, password: &str) -> Result<MasterKey> {
+        if self.repository == "opendal:dropbox" {
+            crate::dropbox::DropboxCreate::new(&self.options)?.prepare_root()?;
+        }
         let repo = Repository::new(&RepositoryOptions::default(), &self.backends()?)?.init(
             &Credentials::password(password),
             &KeyOptions::default(),
@@ -197,6 +208,9 @@ impl RepoSpec {
     ///
     /// If `dest` already holds a repository, or reading or writing fails.
     pub fn copy_files_to(&self, dest: &Self) -> Result<usize> {
+        if dest.repository == "opendal:dropbox" {
+            crate::dropbox::DropboxCreate::new(&dest.options)?.prepare_root()?;
+        }
         let (from, to) = (self.backends()?.repository(), dest.backends()?.repository());
         anyhow::ensure!(
             to.list(FileType::Config)?.is_empty(),
@@ -289,4 +303,27 @@ pub(crate) fn hex(id: &Id) -> String {
 
 pub(crate) fn snapshot_hex(id: &SnapshotId) -> String {
     hex(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropbox_secrets_are_not_left_in_config() {
+        let spec = RepoSpec {
+            repository: "opendal:dropbox".into(),
+            options: [
+                ("root".into(), "/Omacloud".into()),
+                ("client_id".into(), "public-id".into()),
+                ("client_secret".into(), "secret".into()),
+                ("refresh_token".into(), "token".into()),
+            ]
+            .into(),
+        };
+        let safe = spec.without_credentials();
+        assert_eq!(safe.options.len(), 2);
+        assert!(!safe.options.contains_key("client_secret"));
+        assert!(!safe.options.contains_key("refresh_token"));
+    }
 }

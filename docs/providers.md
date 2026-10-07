@@ -6,7 +6,10 @@ transfer, at their prices; Omacloud itself charges nothing. Any S3-compatible st
 and what to watch for with each. The Omacloud app's setup page shows the
 same steps.
 
-Whatever the provider:
+You can also use Dropbox, through a Dropbox app you create. See [Dropbox](#dropbox)
+below.
+
+For S3 storage:
 
 - With Hetzner or other S3 storage, Omacloud can make the bucket itself;
   you only make a key. Otherwise keep the bucket private (the usual
@@ -77,3 +80,39 @@ bucket.
 You need the endpoint, the region (or `auto`), a bucket, and a key that can
 read and write it. For keeping computers in step Omacloud needs create-only
 writes (`If-None-Match: *`) on the bucket; MinIO and SeaweedFS have them.
+
+## Dropbox
+
+Dropbox support has not yet been tested against a live Dropbox account. It
+uses Dropbox's App folder access, so its token cannot reach the rest of your
+Dropbox. Omacloud puts its encrypted restic repository and coordination
+records under `Omacloud` in that app folder. The Dropbox desktop client may
+also download those encrypted objects if you sync the app folder locally;
+exclude that folder in Dropbox if you do not want a second local copy.
+
+1. In the [Dropbox App Console](https://www.dropbox.com/developers/apps),
+   create a **Scoped access** app with **App folder** access.
+2. On its Permissions tab, enable `files.metadata.read`,
+   `files.metadata.write`, `files.content.read`, and `files.content.write`.
+   Save the change before authorizing.
+3. Copy the app key and app secret from its Settings tab into Omacloud.
+   Click **Authorize with Dropbox**, approve access, and paste the code
+   Dropbox shows into Omacloud. Then click **Create Dropbox Account**.
+
+The command line equivalent is `omacloud init --repo opendal:dropbox --opt
+client_id=<app key>`; it asks for the app secret and authorization code. The
+authorization asks for offline access, which yields a refresh token. Omacloud
+keeps that token and the app secret in the desktop keyring, or in its private
+config file when no keyring is available. Other computers join with a join
+code as usual. To cut off a removed computer, authorize again under Devices.
+Omacloud keeps the old token in a private local file until every remaining
+computer switches, then revokes that token through Dropbox's API. Keep the
+computer that started the change available until revocation completes;
+`omacloud bucket status` shows its progress. Unlinking the entire app in
+Dropbox before then will stop sync.
+
+Dropbox's API is different from S3: Omacloud uses Dropbox's atomic add mode
+for coordination records and ordinary uploads for encrypted repository data.
+The first repository setup creates 256 restic data directories and may take
+longer than with an object bucket. Existing S3 accounts are not moved by
+choosing Dropbox; set up a new account for that location.
