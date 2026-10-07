@@ -22,6 +22,9 @@ docker run --rm --platform "$platform" \
   -e OUTPUT_UID="$(id -u)" -e OUTPUT_GID="$(id -g)" \
   -v "$PWD:/source:ro" -v "$output:/output" "$image" bash -euo pipefail -c '
     [[ $(uname -m) == "$BUILD_ARCH" ]]
+    # Docker's seccomp profile can reject pacman's Landlock setup. This
+    # setting applies only to the disposable build container.
+    sed -i "/^\[options\]$/a DisableSandbox" /etc/pacman.conf
     pacman-key --init
     if [[ $BUILD_ARCH == aarch64 ]]; then
       pacman-key --populate archlinuxarm
@@ -30,6 +33,7 @@ docker run --rm --platform "$platform" \
     fi
     pacman -Syu --noconfirm --needed base-devel cargo git gtk4 libadwaita libsecret
     git config --global --add safe.directory /source
+    git config --global --add safe.directory /source/.git
     git clone --no-hardlinks /source /build
     source_commit=$(git -C /source rev-parse HEAD)
     [[ $(git -C /build rev-parse HEAD) == "$source_commit" ]]

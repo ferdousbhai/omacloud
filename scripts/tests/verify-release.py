@@ -12,6 +12,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / 'verify-release.sh'
 def check(architecture, failure=''):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
+        (root / 'pacman.conf').write_text('[options]\n')
         binaries = root / 'binaries'
         binaries.mkdir()
         for name in ('omacloud', 'omacloud-app'):
@@ -43,6 +44,7 @@ for index, arg in enumerate(args):
         key, value = args[index + 1].split('=', 1)
         env[key] = value
 payload = args[-1].replace('/usr/bin/', os.environ['TEST_BINARIES'] + '/')
+payload = payload.replace('/etc/pacman.conf', os.environ['TEST_PACMAN_CONF'])
 result = subprocess.run(['bash', '-euo', 'pipefail', '-c', payload], env=env)
 sys.exit(result.returncode)
 ''')
@@ -52,6 +54,7 @@ sys.exit(result.returncode)
                'RUN_ARCH': 'wrong' if failure == 'machine' else architecture,
                'PACKAGE_ARCH': 'wrong' if failure == 'package' else architecture,
                'ARM_VERIFY_IMAGE': 'test/arch-arm', 'TEST_BINARIES': str(binaries),
+               'TEST_PACMAN_CONF': str(root / 'pacman.conf'),
                'TEST_LOG': str(log)}
         result = subprocess.run(['bash', str(SCRIPT), '1.2.3', architecture],
                                 env=env, capture_output=True, text=True)
