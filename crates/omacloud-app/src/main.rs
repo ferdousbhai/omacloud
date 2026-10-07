@@ -343,6 +343,17 @@ fn entry(title: &str) -> adw::EntryRow {
     adw::EntryRow::builder().title(title).build()
 }
 
+fn open_dropbox_authorization(ui: &Rc<Ui>, id: &str) {
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        ui.toast("Enter the Dropbox app key first");
+        return;
+    }
+    let url = format!(
+        "https://www.dropbox.com/oauth2/authorize?client_id={id}&response_type=code&token_access_type=offline"
+    );
+    gtk::UriLauncher::new(&url).launch(Some(&ui.window), None::<&gio::Cancellable>, |_| {});
+}
+
 /// Run `omacloud init` with `args` (and secrets in `env`, never on the
 /// command line), then show what came of it.
 fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
@@ -783,6 +794,75 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     own.add(&create_own);
     page.add(&own);
 
+    let dropbox = group(
+        "Or use Dropbox",
+        "Create a Dropbox app with App folder access and the four files.metadata \
+         and files.content read/write permissions. Omacloud keeps encrypted data inside \
+         that app folder.",
+    );
+    let console = button("Open Dropbox App Console", Some("flat"));
+    console.set_halign(gtk::Align::End);
+    let window = ui.window.clone();
+    console.connect_clicked(move |_| {
+        gtk::UriLauncher::new("https://www.dropbox.com/developers/apps").launch(
+            Some(&window),
+            None::<&gio::Cancellable>,
+            |_| {},
+        );
+    });
+    dropbox.add(&console);
+    let app_key = entry("Dropbox app key");
+    let app_secret = adw::PasswordEntryRow::builder()
+        .title("Dropbox app secret")
+        .build();
+    let auth_code = adw::PasswordEntryRow::builder()
+        .title("Authorization code from Dropbox")
+        .build();
+    dropbox.add(&app_key);
+    dropbox.add(&app_secret);
+    let authorize = button("Authorize with Dropbox", Some("flat"));
+    authorize.set_halign(gtk::Align::End);
+    {
+        let (ui, app_key) = (ui.clone(), app_key.clone());
+        authorize.connect_clicked(move |_| {
+            open_dropbox_authorization(&ui, app_key.text().trim());
+        });
+    }
+    dropbox.add(&authorize);
+    dropbox.add(&auth_code);
+    let create_dropbox = button("Create Dropbox Account", None);
+    create_dropbox.set_halign(gtk::Align::End);
+    create_dropbox.set_margin_top(12);
+    {
+        let (ui, sync_args) = (ui.clone(), sync_args.clone());
+        create_dropbox.connect_clicked(move |_| {
+            let id = app_key.text().trim().to_string();
+            let secret = app_secret.text().to_string();
+            let code = auth_code.text().trim().to_string();
+            if id.is_empty() || secret.is_empty() || code.is_empty() {
+                ui.toast("Enter the app key, app secret and authorization code");
+                return;
+            }
+            let mut args = vec![
+                "--repo".to_string(),
+                "opendal:dropbox".to_string(),
+                "--opt".to_string(),
+                format!("client_id={id}"),
+            ];
+            args.extend(sync_args());
+            run_init(
+                &ui,
+                args,
+                vec![
+                    ("OMACLOUD_DROPBOX_CLIENT_SECRET".to_string(), secret),
+                    ("OMACLOUD_DROPBOX_AUTH_CODE".to_string(), code),
+                ],
+            );
+        });
+    }
+    dropbox.add(&create_dropbox);
+    page.add(&dropbox);
+
     // join
     let join = group(
         "Add this computer to your account",
@@ -887,6 +967,10 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     let storage = group("Storage", "");
     let repo = &s["repo"];
     let place = match repo["kind"].as_str() {
+        Some("dropbox") if !text(&repo["root"]).is_empty() => {
+            format!("Dropbox app folder {}", text(&repo["root"]))
+        }
+        Some("dropbox") => "Dropbox app folder".to_string(),
         Some("bucket") => {
             let host = text(&repo["endpoint"]);
             let host = host
@@ -1248,6 +1332,7 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     let self_hosted = s["self_hosted"].as_bool().unwrap_or(false);
     // Omacloud storage: Omacloud makes the new key and retires the old ones
     let hosted = s["hosted"].as_bool().unwrap_or(false);
+    let dropbox_id = (s["repo"]["kind"] == "dropbox").then(|| text(&s["repo"]["client_id"]));
     let me = &s["this_device"];
     let g = group(
         "Devices",
@@ -1273,15 +1358,21 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         } else if self_hosted {
             let remove = button("Remove…", Some("flat"));
             let ui2 = ui.clone();
+            let dropbox_id = dropbox_id.clone();
             remove.connect_clicked(move |_| {
                 let ui3 = ui2.clone();
                 let fp2 = fp.clone();
+                let dropbox_id = dropbox_id.clone();
                 ui2.confirm(
                     &format!("Remove {name}?"),
                     if hosted {
                         "It can't sync anymore. Your other computers then switch to a new storage \
                          key, and once they have, the old keys stop working: that locks it out of \
                          your storage too."
+                    } else if dropbox_id.is_some() {
+                        "It can't sync anymore, but it still holds a Dropbox token. Authorize \
+                         Omacloud again, switch every computer to the new token, then revoke the \
+                         old token. Omacloud revokes it after all have switched."
                     } else {
                         "It can't sync anymore, but it still holds your bucket's key. To lock it out, \
                          make a new key at your provider and switch every computer to it: that's the \
@@ -1294,6 +1385,7 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
                     )],
                     move |_| {
                         let ui4 = ui3.clone();
+                        let dropbox_id = dropbox_id.clone();
                         run_then(
                             &["omacloud", "devices", "revoke", &fp2],
                             Vec::new(),
@@ -1302,7 +1394,7 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
                                 Err(e) => ui4.toast(&e),
                                 Ok(_) => {
                                     ui4.refresh();
-                                    change_bucket_key(&ui4, hosted);
+                                    change_bucket_key(&ui4, hosted, dropbox_id.clone());
                                 }
                             },
                         );
@@ -1352,7 +1444,7 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         page.add(&g);
     }
     if self_hosted {
-        page.add(&bucket_key(ui, &s["bucket_key"], hosted));
+        page.add(&bucket_key(ui, &s["bucket_key"], hosted, dropbox_id));
     }
     page
 }
@@ -1381,7 +1473,12 @@ fn show_join_code(ui: &Rc<Ui>) {
 /// The account's bucket key: every computer holds it, so a lost one is
 /// locked out only by a new key, which the others switch to. With Omacloud
 /// storage, Omacloud makes the key and retires the old ones.
-fn bucket_key(ui: &Rc<Ui>, status: &Value, hosted: bool) -> adw::PreferencesGroup {
+fn bucket_key(
+    ui: &Rc<Ui>,
+    status: &Value,
+    hosted: bool,
+    dropbox_id: Option<String>,
+) -> adw::PreferencesGroup {
     let empty = Vec::new();
     let computers = status["computers"].as_array().unwrap_or(&empty);
     let waiting = computers
@@ -1404,6 +1501,23 @@ fn bucket_key(ui: &Rc<Ui>, status: &Value, hosted: bool) -> adw::PreferencesGrou
                 computers.len()
             )
         }
+    } else if dropbox_id.is_some() && status.is_null() {
+        "Every computer holds a Dropbox refresh token. To lock out a removed computer, \
+         authorize again here; Omacloud revokes the old token after the others switch."
+            .to_string()
+    } else if dropbox_id.is_some() && waiting == 0 {
+        if status["retired"].as_bool() == Some(true) {
+            "Every computer is on the latest Dropbox token, and the old one is revoked."
+        } else {
+            "Every computer is on the latest Dropbox token. Check the computer that changed \
+             it to confirm the old token was revoked."
+        }
+        .to_string()
+    } else if dropbox_id.is_some() {
+        format!(
+            "{waiting} of {} computers still to switch. Keep the old Dropbox token active until then.",
+            computers.len()
+        )
     } else if status.is_null() {
         "Every computer holds your bucket's key. To lock out a lost one, make a new key at \
          your provider and switch to it here."
@@ -1419,7 +1533,14 @@ fn bucket_key(ui: &Rc<Ui>, status: &Value, hosted: bool) -> adw::PreferencesGrou
             computers.len()
         )
     };
-    let g = group("Bucket key", &description);
+    let g = group(
+        if dropbox_id.is_some() {
+            "Dropbox token"
+        } else {
+            "Bucket key"
+        },
+        &description,
+    );
     // who has switched matters only while some haven't
     for c in computers.iter().filter(|_| waiting > 0) {
         let done = c["switched"].as_bool() == Some(true);
@@ -1428,20 +1549,68 @@ fn bucket_key(ui: &Rc<Ui>, status: &Value, hosted: bool) -> adw::PreferencesGrou
             if done { "On the new key" } else { "Not yet" },
         ));
     }
-    let change = button("Change Key…", Some("flat"));
+    let change = button(
+        if dropbox_id.is_some() {
+            "Change Token…"
+        } else {
+            "Change Key…"
+        },
+        Some("flat"),
+    );
     let ui2 = ui.clone();
-    change.connect_clicked(move |_| change_bucket_key(&ui2, hosted));
+    change.connect_clicked(move |_| change_bucket_key(&ui2, hosted, dropbox_id.clone()));
     g.set_header_suffix(Some(&change));
     g
 }
 
-fn change_bucket_key(ui: &Rc<Ui>, hosted: bool) {
+fn change_bucket_key(ui: &Rc<Ui>, hosted: bool, dropbox_id: Option<String>) {
     if hosted {
         // nothing to make or paste: Omacloud makes the key
         ui.act(
             &["omacloud", "bucket", "set-key"],
             "Key changed: the other computers switch on their next sync",
         );
+        return;
+    }
+    if let Some(id) = dropbox_id {
+        let code = adw::PasswordEntryRow::builder()
+            .title("New authorization code")
+            .build();
+        let list = gtk::ListBox::new();
+        list.add_css_class("boxed-list");
+        list.set_selection_mode(gtk::SelectionMode::None);
+        list.append(&code);
+        let dialog = adw::AlertDialog::new(
+            Some("Change the Dropbox token"),
+            Some(
+                "Authorize the Dropbox app again and paste the code. Omacloud revokes the \
+                  old token after every remaining computer switches.",
+            ),
+        );
+        let open = button("Authorize with Dropbox", Some("flat"));
+        let ui_open = ui.clone();
+        open.connect_clicked(move |_| {
+            open_dropbox_authorization(&ui_open, &id);
+        });
+        list.append(&open);
+        dialog.set_extra_child(Some(&list));
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("change", "Change Token");
+        dialog.set_close_response("cancel");
+        let ui2 = ui.clone();
+        dialog.connect_response(Some("change"), move |_, _| {
+            let value = code.text().trim().to_string();
+            if value.is_empty() {
+                ui2.toast("Paste the authorization code");
+                return;
+            }
+            ui2.act_env(
+                &["omacloud", "bucket", "set-key"],
+                vec![("OMACLOUD_DROPBOX_AUTH_CODE".to_string(), value)],
+                "Dropbox token changed: the other computers switch on their next sync",
+            );
+        });
+        dialog.present(Some(&ui.window));
         return;
     }
     let id = adw::EntryRow::builder().title("New access key").build();

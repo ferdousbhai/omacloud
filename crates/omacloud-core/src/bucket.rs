@@ -31,6 +31,8 @@ use crate::{
     head::Coordinator,
 };
 
+use crate::dropbox::DropboxCreate;
+
 fn runtime() -> &'static tokio::runtime::Runtime {
     static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| {
@@ -60,6 +62,7 @@ pub fn key_refused(err: &anyhow::Error) -> bool {
 
 pub struct BucketCoordinator {
     op: Operator,
+    dropbox: Option<DropboxCreate>,
     /// The last seq seen per log; appends only add at the end, so finding
     /// the latest is probing forward from here.
     last: Mutex<HashMap<&'static str, u64>>,
@@ -74,10 +77,17 @@ impl BucketCoordinator {
     /// If the options don't make an operator.
     pub fn new(scheme: &str, options: &BTreeMap<String, String>) -> Result<Self> {
         let _guard = runtime().enter();
+        let dropbox = (scheme == "dropbox")
+            .then(|| DropboxCreate::new(options))
+            .transpose()?;
+        if let Some(dropbox) = &dropbox {
+            dropbox.prepare_root()?;
+        }
         let op = opendal::Operator::via_iter(scheme, options.clone())
             .with_context(|| format!("opening the {scheme} location for coordination"))?;
         Ok(Self {
             op: Operator::new(op)?,
+            dropbox,
             last: Mutex::new(HashMap::new()),
         })
     }
@@ -97,6 +107,13 @@ impl BucketCoordinator {
 
     /// Write only if nothing is there: `Ok(false)` if something is.
     fn create<T: Serialize>(&self, key: &str, value: &T) -> Result<bool> {
+        if let Some(dropbox) = &self.dropbox {
+            let written = dropbox.create(key, &serde_json::to_vec(value)?)?;
+            if written {
+                self.touch();
+            }
+            return Ok(written);
+        }
         let _guard = runtime().enter();
         let opts = options::WriteOptions {
             if_not_exists: true,
@@ -120,6 +137,9 @@ impl BucketCoordinator {
     }
 
     fn put<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        if let Some(dropbox) = &self.dropbox {
+            dropbox.prepare_key(key)?;
+        }
         let _guard = runtime().enter();
         self.op
             .write(key, serde_json::to_vec(value)?)

@@ -45,8 +45,9 @@ a test account and a local build.
 ## Secrets
 
 Secrets never go on a command line, where other processes can read them:
-`OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE` and
-`OMACLOUD_SECRET_ACCESS_KEY` come from the environment, or a prompt that
+`OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE`,
+`OMACLOUD_SECRET_ACCESS_KEY`, `OMACLOUD_DROPBOX_CLIENT_SECRET` and
+`OMACLOUD_DROPBOX_AUTH_CODE` come from the environment, or a prompt that
 doesn't echo. A computer's bucket key lives in the desktop
 keyring; scripts that make test accounts clear their keyring entries on exit
 (`OMACLOUD_KEYRING=0` keeps keys in the config file instead).
