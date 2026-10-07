@@ -111,7 +111,7 @@ an Arch Linux ARM image with pacman and archlinuxarm-keyring installed.
 For example, import the official [generic AArch64 root filesystem](https://archlinuxarm.org/platforms/armv8/generic):
 
 ```sh
-curl -fL https://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz -o /tmp/omacloud-arch-arm.tar.gz
+curl -fL https://ca.us.mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz -o /tmp/omacloud-arch-arm.tar.gz
 docker import --platform linux/arm64 /tmp/omacloud-arch-arm.tar.gz omacloud-arch-arm
 ```
 

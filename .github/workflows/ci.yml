@@ -76,7 +76,7 @@ jobs:
       - name: Prepare Arch Linux ARM image
         if: matrix.architecture == 'aarch64'
         run: |
-          curl -fL --retry 3 https://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz -o "$RUNNER_TEMP/arch-arm.tar.gz"
+          curl -fL --retry 3 https://ca.us.mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz -o "$RUNNER_TEMP/arch-arm.tar.gz"
           docker import --platform linux/arm64 "$RUNNER_TEMP/arch-arm.tar.gz" omacloud-arch-arm
       - name: Build and check native package
         env:
