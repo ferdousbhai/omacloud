@@ -62,6 +62,10 @@ const MAX_COMPARE: u64 = 64 << 20;
 /// then newest first.
 type PullOrder = (bool, u8, std::cmp::Reverse<Option<Timestamp>>);
 
+/// Settings backups kept: the newest this many, one per second in which a
+/// pull replaced or deleted settings.
+const KEEP_BACKUPS: usize = 100;
+
 /// Files larger than this come after all the smaller ones in a pull.
 const BIG_FILE: u64 = 1 << 20;
 /// Concurrent fetches during a pull; they wait on the network, not the CPU.
@@ -1022,7 +1026,8 @@ impl Engine {
                 .local(&tree_path)
                 .ok_or_else(|| anyhow!("settings sync is off"))?;
             self.back_up(&tree_path)?;
-            fs::copy(&parked, &dest)?;
+            fs::create_dir_all(dest.parent().ok_or_else(|| anyhow!("bad path"))?)?;
+            replace_file(&dest, &fs::read(&parked)?)?;
         }
         _ = fs::remove_file(&parked);
         _ = self.pending.insert(tree_path);
@@ -1042,10 +1047,14 @@ impl Engine {
             .to_zoned(TimeZone::system())
             .strftime("%Y%m%d-%H%M%S")
             .to_string();
-        let dest = s.backups.join("history").join(stamp).join(rest);
-        fs::create_dir_all(dest.parent().ok_or_else(|| anyhow!("bad path"))?)?;
+        let history = s.backups.join("history");
+        let dest = history.join(stamp).join(rest);
+        private_dirs(
+            &s.backups,
+            dest.parent().ok_or_else(|| anyhow!("bad path"))?,
+        )?;
         fs::copy(&src, &dest)?;
-        Ok(())
+        prune_history(&history, KEEP_BACKUPS)
     }
 
     /// Mark paths as possibly changed: absolute under the folder or (for
@@ -1568,10 +1577,11 @@ impl Engine {
         }
         // deepest first, so directories empty out before they're removed and
         // a directory replaced by a file is gone before the file is written
+        let trees = Trees::new(repo);
         for path in deletes.iter().rev() {
-            self.remove(path)?;
+            self.remove(path, trees.lookup(base_tree, path)?.as_ref())?;
         }
-        self.write_all(repo, &writes)?;
+        stats.conflicts += self.write_all(repo, &writes)?;
         self.reserved.clear(); // the copies exist on disk now
         for (path, _) in &writes {
             // conflict copies are new here; push them like any local file
@@ -1654,7 +1664,7 @@ impl Engine {
                 if let Some(merged) = settings::merge(&ancestor, &ours, &theirs) {
                     info!("merged {} with {}'s changes", path.display(), self.device);
                     self.back_up(&path)?;
-                    fs::write(&dest, merged)?;
+                    replace_file(&dest, &merged)?;
                     _ = self.pending.insert(path);
                 } else {
                     stats.conflicts += 1;
@@ -1675,8 +1685,11 @@ impl Engine {
             return Ok(());
         };
         let parked = s.backups.join("held").join(rest);
-        fs::create_dir_all(parked.parent().ok_or_else(|| anyhow!("bad path"))?)?;
-        fs::write(&parked, content)?;
+        private_dirs(
+            &s.backups,
+            parked.parent().ok_or_else(|| anyhow!("bad path"))?,
+        )?;
+        write_private(&parked, content)?;
         _ = self.state.held.insert(path.to_path_buf(), parked);
         Ok(())
     }
@@ -1773,12 +1786,20 @@ impl Engine {
         Ok(Some((count, moved)))
     }
 
-    fn remove(&self, path: &Path) -> Result<()> {
+    /// Delete `path` here, unless it changed since `base` (the node it was).
+    fn remove(&mut self, path: &Path, base: Option<&Node>) -> Result<()> {
         let Some(dest) = self.local(path) else {
             return Ok(());
         };
         // Documents stays, even emptied: it's a place, not a synced file
         if self.is_folder_root(path) {
+            return Ok(());
+        }
+        let is_dir = fs::symlink_metadata(&dest).is_ok_and(|m| m.is_dir());
+        if !is_dir && changed_since(&dest, base) {
+            // saved after this cycle looked: a change beats a delete
+            info!("{} changed here: kept, not deleted", path.display());
+            _ = self.pending.insert(path.to_path_buf());
             return Ok(());
         }
         if path.starts_with(SETTINGS) {
@@ -1789,7 +1810,7 @@ impl Engine {
                 _ => return Ok(()),
             }
         }
-        if fs::symlink_metadata(&dest).is_ok_and(|m| m.is_dir()) {
+        if is_dir {
             // only an empty directory is removed; anything in it stays
             _ = fs::remove_dir(&dest);
         } else {
@@ -1871,30 +1892,35 @@ impl Engine {
 
     /// Write every node, fetching contents concurrently: each file is at
     /// least one request to the repository, and in sequence a pull of many
-    /// small files over a slow link would take minutes.
-    fn write_all(&mut self, repo: &Repo, writes: &[(PathBuf, Node)]) -> Result<()> {
+    /// small files over a slow link would take minutes. Returns how many
+    /// paths were saved here meanwhile and kept (see [`changed_since`]).
+    fn write_all(&mut self, repo: &Repo, writes: &[(PathBuf, Node)]) -> Result<usize> {
         for (path, node) in writes {
             self.prepare_write(path, node)?;
         }
         // what a person reaches for first arrives first: small files before
         // large, documents before pictures, newest first. A new machine is
         // usable while its photos still stream in.
-        let mut dests: Vec<(PathBuf, &Node, PullOrder)> = writes
-            .iter()
-            .filter_map(|(path, node)| {
-                let order = (
-                    node.meta.size > BIG_FILE,
-                    self.folder_rank(path),
-                    std::cmp::Reverse(node.meta.mtime),
-                );
-                self.local(path).map(|d| (d, node, order))
-            })
-            .collect();
-        dests.sort_by_key(|d| d.2);
-        let total: u64 = dests.iter().map(|(_, n, _)| n.meta.size).sum();
+        let (base_tree, trees) = (self.base_tree()?, Trees::new(repo));
+        let mut dests = Vec::new();
+        for (path, node) in writes {
+            let Some(dest) = self.local(path) else {
+                continue;
+            };
+            let order: PullOrder = (
+                node.meta.size > BIG_FILE,
+                self.folder_rank(path),
+                std::cmp::Reverse(node.meta.mtime),
+            );
+            let base = trees.lookup(base_tree, path)?;
+            dests.push((path, dest, node, base, order));
+        }
+        dests.sort_by_key(|d| d.4);
+        let total: u64 = dests.iter().map(|d| d.2.meta.size).sum();
         let next = std::sync::atomic::AtomicUsize::new(0);
         let done_bytes = std::sync::atomic::AtomicU64::new(0);
         let failed: Mutex<Option<anyhow::Error>> = Mutex::new(None);
+        let kept: Mutex<Vec<(usize, PathBuf)>> = Mutex::new(Vec::new());
         let last_report = Mutex::new(Instant::now());
         std::thread::scope(|scope| {
             for _ in 0..PULL_THREADS.min(dests.len()) {
@@ -1905,12 +1931,16 @@ impl Engine {
                             return;
                         }
                         let i = next.fetch_add(1, Relaxed);
-                        let Some((dest, node, _)) = dests.get(i) else {
+                        let Some((_, dest, node, base, _)) = dests.get(i) else {
                             return;
                         };
-                        if let Err(e) = write_file(dest, repo, node) {
-                            _ = failed.lock().unwrap().get_or_insert(e);
-                            return;
+                        match write_file(dest, repo, node, base.as_ref()) {
+                            Ok(None) => {}
+                            Ok(Some(tmp)) => kept.lock().unwrap().push((i, tmp)),
+                            Err(e) => {
+                                _ = failed.lock().unwrap().get_or_insert(e);
+                                return;
+                            }
                         }
                         let done = done_bytes.fetch_add(node.meta.size, Relaxed) + node.meta.size;
                         let mut last = last_report.lock().unwrap();
@@ -1928,7 +1958,43 @@ impl Engine {
                 });
             }
         });
-        failed.into_inner().unwrap().map_or(Ok(()), Err)
+        let kept = kept.into_inner().unwrap();
+        // saved here during the pull: the new version lands beside it
+        for (i, tmp) in &kept {
+            let (path, dest, node, _, _) = &dests[*i];
+            if path.starts_with(SETTINGS) {
+                // no copies among settings: hold the other version instead
+                warn!(
+                    "{} changed here during a pull; kept this version, the other waits for `omacloud settings resolve`",
+                    path.display()
+                );
+                if node.is_file() {
+                    self.park(path, &fs::read(tmp)?)?;
+                }
+                _ = fs::remove_file(tmp);
+                continue;
+            }
+            let mtime = fs::symlink_metadata(dest)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| Timestamp::try_from(t).ok());
+            let device = self.device.clone();
+            let copy = self.free_conflict_name(path, mtime, &device);
+            info!(
+                "{} changed here during a pull; kept as {}",
+                path.display(),
+                copy.display()
+            );
+            if let Err(e) = fs::rename(dest, self.on_disk(&copy)) {
+                // gone meanwhile: nothing to keep
+                if e.kind() != ErrorKind::NotFound {
+                    return Err(e).with_context(|| format!("moving {} aside", dest.display()));
+                }
+            }
+            _ = self.pending.insert(copy);
+            fs::rename(tmp, dest)?;
+        }
+        failed.into_inner().unwrap().map_or(Ok(kept.len()), Err)
     }
 
     /// Which folders come first in a pull: Desktop and Documents (and
@@ -2001,27 +2067,29 @@ impl Engine {
 }
 
 /// Write `node` at `path` through a temp file renamed into place, with the
-/// synced mtime and mode. The parent directory must exist.
-fn write_file(dest: &Path, repo: &Repo, node: &Node) -> Result<()> {
+/// synced mtime and mode. The parent directory must exist. If what's at
+/// `path` changed since `base` (the node it was), it stays, and the temp
+/// file holding the new version is returned.
+fn write_file(
+    dest: &Path,
+    repo: &Repo,
+    node: &Node,
+    base: Option<&Node>,
+) -> Result<Option<PathBuf>> {
     let dest = dest.to_path_buf();
     if node.is_dir() {
         fs::create_dir_all(&dest)?;
         if let Some(mode) = node.meta.mode {
             fs::set_permissions(&dest, fs::Permissions::from_mode(mode & 0o777))?;
         }
-        return Ok(());
+        return Ok(None);
     }
-    // already here from a pull that was cut off: same size and time, and
-    // (chunked locally, nothing downloaded) the same content
-    if node.is_file()
-        && fs::symlink_metadata(&dest).is_ok_and(|m| {
-            m.is_file()
-                && m.len() == node.meta.size
-                && m.modified().ok().and_then(|t| Timestamp::try_from(t).ok()) == node.meta.mtime
-        })
-        && file_matches(repo, &dest, node)?
-    {
-        return Ok(());
+    // already here, from a pull that was cut off or because the same file
+    // was put here some other way (copied over before this folder synced):
+    // the same content needs no rewrite and no conflict copy, only the
+    // other computer's time and mode
+    if node.is_file() && same_file_here(repo, &dest, node)? {
+        return Ok(None);
     }
     let parent = dest.parent().ok_or_else(|| anyhow!("bad path"))?;
     let tmp = parent.join(format!("{TEMP_PREFIX}{}", node.name().to_string_lossy()));
@@ -2038,7 +2106,85 @@ fn write_file(dest: &Path, repo: &Repo, node: &Node) -> Result<()> {
             f.set_modified(SystemTime::from(mtime))?;
         }
     }
+    // checked last, as late as can be: a download can take a while
+    if changed_since(&dest, base) {
+        return Ok(Some(tmp));
+    }
     fs::rename(&tmp, &dest)?;
+    Ok(None)
+}
+
+/// Whether what's at `path` is no longer what the base recorded (`base`, or
+/// nothing): saved after this cycle looked for local changes. A pull must
+/// not replace or delete it. Nothing there is no change worth keeping.
+fn changed_since(path: &Path, base: Option<&Node>) -> bool {
+    let Ok(m) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    let Some(b) = base else {
+        return true;
+    };
+    if m.file_type().is_symlink() {
+        !matches!(b.node_type, NodeType::Symlink { .. })
+            || fs::read_link(path).map_or(true, |t| t.as_path() != b.node_type.to_link())
+    } else if m.is_file() {
+        let mtime = m.modified().ok().and_then(|t| Timestamp::try_from(t).ok());
+        !(b.is_file() && b.meta.size == m.len() && b.meta.mtime == mtime)
+    } else {
+        !(m.is_dir() && b.is_dir())
+    }
+}
+
+/// Replace the file at `path` with `content` the way an editor saves: a temp
+/// file beside it, flushed, renamed over it. A crash leaves the old version
+/// or the new one, never half of one. Keeps the file's mode, and writes
+/// through a symlink to where it points.
+fn replace_file(path: &Path, content: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let path = match fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_symlink() => fs::canonicalize(path)?,
+        _ => path.to_path_buf(),
+    };
+    let (parent, name) = path
+        .parent()
+        .zip(path.file_name())
+        .ok_or_else(|| anyhow!("bad path"))?;
+    let tmp = parent.join(format!("{TEMP_PREFIX}{}", name.to_string_lossy()));
+    let mut f = File::create(&tmp)?;
+    f.write_all(content)?;
+    if let Ok(m) = fs::metadata(&path) {
+        f.set_permissions(m.permissions())?;
+    }
+    f.sync_all()?;
+    fs::rename(&tmp, &path)?;
+    File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+/// Make `dir` and its parents under `root`, readable by this user alone:
+/// settings backups and held versions can hold anything a setting does.
+fn private_dirs(root: &Path, dir: &Path) -> Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
+    // made by an earlier version, open to all
+    fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+/// Keep the newest `keep` backups in `history` (one directory each, named
+/// by time) and delete the rest.
+fn prune_history(history: &Path, keep: usize) -> Result<()> {
+    let mut stamps: Vec<PathBuf> = fs::read_dir(history)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_dir())
+        .collect();
+    stamps.sort();
+    for old in &stamps[..stamps.len().saturating_sub(keep)] {
+        fs::remove_dir_all(old).with_context(|| format!("pruning {}", old.display()))?;
+    }
     Ok(())
 }
 
@@ -2053,11 +2199,103 @@ fn sync_filesystem(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Whether the file at `path` holds exactly the content of `node`.
+/// Whether the file at `path` holds exactly the content of `node`, compared
+/// a blob at a time: a large file is never held in memory whole.
 fn file_matches(repo: &Repo, path: &Path, node: &Node) -> Result<bool> {
-    let mut theirs = Vec::with_capacity(usize::try_from(node.meta.size).unwrap_or(0));
-    repo.dump(node, &mut theirs)?;
-    Ok(fs::read(path)? == theirs)
+    content_matches(repo, &File::open(path)?, node)
+}
+
+fn content_matches(repo: &Repo, file: &File, node: &Node) -> Result<bool> {
+    let mut same = SameAs::new(io::BufReader::new(file));
+    match repo.dump(node, &mut same) {
+        Ok(()) => Ok(same.at_end()?),
+        Err(_) if same.differs => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Whether the file at `path` already holds `node`'s content; if so it takes
+/// the node's mode and time. All through one handle, and only if nothing
+/// saved over it meanwhile: a save landing now must keep its own time, or
+/// it would look unchanged and never sync. Best effort, and without writing
+/// to it (it may be read-only): a mode or time that doesn't stick only
+/// means the same content is sent again, which costs nothing.
+fn same_file_here(repo: &Repo, path: &Path, node: &Node) -> Result<bool> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    // a regular file before opening it, and opened without waiting: opening
+    // a named pipe would wait for a writer that never comes
+    if !fs::symlink_metadata(path).is_ok_and(|m| m.is_file()) {
+        return Ok(false);
+    }
+    let Ok(file) = File::options()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+    else {
+        return Ok(false);
+    };
+    let before = file.metadata()?;
+    if !before.is_file() || before.len() != node.meta.size || !content_matches(repo, &file, node)? {
+        return Ok(false);
+    }
+    let after = file.metadata()?;
+    let unchanged = after.len() == before.len()
+        && after.modified().ok() == before.modified().ok()
+        && fs::symlink_metadata(path)
+            .is_ok_and(|m| m.is_file() && m.dev() == before.dev() && m.ino() == before.ino());
+    if !unchanged {
+        return Ok(false);
+    }
+    if let Some(mode) = node.meta.mode {
+        _ = file.set_permissions(fs::Permissions::from_mode(mode & 0o777));
+    }
+    if let Some(mtime) = node.meta.mtime {
+        _ = file.set_modified(SystemTime::from(mtime));
+    }
+    Ok(true)
+}
+
+/// A writer that checks what's written against a reader, and fails at the
+/// first difference.
+struct SameAs<R> {
+    r: R,
+    buf: Vec<u8>,
+    differs: bool,
+}
+
+impl<R: Read> SameAs<R> {
+    fn new(r: R) -> Self {
+        Self {
+            r,
+            buf: Vec::new(),
+            differs: false,
+        }
+    }
+
+    /// Whether everything written matched and the reader has nothing more.
+    fn at_end(mut self) -> io::Result<bool> {
+        Ok(!self.differs && self.r.read(&mut [0u8; 1])? == 0)
+    }
+}
+
+impl<R: Read> io::Write for SameAs<R> {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        self.buf.resize(data.len(), 0);
+        let same = match self.r.read_exact(&mut self.buf) {
+            Ok(()) => self.buf == data,
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => false,
+            Err(e) => return Err(e),
+        };
+        if !same {
+            self.differs = true;
+            return Err(io::Error::other("content differs"));
+        }
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 fn describe(node: Option<&Node>) -> String {
@@ -2304,4 +2542,58 @@ fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+
+    #[test]
+    fn same_as_finds_any_difference() {
+        let same = |file: &[u8], blobs: &[&[u8]]| {
+            let mut w = SameAs::new(file);
+            blobs.iter().all(|b| w.write_all(b).is_ok()) && w.at_end().unwrap()
+        };
+        assert!(same(b"hello world", &[b"hello", b" world"]));
+        assert!(same(b"", &[]));
+        assert!(!same(b"hello world", &[b"hello", b" there"]));
+        assert!(!same(b"hello world", &[b"hello"])); // file is longer
+        assert!(!same(b"hello", &[b"hello", b" world"])); // file is shorter
+    }
+
+    #[test]
+    fn settings_history_keeps_the_newest() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        for s in 1..=5 {
+            fs::create_dir_all(tmp.path().join(format!("20261007-00000{s}/.config")))?;
+        }
+        prune_history(tmp.path(), 3)?;
+        let mut left: Vec<_> = fs::read_dir(tmp.path())?
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            ["20261007-000003", "20261007-000004", "20261007-000005"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn replacing_a_file_keeps_its_mode_and_symlink() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let real = tmp.path().join("real.conf");
+        fs::write(&real, "old")?;
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o640))?;
+        let link = tmp.path().join("link.conf");
+        std::os::unix::fs::symlink(&real, &link)?;
+        replace_file(&link, b"new")?;
+        assert!(fs::symlink_metadata(&link)?.file_type().is_symlink());
+        assert_eq!(fs::read_to_string(&real)?, "new");
+        assert_eq!(fs::metadata(&real)?.permissions().mode() & 0o777, 0o640);
+        assert_eq!(fs::read_dir(tmp.path())?.count(), 2); // no temp file left
+        Ok(())
+    }
 }

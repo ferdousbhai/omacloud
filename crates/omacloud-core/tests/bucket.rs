@@ -189,3 +189,40 @@ fn every_write_moves_the_change_marker() -> Result<()> {
     assert_ne!(watcher.marker()?, after_push);
     Ok(())
 }
+
+/// A stray object far past the end of a log, as anyone with the bucket key
+/// could write, is an error to report, not a crash or an endless read.
+#[test]
+fn a_stray_entry_far_ahead_is_refused() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let t = tmp.path();
+    let repo = RepoSpec {
+        repository: t.join("repo").to_string_lossy().into_owned(),
+        options: BTreeMap::new(),
+    };
+    let coord_dir = t.join("coordination");
+    let ka = key();
+    let created = account::create(coordinator(&coord_dir)?.as_ref(), &repo, &ka, "a")?;
+    let mut a = engine(
+        coordinator(&coord_dir)?,
+        &created.root,
+        "a",
+        &ka,
+        &repo,
+        &t.join("A"),
+    )?;
+    fs::write(t.join("A/hello.txt"), "hi\n")?;
+    a.sync()?;
+    let head = fs::read(coord_dir.join("heads/00000000000000000001.json"))?;
+    for seq in [u64::MAX, 1 << 40] {
+        let stray = coord_dir.join(format!("heads/{seq}.json"));
+        fs::write(&stray, &head)?;
+        // a computer starting fresh lists the log
+        let c = coordinator(&coord_dir)?;
+        assert!(c.head().is_err());
+        assert!(c.since(0).is_err());
+        fs::remove_file(stray)?;
+    }
+    assert!(coordinator(&coord_dir)?.head()?.is_some());
+    Ok(())
+}

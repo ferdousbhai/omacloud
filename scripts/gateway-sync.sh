@@ -2,7 +2,8 @@
 # Two computers sync through the Omacloud storage Worker (server/, run
 # locally by wrangler) with SeaweedFS as the bucket behind; another
 # account's key is shown it can't reach the first account's folder; then
-# two computers sign in (with a stand-in for Google) and sync.
+# two computers sign in (with a stand-in for Google) and sync, and the
+# waitlist takes a sign-in and a request from the website.
 #
 #   scripts/gateway-sync.sh        (needs docker, node and python3)
 set -euo pipefail
@@ -77,6 +78,7 @@ cat >"$work/dev.vars" <<EOF
 UPSTREAM_SECRET=$upsecret
 GOOGLE_SECRET=google-test-secret
 MASTER_KEY=$master
+TURNSTILE_SECRET=turnstile-test-secret
 EOF
 # the Worker as deployed (server/src, server/migrations), configured for
 # this run: local addresses, test values, no domains (the dev server would
@@ -90,13 +92,20 @@ cat >"$work/wrangler.jsonc" <<EOF
   "d1_databases": [{ "binding": "DB", "database_name": "omacloud", "database_id": "local",
                      "migrations_dir": "$PWD/server/migrations" }],
   "triggers": { "crons": ["*/15 * * * *"] },
+  "send_email": [{ "name": "EMAIL" }],
+  "ratelimits": [
+    { "name": "SIGNIN_LIMIT", "namespace_id": "2101", "simple": { "limit": 20, "period": 60 } },
+    { "name": "CREDENTIALS_LIMIT", "namespace_id": "2102", "simple": { "limit": 10, "period": 60 } },
+    { "name": "WAITLIST_LIMIT", "namespace_id": "2103", "simple": { "limit": 5, "period": 60 } }
+  ],
   "vars": {
     "PUBLIC_URL": "http://localhost:$gport", "STORAGE_HOST": "127.0.0.1:$gport", "REGION": "omacloud",
     "SIGNUPS": "invite", "DEFAULT_QUOTA": "200000000000",
     "UPSTREAM_ENDPOINT": "http://127.0.0.1:$wport", "UPSTREAM_REGION": "us-east-1",
     "UPSTREAM_BUCKET": "everyone", "UPSTREAM_KEY_ID": "upstream",
     "GOOGLE_CLIENT_ID": "test-client", "GOOGLE_AUTH_URL": "http://127.0.0.1:$googleport/auth",
-    "GOOGLE_TOKEN_URL": "http://127.0.0.1:$googleport/token"
+    "GOOGLE_TOKEN_URL": "http://127.0.0.1:$googleport/token", "ADMIN_EMAIL": "admin@example.com",
+    "TURNSTILE_SITE_KEY": "test-site", "TURNSTILE_VERIFY_URL": "http://127.0.0.1:$googleport/siteverify"
   }
 }
 EOF
@@ -167,7 +176,8 @@ expect 403 PUT /$b/more
 grep -q QuotaExceeded <<<"$out" || { echo "quota: $out"; exit 1; }
 echo "gateway ok"
 
-# Google, standing in: whoever $work/who names signs in
+# Google, standing in: whoever $work/who names signs in; and Turnstile,
+# which takes a person to be whoever says "human"
 cat >"$work/google.py" <<'EOF'
 import sys, json, base64, urllib.parse, http.server
 who_file = sys.argv[2]
@@ -179,7 +189,16 @@ class H(http.server.BaseHTTPRequestHandler):
         to = q["redirect_uri"][0] + "?" + urllib.parse.urlencode({"code": who, "state": q["state"][0]})
         self.send_response(302); self.send_header("location", to); self.end_headers()
     def do_POST(self):
-        form = urllib.parse.parse_qs(self.rfile.read(int(self.headers["content-length"])).decode())
+        raw = self.rfile.read(int(self.headers["content-length"])).decode()
+        if self.path == "/siteverify":
+            ask = json.loads(raw)
+            assert ask["secret"] == "turnstile-test-secret", ask
+            ok = ask["response"] == "human"
+            body = json.dumps({"success": ok, "hostname": "localhost"} if ok else {"success": False}).encode()
+            self.send_response(200); self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body))); self.end_headers(); self.wfile.write(body)
+            return
+        form = urllib.parse.parse_qs(raw)
         assert form["client_secret"] == ["google-test-secret"], form
         sub = form["code"][0]
         claims = {"iss": "https://accounts.google.com", "aud": "test-client", "sub": sub,
@@ -252,7 +271,9 @@ echo carol >"$work/who"
 if oc hc init --hosted --folder "$work/HC" --device hc >"$work/hc.out" 2>&1; then
   echo "carol got in"; exit 1
 fi
-grep -q "invitation" "$work/hc.out" || { cat "$work/hc.out"; exit 1; }
+grep -q "on the waitlist" "$work/hc.out" || { cat "$work/hc.out"; exit 1; }
+[ "$(d1get "SELECT count(*) FROM waitlist WHERE email = 'carol@example.com' AND confirmed IS NOT NULL")" = 1 ] \
+  || { echo "carol isn't on the waitlist"; exit 1; }
 echo "signed-in sync ok"
 # a trusted contact: alice makes a card, and a computer with nothing else
 # gets back in with it and her sign-in
@@ -290,8 +311,50 @@ oc ha recovery contact --remove >/dev/null 2>"$work/contact.err" \
 if recover hf "$card"; then echo "a card worked with no contact"; exit 1; fi
 grep -q "no trusted contact" "$work/hf.out" || { cat "$work/hf.out"; exit 1; }
 echo "trusted contact ok"
-# the usage count, as the cron trigger runs it
+# the waitlist form: Turnstile, then a link to confirm, emailed (the local
+# email binding writes what it sends to files, named in the log)
+ask() { # email turnstile: prints the status
+  curl -s -o "$work/ask.html" -w '%{http_code}' "http://localhost:$gport/waitlist" \
+    --data-urlencode "email=$1" --data-urlencode "cf-turnstile-response=$2"
+}
+curl -sf "http://localhost:$gport/" | grep -q 'data-sitekey="test-site"' || { echo "no form on the home page"; exit 1; }
+[ "$(ask dave@example.com robot)" = 403 ] || { echo "a robot asked"; cat "$work/ask.html"; exit 1; }
+[ "$(ask Dave@Example.com human)" = 200 ] && grep -q "Check your inbox" "$work/ask.html" \
+  || { echo "dave couldn't ask"; cat "$work/ask.html"; exit 1; }
+sent_to() { # the files the local email binding wrote for mail to $1, newest last
+  grep -A6 "send_email binding called" "$work/server.log" | grep -A5 "To: .*$1" |
+    sed -n 's/.*Text: \(\S*\.txt\).*/\1/p'
+}
+for _ in $(seq 20); do [ -n "$(sent_to dave@example.com)" ] && break; sleep 0.3; done
+link=$(grep -ho 'http://localhost:[0-9]*/waitlist/confirm?token=[0-9a-f]*' $(sent_to dave@example.com) | tail -1)
+[ -n "$link" ] || { echo "no confirmation email"; tail -30 "$work/server.log"; exit 1; }
+[ "$(d1get "SELECT count(*) FROM waitlist WHERE email = 'dave@example.com' AND confirmed IS NOT NULL")" = 0 ] \
+  || { echo "dave was on the list before confirming"; exit 1; }
+# opening the link (as a mail scanner would) only shows a button
+curl -sf "$link" | grep -q 'value="[0-9a-f]\{64\}"' || { echo "no button behind dave's link"; exit 1; }
+[ "$(d1get "SELECT count(*) FROM waitlist WHERE email = 'dave@example.com' AND confirmed IS NOT NULL")" = 0 ] \
+  || { echo "opening dave's link confirmed it"; exit 1; }
+press() { curl -s "http://localhost:$gport/waitlist/confirm" --data-urlencode "token=${link##*token=}"; }
+press | grep -q "on the waitlist" || { echo "dave's button didn't work"; exit 1; }
+[ "$(d1get "SELECT count(*) FROM waitlist WHERE email = 'dave@example.com' AND confirmed IS NOT NULL")" = 1 ] \
+  || { echo "dave isn't on the waitlist"; exit 1; }
+press | grep -q "expired" || { echo "dave's link worked twice"; exit 1; }
+# the invitation, emailed by the cron trigger (alice and bob have accounts,
+# so they get none)
+d1 "INSERT INTO invites (email, created) VALUES ('carol@example.com', 1)"
 curl -sf "http://localhost:$gport/__scheduled" >/dev/null
+[ "$(d1get "SELECT count(*) FROM invites WHERE notified IS NULL")" = 0 ] || { echo "invitations not marked sent"; exit 1; }
+grep -q "sign in with Google as carol@example.com" $(sent_to carol@example.com) /dev/null \
+  || { echo "carol's invitation didn't go"; tail -30 "$work/server.log"; exit 1; }
+[ -z "$(sent_to alice@example.com)" ] || { echo "alice was invited again"; exit 1; }
+[ -n "$(sent_to admin@example.com)" ] || { echo "no digest for the admin"; exit 1; }
+# the form's rate limit: five a minute, counted in windows aligned to the
+# clock, so eleven at once are refused at least once even if a window turns
+# over among them
+codes=$(for n in $(seq 11); do ask "burst$n@example.com" human; echo; done)
+grep -q 429 <<<"$codes" || { echo "no rate limit: $codes"; exit 1; }
+echo "waitlist ok"
+# the usage count, as the cron trigger runs it (it ran just now)
 used=$(d1get "SELECT used FROM accounts WHERE id = '$a'")
 listed=$(upstream GET /everyone "list-type=2&prefix=$a%2F" | grep -o '<Size>[0-9]*</Size>' | grep -o '[0-9]*' | paste -sd+ | python3 -c 'print(eval(input()))')
 [ "$used" = "$listed" ] || { echo "usage $used, listed $listed"; exit 1; }

@@ -1345,3 +1345,129 @@ fn interrupted_first_pull_resumes() -> Result<()> {
     }));
     Ok(())
 }
+
+/// A save that lands during a pull, after the cycle looked for local
+/// changes, is neither overwritten nor deleted: it's kept and pushed.
+#[test]
+fn a_save_during_a_pull_is_kept() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (mut a, mut b) = (w.engine("a")?, w.engine("b")?);
+    let (da, db) = (w.dir("a"), w.dir("b"));
+    write(&da, "doc.txt", "base\n");
+    write(&da, "gone.txt", "base\n");
+    a.sync()?;
+    b.sync()?;
+
+    let f = write(&da, "doc.txt", "from a\n");
+    fs::remove_file(da.join("gone.txt"))?;
+    a.notice([f, "gone.txt".into()]);
+    a.sync()?;
+    // b saves both, and its watcher hasn't told it yet
+    write(&db, "doc.txt", "saved on b\n");
+    write(&db, "gone.txt", "saved on b\n");
+    let st = b.sync()?;
+    assert_eq!(st.conflicts, 1);
+    a.sync()?;
+
+    let (x, y) = (digest(&da), digest(&db));
+    assert_eq!(x, y);
+    assert_eq!(x[Path::new("doc.txt")], "from a\n");
+    assert_eq!(x[Path::new("gone.txt")], "saved on b\n");
+    let copies = conflict_copies(&x);
+    assert_eq!(copies.len(), 1);
+    assert_eq!(copies[0].1, "saved on b\n");
+    Ok(())
+}
+
+/// A file put here some other way (copied over before syncing), the same as
+/// the one another computer pushes, is no conflict: no copy, and it takes
+/// the other computer's time.
+#[test]
+fn the_same_file_already_here_is_no_conflict() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let w = World::new(&["a", "b"])?;
+    let (mut a, mut b) = (w.engine("a")?, w.engine("b")?);
+    let (da, db) = (w.dir("a"), w.dir("b"));
+    write(&da, "seed.txt", "seed\n");
+    a.sync()?;
+    b.sync()?;
+
+    // b gets the photo by hand first, with its own time, unseen by its watcher
+    write(&db, "photo.jpg", "same bytes\n");
+    set_mtime(&db, "photo.jpg", 86400);
+    // and made read-only, which mustn't stop the pull
+    fs::set_permissions(db.join("photo.jpg"), fs::Permissions::from_mode(0o444))?;
+    let f = write(&da, "photo.jpg", "same bytes\n");
+    a.notice([f]);
+    a.sync()?;
+    let st = b.sync()?;
+    assert_eq!(st.conflicts, 0);
+    a.sync()?;
+
+    let (x, y) = (digest(&da), digest(&db));
+    assert_eq!(x, y);
+    assert!(conflict_copies(&y).is_empty());
+    assert_eq!(
+        fs::metadata(da.join("photo.jpg"))?.modified()?,
+        fs::metadata(db.join("photo.jpg"))?.modified()?
+    );
+    Ok(())
+}
+
+/// A named pipe where another computer has a file doesn't stall the pull:
+/// opening it to compare would wait for a writer forever.
+#[test]
+fn a_named_pipe_in_the_way_doesnt_stall_a_pull() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (mut a, mut b) = (w.engine("a")?, w.engine("b")?);
+    let (da, db) = (w.dir("a"), w.dir("b"));
+    write(&da, "seed.txt", "seed\n");
+    a.sync()?;
+    b.sync()?;
+
+    let pipe = std::ffi::CString::new(db.join("pipe").into_os_string().into_encoded_bytes())?;
+    assert_eq!(unsafe { libc::mkfifo(pipe.as_ptr(), 0o644) }, 0);
+    let f = write(&da, "pipe", "a file on a\n");
+    a.notice([f]);
+    a.sync()?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || _ = tx.send(b.sync().map(|st| st.conflicts)));
+    let done = rx
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .map_err(|_| anyhow::anyhow!("the pull stalled on the pipe"))?;
+    // neither stalled nor failed: the pipe is kept, as a change beats a pull
+    assert_eq!(done?, 1);
+    Ok(())
+}
+
+/// The same for a setting: no conflict copy in home, the other version is
+/// held for `resolve` instead.
+#[test]
+fn a_setting_saved_during_a_pull_is_kept() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ha, hb) = (w.home("a"), w.home("b"));
+    let bindings = ".config/hypr/bindings.lua";
+    write(&ha, bindings, "bind 1\n");
+    let (mut a, mut b) = (w.engine_with_settings("a")?, w.engine_with_settings("b")?);
+    a.sync()?;
+    b.sync()?;
+
+    write(&ha, bindings, "bind 1 (a)\n");
+    a.notice([ha.join(bindings)]);
+    a.sync()?;
+    write(&hb, bindings, "bind 1 (b, unseen)\n");
+    let st = b.sync()?;
+    assert_eq!(st.conflicts, 1);
+    assert_eq!(
+        fs::read_to_string(hb.join(bindings))?,
+        "bind 1 (b, unseen)\n"
+    );
+    assert_eq!(b.settings_status().held, [PathBuf::from(bindings)]);
+    // held versions and backups are this user's alone
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: PathBuf| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let backups = w.tmp.path().join("b-backups");
+    assert_eq!(mode(backups.clone()), 0o700);
+    assert_eq!(mode(backups.join("held").join(bindings)), 0o600);
+    Ok(())
+}

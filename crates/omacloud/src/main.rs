@@ -765,28 +765,37 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>)
     Ok(())
 }
 
-/// Keep the folders in sync. Returns when sync must stop: this device was
-/// removed, or the account can't be verified.
-fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<()> {
+/// Why the daemon stopped.
+enum Ended {
+    /// Removed from the account, or the account can't be verified.
+    Stopped,
+    /// The package replaced the binary: restart into the new one.
+    Upgraded,
+}
+
+/// Exit status after an upgrade: a failure to the unit, so `Restart=` starts
+/// the new binary (2 is the status it doesn't restart).
+const UPGRADED: i32 = 75;
+
+/// Keep the folders in sync, until sync must stop or an upgrade replaced
+/// this binary.
+fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     power::be_nice();
     let mut engine = engine(paths, config)?;
+    let exe = Exe::running();
+    // a path changed, or `None`: events were lost, look at everything
     let (files, rx) = mpsc::channel();
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(event) = res {
-            _ = files.send(event.paths);
-        }
+    let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        _ = files.send(match res {
+            Ok(event) if !event.need_rescan() => Some(event.paths),
+            Ok(_) => None,
+            Err(e) => {
+                warn!("watching files: {e}");
+                None
+            }
+        });
     })?;
-    // syncing folders of home: watch those, never all of home
-    let mut watched = std::collections::BTreeSet::new();
-    if config.folders.is_none() {
-        watcher.watch(&config.folder, RecursiveMode::Recursive)?;
-    }
-    for dir in engine.settings_watch_dirs() {
-        // settings live in a few directories under home; watch just those
-        if dir.is_dir() {
-            watcher.watch(&dir, RecursiveMode::NonRecursive)?;
-        }
-    }
+    let mut watches = Watches::new(watcher);
     info!("watching {}", config.folder.display());
 
     // wait for a second of quiet before pushing, but no longer than ten
@@ -800,6 +809,9 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<()> {
     let config_mtime = || fs::metadata(&paths.config).and_then(|m| m.modified()).ok();
     let mut config_seen = config_mtime();
     let (mut seen_marker, mut full_at, mut folders_changed) = (None, None, false);
+    // when everything was last looked over, whether or not that sync went
+    // through: a sync that keeps failing mustn't walk every file each poll
+    let mut rescan_at: Option<Instant> = None;
     loop {
         // `omacloud folders` edits the config: follow it without a restart
         let now = config_mtime();
@@ -815,15 +827,33 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<()> {
                 folders_changed = true;
             }
         }
-        // folders appear as the account adds them
-        for dir in engine.synced_folders() {
-            if !watched.contains(&dir)
-                && dir.is_dir()
-                && watcher.watch(&dir, RecursiveMode::Recursive).is_ok()
-            {
-                info!("watching {}", dir.display());
-                _ = watched.insert(dir);
-            }
+        // between syncs: an upgrade restarts into the new binary
+        if exe.as_ref().is_some_and(Exe::replaced) {
+            info!("omacloud was upgraded; restarting into the new version");
+            return Ok(Ended::Upgraded);
+        }
+        // syncing folders of home: watch those, never all of home. Folders
+        // appear as the account adds them, and one deleted and made again
+        // is watched again
+        let mut wanted: Vec<(PathBuf, RecursiveMode)> = if config.folders.is_none() {
+            vec![(config.folder.clone(), RecursiveMode::Recursive)]
+        } else {
+            engine
+                .synced_folders()
+                .into_iter()
+                .map(|d| (d, RecursiveMode::Recursive))
+                .collect()
+        };
+        // settings live in a few directories under home; watch just those
+        wanted.extend(
+            engine
+                .settings_watch_dirs()
+                .into_iter()
+                .map(|d| (d, RecursiveMode::NonRecursive)),
+        );
+        if watches.follow(&wanted) {
+            // what changed before the watch began went unseen
+            engine.request_rescan();
         }
         // the package list, at start and hourly
         if packages_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(3600)) {
@@ -853,8 +883,13 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<()> {
             && full_at.is_some_and(|t: Instant| t.elapsed() < FULL_SYNC);
         if !paused && !idle {
             folders_changed = false;
+            // now and then, look at everything: a watcher can miss changes
+            if rescan_at.is_none_or(|t| t.elapsed() >= FULL_SYNC) {
+                engine.request_rescan();
+                rescan_at = Some(Instant::now());
+            }
             match run_sync(&mut engine, &mut waiting, alerts.as_ref()) {
-                Synced::Stop => return Ok(()),
+                Synced::Stop => return Ok(Ended::Stopped),
                 Synced::Ok => {
                     // the marker read before syncing: anything written
                     // since moves it again
@@ -879,14 +914,18 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<()> {
                 a.check(&mut engine);
             }
         }
+        let mut notice = |changed: Option<Vec<PathBuf>>| match changed {
+            Some(paths) => engine.notice(paths),
+            None => engine.request_rescan(),
+        };
         match rx.recv_timeout(poll) {
-            Ok(paths) => {
-                engine.notice(paths);
+            Ok(changed) => {
+                notice(changed);
                 let first = Instant::now();
                 loop {
                     match rx.recv_timeout(quiet) {
                         Ok(more) => {
-                            engine.notice(more);
+                            notice(more);
                             if first.elapsed() >= longest {
                                 break;
                             }
@@ -899,6 +938,92 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<()> {
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(e) => return Err(e.into()),
         }
+    }
+}
+
+/// The directories being watched, each with its identity when the watch
+/// began: a directory deleted and made again is a new one, which a watch on
+/// the old one doesn't see. Its birth time tells them apart where the inode
+/// number is reused.
+struct Watches<W> {
+    watcher: W,
+    dirs: BTreeMap<PathBuf, (u64, u64, Option<std::time::SystemTime>)>,
+    /// directories a watch failed on, said once rather than every poll
+    failing: std::collections::BTreeSet<PathBuf>,
+}
+
+impl<W: Watcher> Watches<W> {
+    fn new(watcher: W) -> Self {
+        Self {
+            watcher,
+            dirs: BTreeMap::new(),
+            failing: std::collections::BTreeSet::new(),
+        }
+    }
+
+    /// Watch each of `wanted` that exists, again where it was made anew.
+    /// Returns whether a watch began.
+    fn follow(&mut self, wanted: &[(PathBuf, RecursiveMode)]) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        let mut began = false;
+        for (dir, mode) in wanted {
+            let now = fs::metadata(dir)
+                .ok()
+                .filter(fs::Metadata::is_dir)
+                .map(|m| (m.dev(), m.ino(), m.created().ok()));
+            let was = self.dirs.get(dir).copied();
+            if now == was {
+                continue;
+            }
+            if was.is_some() {
+                _ = self.watcher.unwatch(dir);
+                _ = self.dirs.remove(dir);
+            }
+            let Some(id) = now else { continue };
+            match self.watcher.watch(dir, *mode) {
+                Ok(()) => {
+                    info!("watching {}", dir.display());
+                    _ = self.dirs.insert(dir.clone(), id);
+                    _ = self.failing.remove(dir);
+                    began = true;
+                }
+                Err(e) => {
+                    if self.failing.insert(dir.clone()) {
+                        warn!(
+                            "watching {}: {e} (the ten-minute look over everything still finds its changes)",
+                            dir.display()
+                        );
+                    }
+                }
+            }
+        }
+        began
+    }
+}
+
+/// The binary this process runs, to notice a package upgrade replacing it.
+struct Exe {
+    path: PathBuf,
+    id: (u64, u64),
+}
+
+impl Exe {
+    fn running() -> Option<Self> {
+        use std::os::unix::fs::MetadataExt;
+        let path = fs::read_link("/proc/self/exe").ok()?;
+        // the running file itself, even once unlinked
+        let m = fs::metadata("/proc/self/exe").ok()?;
+        Some(Self {
+            path,
+            id: (m.dev(), m.ino()),
+        })
+    }
+
+    /// Whether another file is at the binary's path now: an upgrade. Only
+    /// removed is not replaced; there'd be nothing to restart into.
+    fn replaced(&self) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        fs::metadata(&self.path).is_ok_and(|m| (m.dev(), m.ino()) != self.id)
     }
 }
 
@@ -1199,9 +1324,11 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Watch { poll } => {
-            watch(&paths, &load(&paths)?, Duration::from_secs(poll))?;
-            // the account stopped (this device was removed): a human looks
-            std::process::exit(2);
+            match watch(&paths, &load(&paths)?, Duration::from_secs(poll))? {
+                Ended::Upgraded => std::process::exit(UPGRADED),
+                // the account stopped (this device was removed): a human looks
+                Ended::Stopped => std::process::exit(2),
+            }
         }
         Cmd::Status { json: true } => {
             println!("{}", status_json(&paths)?);
@@ -2426,4 +2553,65 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_upgrade_is_noticed() -> Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("omacloud");
+        fs::write(&path, "old")?;
+        let m = fs::metadata(&path)?;
+        let exe = Exe {
+            path: path.clone(),
+            id: (m.dev(), m.ino()),
+        };
+        assert!(!exe.replaced());
+        // as pacman installs: the new file renamed over the old
+        let new = tmp.path().join("omacloud.new");
+        fs::write(&new, "new")?;
+        let old = fs::File::open(&path)?; // keep the old inode alive
+        fs::rename(&new, &path)?;
+        assert!(exe.replaced());
+        drop(old);
+        fs::remove_file(&path)?;
+        assert!(!exe.replaced());
+        Ok(())
+    }
+
+    #[test]
+    fn a_folder_made_again_is_watched_again() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let dir = tmp.path().join("Documents");
+        let (tx, rx) = mpsc::channel();
+        let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+            if let Ok(e) = res {
+                _ = tx.send(e.paths);
+            }
+        })?;
+        let mut watches = Watches::new(watcher);
+        let wanted = [(dir.clone(), RecursiveMode::Recursive)];
+        assert!(!watches.follow(&wanted)); // not there yet
+        fs::create_dir(&dir)?;
+        assert!(watches.follow(&wanted));
+        assert!(!watches.follow(&wanted));
+        fs::remove_dir(&dir)?;
+        fs::create_dir(&dir)?;
+        assert!(watches.follow(&wanted));
+        while rx.try_recv().is_ok() {}
+        fs::write(dir.join("new.txt"), "hi")?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut seen = false;
+        while !seen && Instant::now() < deadline {
+            if let Ok(paths) = rx.recv_timeout(Duration::from_millis(100)) {
+                seen = paths.contains(&dir.join("new.txt"));
+            }
+        }
+        assert!(seen, "no event from the folder made again");
+        Ok(())
+    }
 }

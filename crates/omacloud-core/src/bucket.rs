@@ -20,7 +20,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use opendal::{ErrorKind, blocking::Operator, options};
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -153,22 +153,34 @@ impl BucketCoordinator {
             .collect())
     }
 
-    /// The last seq in a log: listed once, then probed forward.
+    /// The last seq in a log: listed once, then probed forward. A log is
+    /// numbered from 1 without gaps (appends only add at the end), so an
+    /// entry listed past the count is stray: anyone with the bucket key can
+    /// write one, and it mustn't send a device reading up to it.
     fn last_seq(&self, kind: &'static str) -> Result<u64> {
         let known = self.last.lock().unwrap().get(kind).copied();
         let mut seq = match known {
             Some(s) => s,
-            None => self
-                .names(kind)?
-                .iter()
-                .filter_map(|n| n.strip_suffix(".json")?.parse::<u64>().ok())
-                .max()
-                .unwrap_or(0),
+            None => {
+                let seqs: Vec<u64> = self
+                    .names(kind)?
+                    .iter()
+                    .filter_map(|n| n.strip_suffix(".json")?.parse::<u64>().ok())
+                    .collect();
+                let last = seqs.iter().copied().max().unwrap_or(0);
+                if last > seqs.len() as u64 {
+                    bail!(
+                        "the bucket's {kind} log has gaps: entry {last} among {} entries",
+                        seqs.len()
+                    );
+                }
+                last
+            }
         };
         let _guard = runtime().enter();
-        loop {
-            match self.op.stat(&Self::key(kind, seq + 1)) {
-                Ok(_) => seq += 1,
+        while let Some(next) = seq.checked_add(1) {
+            match self.op.stat(&Self::key(kind, next)) {
+                Ok(_) => seq = next,
                 Err(e) if e.kind() == ErrorKind::NotFound => break,
                 Err(e) => return Err(e).context("looking for new entries"),
             }
@@ -180,19 +192,20 @@ impl BucketCoordinator {
     /// Entries after `after`, in order, read in parallel.
     fn after<T: DeserializeOwned + Send>(&self, kind: &'static str, after: u64) -> Result<Vec<T>> {
         let last = self.last_seq(kind)?;
-        let seqs: Vec<u64> = (after + 1..=last).collect();
-        let mut out: Vec<Option<T>> = Vec::with_capacity(seqs.len());
-        out.resize_with(seqs.len(), || None);
+        let count = usize::try_from(last.saturating_sub(after))?;
         let next = std::sync::atomic::AtomicUsize::new(0);
-        let slots: Vec<Mutex<Option<T>>> = out.into_iter().map(Mutex::new).collect();
+        let slots: Vec<Mutex<Option<T>>> = (0..count).map(|_| Mutex::new(None)).collect();
         let failed: Mutex<Option<anyhow::Error>> = Mutex::new(None);
         std::thread::scope(|scope| {
-            for _ in 0..READERS.min(seqs.len()) {
+            for _ in 0..READERS.min(count) {
                 scope.spawn(|| {
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let Some(seq) = seqs.get(i) else { return };
-                        match self.get::<T>(&Self::key(kind, *seq)) {
+                        if i >= count {
+                            return;
+                        }
+                        let seq = after + 1 + i as u64;
+                        match self.get::<T>(&Self::key(kind, seq)) {
                             Ok(Some(v)) => *slots[i].lock().unwrap() = Some(v),
                             Ok(None) => {
                                 _ = failed
@@ -220,7 +233,7 @@ impl BucketCoordinator {
     }
 
     fn append_seq<T: Serialize>(&self, kind: &'static str, seq: u64, value: &T) -> Result<bool> {
-        if seq != self.last_seq(kind)? + 1 {
+        if self.last_seq(kind)?.checked_add(1) != Some(seq) {
             return Ok(false);
         }
         let ok = self.create(&Self::key(kind, seq), value)?;

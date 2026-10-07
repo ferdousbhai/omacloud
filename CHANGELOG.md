@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.0.13 (2026-10-07)
+
+Nothing you save is lost to a sync in progress.
+
+- A file you save while Omacloud is bringing in changes from another
+  computer is no longer overwritten or deleted: your version stays (as a
+  conflict copy, beside the other computer's) and syncs everywhere. A
+  setting stays as you saved it, and the other version waits for
+  `omacloud settings resolve`.
+- A file that's already here, the same as another computer's (copied over
+  before its folder synced), is left as it is rather than kept as a
+  conflict copy: it only takes the other computer's time.
+- Changes the file watcher missed are found: when the system drops events,
+  and every ten minutes, Omacloud looks over all your synced files. A synced
+  folder deleted and made again is watched again.
+- After an upgrade, the running Omacloud restarts into the new version on
+  its own, instead of at your next login.
+- A merged or resolved setting is saved the way an editor saves it, so a
+  crash midway can't leave it cut short.
+- Settings backups and held versions are readable by you alone, and only the
+  newest 100 backups are kept.
+- A stray entry in the account's storage is reported as an error instead of
+  stopping Omacloud, and checking a file that's already in place no longer
+  reads it into memory whole.
+- Omacloud storage has a waitlist. Signing in without an invitation puts
+  you on it and says so; on omacloud.computer you can ask with just your
+  email, confirmed by a link emailed to you. An invitation now comes by
+  email, with how to start.
+- Too many sign-ins in a minute are turned away with a message saying to
+  wait, instead of a bare failure.
+- Uploads side by side can no longer take an account past its quota, and
+  uploads left unfinished for a day are cleared away.
+- An account holds at most 20 storage keys: signing in past that retires
+  the oldest, and a computer still using it signs in again.
+
 ## 0.0.12 (2026-10-06)
 
 - The Recovery page's button reads Create Recovery Card (it was Make a

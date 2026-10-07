@@ -8,12 +8,11 @@
 // A removed computer that still holds a key could ask too, but every key it
 // makes dies when the others retire it, and signing in with Google always
 // gets a fresh key: at worst it makes the account's computers sign in again.
+// An account holds at most MAX_KEYS: this API refuses past it, and a Google
+// sign-in retires the oldest to make room (see db.newKey).
 
 import * as db from "./db.ts";
 import { authenticate } from "./gateway.ts";
-
-/** Keys an account may hold at once: one per computer, and some to spare. */
-const MAX_KEYS = 20;
 
 /** POST /api/keys: a new key for the signer's account. */
 export async function create(req: Request, env: Env): Promise<Response> {
@@ -21,7 +20,7 @@ export async function create(req: Request, env: Env): Promise<Response> {
 	const signer = await authenticate(req, env, url.pathname, url.search.slice(1));
 	if (signer instanceof Response) return signer;
 	const { account } = signer;
-	if ((await db.activeKeys(env.DB, account.id)) >= MAX_KEYS)
+	if ((await db.activeKeys(env.DB, account.id)) >= db.MAX_KEYS)
 		return Response.json({ error: "too many keys: change the key to retire old ones" }, { status: 429 });
 	const key = await db.newKey(env.DB, account.id, db.masterKey(env));
 	console.log(JSON.stringify({ event: "new key", account: account.id, key: key.accessKeyId, by: signer.accessKeyId }));

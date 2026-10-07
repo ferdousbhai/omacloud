@@ -8,7 +8,7 @@
 // and the bucket itself as a formality. Anything else is refused, so a key
 // can't reach outside its folder, change permissions or copy from elsewhere.
 
-import { type Account, deleted, keyAccount, masterKey, secretOf, wrote } from "./db.ts";
+import { type Account, keyAccount, masterKey, release, reserve, secretOf, touched } from "./db.ts";
 import { canonicalRequest, decode, encodePath, parseAuth, same, scope, sha256Hex, sign } from "./sigv4.ts";
 import { escapeXml, unescapeXml, upstream } from "./upstream.ts";
 
@@ -177,7 +177,8 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext): Pro
 	const writes = req.method === "PUT" && (operation === "Object" || operation === "Multipart");
 	if (writes) {
 		if (length === null) return error(411, "MissingContentLength", "Give the length");
-		if (account.used + length > account.quota)
+		// taken before the write, so writes side by side can't overrun it
+		if (!(await reserve(env.DB, account.id, length)))
 			return error(403, "QuotaExceeded", "Your Omacloud storage is full");
 	}
 
@@ -208,12 +209,13 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext): Pro
 		response = await upstream(env, req.method, upstreamPath, upstreamQuery, pass, upstreamPayload, body);
 	} catch (e) {
 		console.error(JSON.stringify({ account: account.id, method: req.method, error: String(e) }));
+		if (writes) ctx.waitUntil(release(env.DB, account.id, length ?? 0));
 		return error(502, "ServiceUnavailable", "Try again");
 	}
-	if (response.ok) {
-		if (writes) ctx.waitUntil(wrote(env.DB, account.id, length ?? 0));
-		else if (operation === "DeleteMany" || req.method === "DELETE") ctx.waitUntil(deleted(env.DB, account.id));
-	}
+	if (writes && !response.ok) ctx.waitUntil(release(env.DB, account.id, length ?? 0));
+	// due a count again, even if one ran while this was written
+	if (response.ok && (writes || operation === "DeleteMany" || req.method === "DELETE"))
+		ctx.waitUntil(touched(env.DB, account.id));
 
 	// listings, multipart answers and errors name the folder and the bucket
 	// behind: say them as the computer knows them

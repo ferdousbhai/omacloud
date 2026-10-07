@@ -101,6 +101,7 @@ pub fn set_contact(service: &str, account: &str, pad: Option<&str>) -> Result<St
             "{email} isn't the Google account this computer's storage belongs to: \
              sign in with that one"
         ),
+        429 => bail!("{}", refusal(429)),
         status => bail!("that didn't work ({status}): try again"),
     }
 }
@@ -121,6 +122,14 @@ fn post(
         .with_context(|| format!("reaching {service}"))
 }
 
+/// Why Omacloud didn't take a sign-in it answered with `status`.
+fn refusal(status: u16) -> String {
+    match status {
+        429 => "too many sign-ins for this account: wait a minute and try again".to_string(),
+        _ => format!("sign-in didn't work ({status}): try again"),
+    }
+}
+
 /// Trade a sign-in for this computer's key (and the contact pad).
 fn credentials(service: &str, grant: &Grant, contact: bool) -> Result<Storage> {
     let mut response = post(
@@ -129,7 +138,7 @@ fn credentials(service: &str, grant: &Grant, contact: bool) -> Result<Storage> {
         &serde_json::json!({ "code": grant.code, "verifier": grant.verifier, "contact": contact }),
     )?;
     if !response.status().is_success() {
-        bail!("sign-in didn't work ({}): try again", response.status());
+        bail!("{}", refusal(response.status().as_u16()));
     }
     response
         .body_mut()
@@ -195,10 +204,16 @@ fn browser(service: &str) -> Result<Grant> {
             break code.to_string();
         }
         let why = match param(query, "error") {
+            Some("invite") if param(query, "waitlist") == Some("1") => {
+                "Omacloud storage is by invitation for now. You're on the waitlist: \
+                 you'll get an email when there's room. You can use your own storage \
+                 bucket in the meantime"
+            }
             Some("invite") => {
                 "Omacloud storage is by invitation for now: this Google account isn't invited yet"
             }
             Some("closed") => "this Omacloud account is closed",
+            Some("busy") => "too many sign-ins from here: wait a minute and try again",
             Some("cancelled") => "sign-in was cancelled",
             _ => "sign-in didn't work: try again",
         };
@@ -267,4 +282,23 @@ pub fn retire_others(service: &str, region: &str, key: (&str, &str)) -> Result<A
         Asked::Refused => Asked::Refused,
         Asked::Done(v) => Asked::Done(v["retired"].as_u64().unwrap_or(0)),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn too_many_sign_ins_says_to_wait() {
+        assert!(refusal(429).contains("wait a minute"));
+        assert_eq!(refusal(500), "sign-in didn't work (500): try again");
+    }
+
+    #[test]
+    fn params_from_the_callback() {
+        let q = "state=ab&error=invite&waitlist=1";
+        assert_eq!(param(q, "error"), Some("invite"));
+        assert_eq!(param(q, "waitlist"), Some("1"));
+        assert_eq!(param(q, "code"), None);
+    }
 }

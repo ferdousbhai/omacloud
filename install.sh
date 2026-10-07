@@ -115,7 +115,8 @@ fi
 cat <<EOT
 
 Done. Open "Omacloud" from the app launcher (Super + Space) to set up this
-computer: your own S3 bucket for a new account, or a join code from one of
-your computers. Updates arrive with the rest of the system through:
+computer: your own storage bucket, a join code from one of your computers,
+or, optionally, Omacloud storage with a Google sign-in (by invitation for
+now). Updates arrive with the rest of the system through:
 omarchy update
 EOT

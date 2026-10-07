@@ -111,10 +111,13 @@ goes on to change that key.
 
 With Omacloud storage that takes no more: your other computers switch to a
 new key Omacloud makes, and once all have, the old keys are retired and the
-removed computer can't reach your storage (`omacloud bucket set-key` from
-the terminal). With your own bucket, make a new key at your provider and
-enter it; every other computer switches on its next sync, Devices shows
-when all have, and then you delete the old key at your provider.
+removed computer's key no longer reaches your storage (`omacloud bucket
+set-key` from the terminal). Signing in with Google still gets any computer
+a new key, so anyone who can sign in to your Google account (on the lost
+computer, say) can reach your storage again: sign it out of Google too.
+With your own bucket, make a new key at your provider and enter it; every
+other computer switches on its next sync, Devices shows when all have, and
+then you delete the old key at your provider.
 
 A computer that was away through the whole change catches up with
 `omacloud bucket set-key --access-key-id <id> --here-only`, or, with

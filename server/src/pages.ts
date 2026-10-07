@@ -1,7 +1,9 @@
 // The public pages of omacloud.computer: home, privacy and terms.
 
+import { escapeXml } from "./upstream.ts";
+
 const CONTACT = "ferdousbd@gmail.com";
-const UPDATED = "5 October 2026";
+const UPDATED = "7 October 2026";
 
 function layout(title: string, body: string): Response {
 	return new Response(
@@ -28,6 +30,12 @@ a { color: var(--accent); }
 code, pre { font: 14px/1.5 ui-monospace, "JetBrains Mono", monospace; }
 pre { background: color-mix(in srgb, var(--fg) 6%, transparent); border: 1px solid var(--line);
   border-radius: 8px; padding: .8rem 1rem; overflow-x: auto; }
+form.ask { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin: 1rem 0; }
+form.ask input { flex: 1 1 14rem; font: inherit; padding: .5rem .7rem; color: var(--fg);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+form.ask button { font: inherit; padding: .5rem 1rem; border: 0; border-radius: 8px;
+  background: var(--accent); color: var(--bg); cursor: pointer; }
+form.ask .cf-turnstile { flex-basis: 100%; }
 footer { border-top: 1px solid var(--line); margin-top: 3rem; padding-top: 1rem;
   color: var(--muted); font-size: .9rem; }
 footer a { color: var(--muted); margin-right: 1rem; }
@@ -41,7 +49,22 @@ ${body}
 	);
 }
 
-export const home = () =>
+/** The invitation form, when Turnstile is set up for it. */
+const ask = (siteKey: string) =>
+	siteKey
+		? `
+<h2>Ask for an invitation</h2>
+<p>Or leave your email here. You'll get a link to confirm it, and an invitation when there's
+room.</p>
+<form class="ask" method="post" action="/waitlist">
+<input type="email" name="email" required maxlength="254" autocomplete="email" placeholder="you@example.com" aria-label="Email address">
+<button>Request an invite</button>
+<div class="cf-turnstile" data-sitekey="${escapeXml(siteKey)}"></div>
+</form>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>`
+		: "";
+
+export const home = (env: Env) =>
 	layout(
 		"Omacloud",
 		`<h1>Omacloud</h1>
@@ -53,7 +76,9 @@ can't read: not your files, not their names, not your settings.</p>
 <h2>Get it</h2>
 <pre>curl -fsSL https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh | sudo bash</pre>
 <p>Then open Omacloud from the app launcher and sign in with Google. Omacloud storage is by
-invitation for now. You can also keep everything in a storage bucket of your own instead.</p>`,
+invitation for now: signing in without one puts you on the waitlist, and you'll get an email
+when there's room. Until then, or instead, you can keep everything in a storage bucket of your
+own.</p>${ask(env.TURNSTILE_SITE_KEY)}`,
 	);
 
 export const privacy = () =>
@@ -70,7 +95,12 @@ uploaded. Omacloud stores the encrypted result and can't decrypt it.</p>
 <h2>What Omacloud keeps</h2>
 <ul>
 <li>From Google sign-in: your Google account's id and email address. Nothing else is asked
-for.</li>
+for. If you sign in without an invitation, they're kept on the waitlist until you're invited,
+or until you ask for them to be removed.</li>
+<li>If you ask for an invitation on this site: the email address you type. It's kept for two
+days while the link emailed to it works; follow the link and it stays on the waitlist like a
+sign-in, or don't and it's deleted when the link expires. Cloudflare Turnstile checks the form is sent by
+a person, and sees your browser and IP address to do it.</li>
 <li>Your account: when it was made, your storage quota and how much of it you use.</li>
 <li>Your encrypted data, and the sizes and times of what your computers upload.</li>
 <li>Service logs (which account made a request, what kind, and how it went), kept for a short
@@ -82,11 +112,12 @@ kept in Cloudflare D1 in the EU, and requests pass through Cloudflare, which han
 address to deliver them.</p>
 <h2>What Omacloud doesn't do</h2>
 <p>No ads, no tracking, no selling or sharing of your information. Your email is used only to
-run your account and to contact you about it.</p>
+run your account and to contact you about it: to confirm a waitlist request, to invite you,
+and about your account. Emails are sent through Cloudflare Email Sending.</p>
 <h2>Leaving</h2>
 <p>You can take your data out at any time (<code>omacloud export</code> gives you a standard
 restic repository). Ask at <a href="mailto:${CONTACT}">${CONTACT}</a> and your account and
-everything stored for it are deleted.</p>
+everything stored for it are deleted, or your address taken off the waitlist.</p>
 <h2>Contact</h2>
 <p><a href="mailto:${CONTACT}">${CONTACT}</a></p>`,
 	);

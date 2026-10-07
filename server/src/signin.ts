@@ -13,6 +13,7 @@
 // account's Google identity, never to a storage key.
 
 import * as db from "./db.ts";
+import { allowed, clientIp } from "./limit.ts";
 import { encode } from "./sigv4.ts";
 import { escapeXml } from "./upstream.ts";
 
@@ -30,12 +31,15 @@ export function page(status: number, title: string, text: string): Response {
 
 const callback = (env: Env) => `${env.PUBLIC_URL}/auth/google/callback`;
 
-export async function start(url: URL, env: Env): Promise<Response> {
+export async function start(req: Request, url: URL, env: Env): Promise<Response> {
 	const port = Number(url.searchParams.get("port"));
 	const state = url.searchParams.get("state");
 	const challenge = url.searchParams.get("challenge");
 	if (!Number.isInteger(port) || port < 1024 || port > 65535 || !hexOf(state, 16) || !hexOf(challenge, 64))
 		return page(400, "That didn't work", "Start again from the Omacloud app.");
+	// told to the computer too, which would otherwise wait for a sign-in that never comes
+	if (!(await allowed(env.SIGNIN_LIMIT, clientIp(req))))
+		return Response.redirect(`http://127.0.0.1:${port}/callback?state=${state}&error=busy`, 303);
 	const id = await db.startSignin(env.DB, port, state, challenge);
 	const to =
 		`${env.GOOGLE_AUTH_URL}?client_id=${encode(env.GOOGLE_CLIENT_ID)}&redirect_uri=${encode(callback(env))}` +
@@ -99,8 +103,11 @@ export async function back(url: URL, env: Env): Promise<Response> {
 		signups === "open" || (await db.invited(env.DB, claims.email)) ? quota : null,
 	);
 	if (!account) {
-		console.log(JSON.stringify({ event: "sign-in without an invitation" }));
-		return toComputer("error=invite");
+		// on the waitlist: Google checked the address. `error=invite` is what
+		// computers before 0.0.13 know.
+		await db.waitFromGoogle(env.DB, claims.email, claims.sub);
+		console.log(JSON.stringify({ event: "sign-in without an invitation: on the waitlist" }));
+		return toComputer("error=invite&waitlist=1");
 	}
 	if (account.disabled) return toComputer("error=closed");
 	return toComputer(`code=${await db.grant(env.DB, id, account.id)}`);
@@ -125,16 +132,25 @@ async function signedIn(req: Request): Promise<(Record<string, unknown> & { code
 	return r as Record<string, unknown> & { code: string; verifier: string };
 }
 
+const tooMany = () =>
+	Response.json({ error: "too many sign-ins for this account: wait a minute and sign in again" }, { status: 429 });
+
 /** POST /api/credentials: a storage key for the account that signed in, and its contact pad if `contact` asks. */
 export async function credentials(req: Request, env: Env): Promise<Response> {
 	const r = await signedIn(req);
 	if (r instanceof Response) return r;
 	const accountId = await db.redeem(env.DB, r.code, r.verifier);
 	if (!accountId) return Response.json({ error: "sign in again" }, { status: 403 });
+	if (!(await allowed(env.CREDENTIALS_LIMIT, accountId))) return tooMany();
 	const account = await db.account(env.DB, accountId);
 	if (!account || account.disabled) return Response.json({ error: "closed" }, { status: 403 });
-	const key = await db.newKey(env.DB, accountId, db.masterKey(env));
-	console.log(JSON.stringify({ event: "new key", account: accountId, key: key.accessKeyId }));
+	// the account's oldest key goes past MAX_KEYS: refusing would lock out
+	// whoever lost every computer, and a computer whose key went signs in
+	// again
+	const key = await db.newKey(env.DB, accountId, db.masterKey(env), true);
+	console.log(
+		JSON.stringify({ event: "new key", account: accountId, key: key.accessKeyId, evicted: key.evicted }),
+	);
 	const scheme = env.PUBLIC_URL.startsWith("http://") ? "http" : "https";
 	let contact = {};
 	if (r.contact === true) {
@@ -164,6 +180,7 @@ export async function contact(req: Request, env: Env): Promise<Response> {
 		return Response.json({ error: "bad request" }, { status: 400 });
 	const accountId = await db.redeem(env.DB, r.code, r.verifier);
 	if (!accountId) return Response.json({ error: "sign in again" }, { status: 403 });
+	if (!(await allowed(env.CREDENTIALS_LIMIT, accountId))) return tooMany();
 	const account = await db.account(env.DB, accountId);
 	if (!account || account.disabled) return Response.json({ error: "closed" }, { status: 403 });
 	if (accountId !== r.account)
