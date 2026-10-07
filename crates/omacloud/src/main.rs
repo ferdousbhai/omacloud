@@ -11,6 +11,7 @@ use std::{
 };
 
 mod alerts;
+mod dropbox;
 mod hosted;
 mod keyring;
 mod power;
@@ -51,10 +52,12 @@ enum Cmd {
         /// Pictures in home, as iCloud does; `omacloud folders` changes them]
         #[arg(long)]
         folder: Option<PathBuf>,
-        /// Where the files live: an opendal URL like `opendal:s3` (with
+        /// Where the files live: an opendal URL like `opendal:s3` or
+        /// `opendal:dropbox` (with an app key as `--opt client_id=...`; the
+        /// app secret and authorization code are asked for), or a path.
+        /// For S3 use
         /// `--opt endpoint=... --opt bucket=... --opt access_key_id=...`; the
-        /// secret key is asked for), or a path. Joining with a join code needs
-        /// none
+        /// secret key is asked for. Joining with a join code needs none
         #[arg(long)]
         repo: Option<String>,
         /// Backend option, repeatable: `--opt bucket=name`
@@ -291,7 +294,8 @@ enum BucketCmd {
     /// your provider first, and keep the old one until `bucket status` says
     /// all switched, then delete it there; the secret comes from
     /// OMACLOUD_SECRET_ACCESS_KEY, or is asked for. With Omacloud storage,
-    /// Omacloud makes the key, and retires the old ones once all switched
+    /// Omacloud makes the key, and retires the old ones once all switched.
+    /// With Dropbox, authorize the app again for a fresh refresh token.
     SetKey {
         /// The new key's id (your own bucket)
         #[arg(long)]
@@ -375,7 +379,7 @@ struct Config {
     /// Omacloud storage: where this account signed in (see `hosted`)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     service: Option<String>,
-    /// Omacloud storage: the last key change whose old keys were retired
+    /// Omacloud storage or Dropbox: the last key change whose old keys were retired
     #[serde(default, skip_serializing_if = "is_zero")]
     bucket_key_retired: u64,
 }
@@ -1229,6 +1233,30 @@ fn main() -> Result<()> {
                                 "secret_access_key".into(),
                                 read_secret("OMACLOUD_SECRET_ACCESS_KEY", "secret access key")?,
                             );
+                        }
+                        if repo == "opendal:dropbox" {
+                            let id = o.get("client_id").cloned().unwrap_or_default();
+                            let url = dropbox::authorize_url(&id)?;
+                            o.entry("root".into()).or_insert("/Omacloud".into());
+                            let secret = match o.get("client_secret") {
+                                Some(secret) => secret.clone(),
+                                None => read_secret(
+                                    "OMACLOUD_DROPBOX_CLIENT_SECRET",
+                                    "Dropbox app secret",
+                                )?,
+                            };
+                            o.insert("client_secret".into(), secret.clone());
+                            if !o.contains_key("refresh_token") {
+                                eprintln!(
+                                    "Open this Dropbox authorization URL and paste its code:\n\n  {url}\n"
+                                );
+                                let code = read_secret(
+                                    "OMACLOUD_DROPBOX_AUTH_CODE",
+                                    "Dropbox authorization code",
+                                )?;
+                                let refresh = dropbox::exchange(&id, &secret, &code)?;
+                                o.insert("refresh_token".into(), refresh);
+                            }
                         }
                         o
                     },
@@ -2171,7 +2199,13 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
     };
     let st = e.state();
     let repo = e.repository().map_or_else(|_| config.repo.clone(), |r| r.0);
-    let kind = if repo.is_bucket() { "bucket" } else { "path" };
+    let kind = if repo.repository == "opendal:dropbox" || is_dropbox(&config) {
+        "dropbox"
+    } else if repo.is_bucket() {
+        "bucket"
+    } else {
+        "path"
+    };
     let role = if members.valid.contains_key(&me) {
         "member"
     } else if members.revoked.contains_key(&me) {
@@ -2228,6 +2262,8 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
             "kind": kind,
             "bucket": repo.options.get("bucket"),
             "endpoint": repo.options.get("endpoint"),
+            "root": repo.options.get("root"),
+            "client_id": repo.options.get("client_id").or_else(|| config.coordination.as_ref().and_then(|c| c.get("client_id"))),
         },
         "synced_head": st.base.as_ref().map(|b| b.seq),
         "synced_at": (st.synced_at > 0).then_some(st.synced_at),
@@ -2351,10 +2387,11 @@ fn parse_join_code(code: &str) -> Result<(BTreeMap<String, String>, String)> {
 }
 
 /// Why a self-hosted computer can't reach its bucket, and the way back.
-const KEY_REFUSED: &str = "the bucket refused this computer's key. If the account changed \
+const KEY_REFUSED: &str = "the storage refused this computer's key. If the account changed \
      its key while this computer was away, get the new key from your provider and run \
      `omacloud bucket set-key --access-key-id <id> --here-only` (with Omacloud storage, \
-     `omacloud bucket set-key --here-only` signs in again)";
+     `omacloud bucket set-key --here-only` signs in again; with Dropbox, it \
+     asks you to authorize your app again)";
 
 /// Switch this device to a newer bucket key, if one was published. True
 /// when it did: the caller reconnects with the new key.
@@ -2402,6 +2439,14 @@ fn hosted_service(config: &Config) -> Option<String> {
         (endpoint.trim_end_matches('/') == "https://storage.omacloud.computer")
             .then(|| hosted::SERVICE.to_string())
     })
+}
+
+fn is_dropbox(config: &Config) -> bool {
+    config
+        .coordination
+        .as_ref()
+        .and_then(|c| c.get("scheme"))
+        .is_some_and(|scheme| scheme == "dropbox")
 }
 
 /// The key a coordination location uses.
@@ -2452,24 +2497,54 @@ fn hosted_key(
     .into())
 }
 
-/// Omacloud storage: once every computer is on the latest key, retire the
-/// account's other keys, a removed computer's among them. True when this
-/// computer retired them now.
+/// Retire the previous hosted key or Dropbox token after every remaining
+/// computer acknowledges the change. True when this computer did it now.
 fn retire_old_keys(paths: &Paths, e: &mut Engine) -> Result<bool> {
     let mut config = load(paths)?;
-    let Some(service) = hosted_service(&config) else {
+    let dropbox = is_dropbox(&config);
+    let service = hosted_service(&config);
+    if !dropbox && service.is_none() {
         return Ok(false);
-    };
+    }
     let Some((seq, acked)) = e.bucket_key_status()? else {
         return Ok(false);
     };
-    // retired already, or this computer isn't on the latest key yet
-    if config.bucket_key_retired >= seq || config.bucket_key_seq < seq {
+    let pending = paths.data.join(dropbox::OLD_TOKEN_FILE);
+    if config.bucket_key_retired >= seq {
+        if dropbox && pending.exists() {
+            fs::remove_file(pending)?;
+        }
+        return Ok(false);
+    }
+    if config.bucket_key_seq < seq {
         return Ok(false);
     }
     let members = e.refresh_devices()?.members();
-    if !members.valid.iter().all(|(k, _)| acked.contains(k)) {
+    if !members.valid.keys().all(|k| acked.contains(k)) {
         return Ok(false);
+    }
+    if dropbox {
+        let old = match fs::read_to_string(&pending) {
+            Ok(token) => token,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(err) => return Err(err.into()),
+        };
+        let current = config
+            .coordination
+            .as_ref()
+            .context("no Dropbox location")?;
+        let get = |key: &str| {
+            current
+                .get(key)
+                .map(String::as_str)
+                .with_context(|| format!("Dropbox location has no {key}"))
+        };
+        dropbox::revoke(get("client_id")?, get("client_secret")?, &old)?;
+        config.bucket_key_retired = seq;
+        save(paths, &config)?;
+        fs::remove_file(pending)?;
+        info!("revoked old Dropbox token after key change {seq}");
+        return Ok(true);
     }
     // only a computer on the key the change shared keeps it: one that
     // joined after has a key of its own
@@ -2477,7 +2552,11 @@ fn retire_old_keys(paths: &Paths, e: &mut Engine) -> Result<bool> {
         return Ok(false);
     }
     let (region, id, secret) = key_of(&config)?;
-    match hosted::retire_others(&service, &region, (&id, &secret))? {
+    match hosted::retire_others(
+        service.as_deref().expect("hosted storage"),
+        &region,
+        (&id, &secret),
+    )? {
         hosted::Asked::Done(n) => {
             info!("retired {n} old storage keys after key change {seq}");
             config.bucket_key_retired = seq;
@@ -2524,11 +2603,15 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
                             if done { "switched" } else { "not yet" }
                         );
                     }
-                    if waiting == 0 && hosted_service(&config).is_some() {
+                    if waiting == 0 && (hosted_service(&config).is_some() || is_dropbox(&config)) {
                         let config_now = load(paths)?;
                         if config_now.bucket_key_retired >= seq || retire_old_keys(paths, &mut e)? {
                             println!(
                                 "every computer switched, and the old keys are retired: a removed or lost computer is cut off"
+                            );
+                        } else if is_dropbox(&config) {
+                            println!(
+                                "every computer switched; check the computer that changed the Dropbox token to confirm the old token was revoked"
                             );
                         } else {
                             println!(
@@ -2572,6 +2655,34 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
                     .into()
                 }
                 (None, Some(service)) => hosted_key(&config, &service, here_only)?,
+                (None, None) if is_dropbox(&config) => {
+                    let c = config
+                        .coordination
+                        .as_ref()
+                        .context("no Dropbox location")?;
+                    let id = c.get("client_id").context("no Dropbox app key")?;
+                    let secret = if here_only || !c.contains_key("client_secret") {
+                        read_secret("OMACLOUD_DROPBOX_CLIENT_SECRET", "Dropbox app secret")?
+                    } else {
+                        c["client_secret"].clone()
+                    };
+                    eprintln!(
+                        "Open this Dropbox authorization URL and paste its code:\n\n  {}\n",
+                        dropbox::authorize_url(id)?
+                    );
+                    let code =
+                        read_secret("OMACLOUD_DROPBOX_AUTH_CODE", "Dropbox authorization code")?;
+                    let refresh = dropbox::exchange(id, &secret, &code)?;
+                    anyhow::ensure!(
+                        here_only || c.get("refresh_token") != Some(&refresh),
+                        "Dropbox returned the token already in use; it would not lock out the removed computer"
+                    );
+                    [
+                        ("client_secret".to_string(), secret.clone()),
+                        ("refresh_token".to_string(), refresh),
+                    ]
+                    .into()
+                }
                 (None, None) => anyhow::bail!(
                     "give the new key: make it at your provider, then `--access-key-id <id>`"
                 ),
@@ -2596,11 +2707,47 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
             }
             // published with the old key, which still works
             let mut e = engine(paths, &config)?;
+            let pending = paths.data.join(dropbox::OLD_TOKEN_FILE);
+            if is_dropbox(&config) {
+                // A failed publish can leave the locally saved old token.
+                // Discard it only when the account has no newer key record.
+                let existing = match fs::read_to_string(&pending) {
+                    Ok(token) => Some(token),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+                    Err(err) => return Err(err.into()),
+                };
+                if let Some(old) = existing {
+                    let current = config
+                        .coordination
+                        .as_ref()
+                        .and_then(|c| c.get("refresh_token"));
+                    let latest = e.bucket_key_status()?.map_or(0, |(seq, _)| seq);
+                    if current == Some(&old) && latest <= config.bucket_key_seq {
+                        fs::remove_file(&pending)?;
+                    }
+                }
+                anyhow::ensure!(
+                    !pending.exists(),
+                    "an earlier Dropbox token still awaits revocation"
+                );
+                let old = config
+                    .coordination
+                    .as_ref()
+                    .and_then(|c| c.get("refresh_token"))
+                    .context("no old Dropbox token")?;
+                let mut file = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&pending)?;
+                file.write_all(old.as_bytes())?;
+                file.sync_all()?;
+            }
             let seq = e.change_bucket_key(&key)?;
             config = trial;
             config.bucket_key_seq = seq;
             save(paths, &config)?;
-            if hosted_service(&config).is_some() {
+            if hosted_service(&config).is_some() || is_dropbox(&config) {
                 println!(
                     "key change {seq} published, sealed to this account's computers. Each switches on \
                      its next sync, and once all have, the old keys are retired: a removed computer is \

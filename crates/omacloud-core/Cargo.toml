@@ -29,7 +29,7 @@ diffy = "0.5.2"
 hmac = "0.12"
 # rustic_core's pack size settings take its ByteSize
 bytesize = "2"
-ureq = "3.4.2"
+ureq = { version = "3.4.2", features = ["json"] }
 # Chromium's search engines live in SQLite (`Web Data`); bundled, so no
 # system library is needed
 rusqlite = { version = "0.37", features = ["bundled"] }

@@ -12,6 +12,7 @@ pub mod bucket_key;
 pub mod chromium;
 pub mod contact;
 pub mod devices;
+pub mod dropbox;
 pub mod epoch;
 pub mod head;
 pub mod ignore;
