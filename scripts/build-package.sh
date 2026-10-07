@@ -22,7 +22,7 @@ docker run --rm --platform "$platform" \
   -e OUTPUT_UID="$(id -u)" -e OUTPUT_GID="$(id -g)" \
   -v "$PWD:/source:ro" -v "$output:/output" "$image" bash -euo pipefail -c '
     [[ $(uname -m) == "$BUILD_ARCH" ]]
-    # Docker's seccomp profile can reject pacman's Landlock setup. This
+    # the Docker seccomp profile can reject pacman Landlock setup. This
     # setting applies only to the disposable build container.
     sed -i "/^\[options\]$/a DisableSandbox" /etc/pacman.conf
     pacman-key --init

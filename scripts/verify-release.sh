@@ -22,7 +22,7 @@ installer=https://github.com/ferdousbhai/omacloud/releases/latest/download/insta
 for attempt in 1 2 3 4 5 6; do
   installed="$(docker run --rm --platform "$platform" -e EXPECTED_ARCH="$architecture" -e INSTALLER="$installer" "$container_image" bash -euo pipefail -c '
     [[ $(uname -m) == "$EXPECTED_ARCH" ]]
-    # Keep pacman downloads compatible with Docker's seccomp profile.
+    # Keep pacman downloads compatible with the Docker seccomp profile.
     sed -i "/^\[options\]$/a DisableSandbox" /etc/pacman.conf
     pacman-key --init >/dev/null 2>&1 || true
     if [[ $EXPECTED_ARCH == aarch64 ]]; then
