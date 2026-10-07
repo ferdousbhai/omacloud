@@ -40,7 +40,7 @@ export default defineConfig(({ mode }) => ({
 			ADMIN_EMAIL: bindings.text("ferdousbd@gmail.com"),
 			// the Turnstile widget on the home page's invitation form (its
 			// secret: deploy.sh --turnstile). Empty: no form.
-			TURNSTILE_SITE_KEY: bindings.text(""),
+			TURNSTILE_SITE_KEY: bindings.text("0x4AAAAAAFQGMPzNF9fAOPDO"),
 			TURNSTILE_VERIFY_URL: bindings.text("https://challenges.cloudflare.com/turnstile/v0/siteverify"),
 			// the bucket's key and the Google OAuth client (both halves of
 			// each), and what account keys derive from (32 bytes or more, hex;
