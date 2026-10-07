@@ -1,7 +1,7 @@
 // D1, standing in: the migrations applied to an in-memory SQLite (node:sqlite);
 // and what else of the Workers runtime the Worker's code needs in node.
 
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,16 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 // Workers' own, which node lacks
 const subtle = crypto.subtle as unknown as { timingSafeEqual?: (a: Uint8Array, b: Uint8Array) => boolean };
 subtle.timingSafeEqual ??= (a, b) => timingSafeEqual(a, b);
+// and MD5, which Workers' digest does (for batch deletes)
+const digest = crypto.subtle.digest.bind(crypto.subtle);
+(crypto.subtle as { digest: unknown }).digest = (algorithm: string, data: Uint8Array) =>
+	algorithm === "MD5" ? Promise.resolve(new Uint8Array(createHash("md5").update(data).digest()).buffer) : digest(algorithm, data);
+const g = globalThis as unknown as { FixedLengthStream?: unknown };
+g.FixedLengthStream ??= class extends TransformStream {
+	constructor(_length: number) {
+		super();
+	}
+};
 
 class Statement {
 	db: DatabaseSync;

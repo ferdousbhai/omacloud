@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => ({
 		domains: mode === "test" ? [] : ["omacloud.computer", "storage.omacloud.computer"],
 		triggers: [
 			// usage counts for accounts written to, invitation emails, the
-			// waitlist digest
+			// waitlist digest, restores and the trash's purge
 			triggers.scheduled({
 				schedule: "*/15 * * * *",
 			}),

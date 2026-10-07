@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Deleting can be undone on Omacloud storage. Whatever your computers
+  delete or replace there is kept for 14 days, encrypted like everything
+  else and not counted in your quota, so if a removed computer or someone
+  in your Google account wipes your files, ask at privacy@omacloud.computer:
+  everything deleted or replaced since the time you give is put back
+  (files added since stay).
+- Up to your quota's worth of deleted files is kept: past that, deleting
+  and replacing files on Omacloud storage is refused until some expires.
+- An object on Omacloud storage can be at most 5 GiB (Omacloud's own are
+  far smaller).
+
 ## 0.0.13 (2026-10-07)
 
 Nothing you save is lost to a sync in progress.

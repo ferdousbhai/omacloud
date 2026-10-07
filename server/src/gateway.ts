@@ -7,10 +7,13 @@
 // objects (get, head, put, delete, multipart), listing (v2), batch delete,
 // and the bucket itself as a formality. Anything else is refused, so a key
 // can't reach outside its folder, change permissions or copy from elsewhere.
+// What a request deletes or overwrites goes to the trash first (trash.ts).
 
 import { type Account, keyAccount, masterKey, release, reserve, secretOf, touched } from "./db.ts";
 import { canonicalRequest, decode, encodePath, parseAuth, same, scope, sha256Hex, sign } from "./sigv4.ts";
+import * as trash from "./trash.ts";
 import { escapeXml, unescapeXml, upstream } from "./upstream.ts";
+import { uploadBytes } from "./usage.ts";
 
 /** Request headers that go through to the bucket. Everything else (ACLs, copy sources, server-side encryption) stays behind. */
 const PASS_REQUEST = [
@@ -37,6 +40,14 @@ function error(status: number, code: string, message: string): Response {
 }
 const denied = (message: string) => error(403, "AccessDenied", message);
 const notImplemented = () => error(501, "NotImplemented", "Omacloud storage doesn't do this");
+const tooLarge = () => error(400, "EntityTooLarge", "An object can be at most 5 GiB");
+
+/** Whether the bucket turned a request down for a header it doesn't do (here: If-Match). */
+async function unsupported(r: Response): Promise<boolean> {
+	if (r.status === 501) return true;
+	if (r.status !== 400) return false;
+	return /<Code>(NotImplemented|InvalidArgument)<\/Code>/.test(await r.clone().text());
+}
 
 /** A key the gateway will put under an account's folder: no `.` or `..` segments (a URL would resolve them, out of the folder), no control characters. */
 export function validKey(key: string): boolean {
@@ -177,6 +188,8 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext): Pro
 	const writes = req.method === "PUT" && (operation === "Object" || operation === "Multipart");
 	if (writes) {
 		if (length === null) return error(411, "MissingContentLength", "Give the length");
+		// every object stays small enough to copy to the trash
+		if (length > trash.MAX_OBJECT) return tooLarge();
 		// taken before the write, so writes side by side can't overrun it
 		if (!(await reserve(env.DB, account.id, length)))
 			return error(403, "QuotaExceeded", "Your Omacloud storage is full");
@@ -184,14 +197,17 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext): Pro
 
 	let body: BodyInit | null = null;
 	let upstreamPayload = payload;
+	// what this request would delete or overwrite: kept in the trash first
+	let doomed: string[] = [];
 	if (operation === "DeleteMany") {
 		if (length === null || length > SMALL) return error(400, "InvalidRequest", "Too large");
 		const bytes = new Uint8Array(await req.arrayBuffer());
 		if (payload !== UNSIGNED && !same(await sha256Hex(bytes), payload))
 			return error(400, "XAmzContentSHA256Mismatch", "The body doesn't match its hash");
-		const rewritten = rewriteDelete(new TextDecoder().decode(bytes), folder);
-		if (rewritten === null) return error(400, "MalformedXML", "Bad delete request");
-		const encoded = new TextEncoder().encode(rewritten);
+		const asked = parseDelete(new TextDecoder().decode(bytes));
+		if (asked === null) return error(400, "MalformedXML", "Bad delete request");
+		doomed = asked.keys;
+		const encoded = new TextEncoder().encode(deleteXml(asked, folder));
 		const md5 = new Uint8Array(await crypto.subtle.digest("MD5", encoded));
 		const i = pass.findIndex(([k]) => k === "content-md5");
 		if (i >= 0) pass.splice(i, 1);
@@ -204,15 +220,86 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext): Pro
 		body = req.body && n > 0 ? req.body.pipeThrough(new FixedLengthStream(n)) : "";
 	}
 
+	// a put that can only create (If-None-Match: *, which every bucket
+	// behind honors on a plain put) destroys nothing; nor does a part, or
+	// starting or abandoning an upload
+	const createOnly = req.method === "PUT" && req.headers.get("if-none-match")?.trim() === "*";
+	const completes = operation === "Multipart" && req.method === "POST" && query.some(([k]) => k === "uploadId");
+	if (key !== null && ((operation === "Object" && ((req.method === "PUT" && !createOnly) || req.method === "DELETE")) || completes))
+		doomed = [key];
+	doomed = doomed.filter((k) => !trash.exempt(k));
+	if (completes) {
+		const size = await uploadBytes(env, upstreamPath, query.find(([k]) => k === "uploadId")![1]);
+		if (size !== null && size > trash.MAX_OBJECT) return tooLarge();
+	}
+	let kept = new Map<string, string | null>();
+	if (doomed.length) {
+		try {
+			const r = await trash.preserve(env, account, doomed);
+			kept = r.kept;
+			if (r.full) ctx.waitUntil(trash.alertFull(env, account.id));
+		} catch (e) {
+			if (writes) ctx.waitUntil(release(env.DB, account.id, length ?? 0));
+			if (e instanceof trash.Full) {
+				ctx.waitUntil(trash.alertFull(env, account.id));
+				return error(
+					400,
+					"TooMuchDeleted",
+					"Too much was deleted or replaced in this account in the last 14 days: deleting and replacing files is paused, and frees up as deleted files expire",
+				);
+			}
+			if (e instanceof trash.TooLarge) return tooLarge();
+			console.error(JSON.stringify({ event: "trash failed", account: account.id, method: req.method, error: String(e) }));
+			return error(503, "ServiceUnavailable", "Try again");
+		}
+	}
+	// A single delete or put lands only on the version just kept: the bucket
+	// checks (If-Match, or If-None-Match: * for nothing there; Ceph and
+	// SeaweedFS honor both), and a version written in between makes it try
+	// again. A batch delete and a finished upload can't say so on every
+	// bucket: a version another key of the account writes between the copy
+	// and the delete (milliseconds) is lost to those.
+	let guarded = false;
+	if (key !== null && operation === "Object" && kept.has(key)) {
+		const etag = kept.get(key);
+		if (etag === null && req.method === "DELETE") return new Response(null, { status: 204 });
+		const h = etag === null ? "if-none-match" : "if-match";
+		const i = pass.findIndex(([k]) => k === h);
+		const theirs = i >= 0 ? pass[i][1].trim().replace(/^"|"$/g, "") : null;
+		if (etag !== null && theirs !== null && theirs !== etag) {
+			if (writes) ctx.waitUntil(release(env.DB, account.id, length ?? 0));
+			return error(412, "PreconditionFailed", "At least one of the preconditions you specified did not hold");
+		}
+		if (i >= 0) pass.splice(i, 1);
+		pass.push([h, etag === null ? "*" : `"${etag}"`]);
+		guarded = true;
+		// a small overwrite (records, never packs) is held, so it can go
+		// again without the check if the bucket doesn't take it
+		if (req.method === "PUT" && body instanceof ReadableStream && (length ?? 0) <= SMALL)
+			body = new Uint8Array(await new Response(body).arrayBuffer());
+	}
+
 	let response: Response;
 	try {
 		response = await upstream(env, req.method, upstreamPath, upstreamQuery, pass, upstreamPayload, body);
+		// a bucket that doesn't do the check on this request: once more
+		// without it, as before there was one (the window above, for this
+		// request too)
+		if (guarded && !(body instanceof ReadableStream) && (await unsupported(response))) {
+			console.error(JSON.stringify({ event: "bucket refused a conditional request", method: req.method }));
+			const plain = pass.filter(([k]) => k !== "if-match" && k !== "if-none-match");
+			response = await upstream(env, req.method, upstreamPath, upstreamQuery, plain, upstreamPayload, body);
+		}
 	} catch (e) {
 		console.error(JSON.stringify({ account: account.id, method: req.method, error: String(e) }));
 		if (writes) ctx.waitUntil(release(env.DB, account.id, length ?? 0));
 		return error(502, "ServiceUnavailable", "Try again");
 	}
 	if (writes && !response.ok) ctx.waitUntil(release(env.DB, account.id, length ?? 0));
+	// written by someone else since it was kept: again
+	if (guarded && response.status === 412) return error(503, "ServiceUnavailable", "Try again");
+	// gone meanwhile (a delete answers that as if it went now)
+	if (guarded && req.method === "DELETE" && response.status === 404) return new Response(null, { status: 204 });
 	// due a count again, even if one ran while this was written
 	if (response.ok && (writes || operation === "DeleteMany" || req.method === "DELETE"))
 		ctx.waitUntil(touched(env.DB, account.id));
@@ -234,12 +321,27 @@ export async function handle(req: Request, env: Env, ctx: ExecutionContext): Pro
 	return new Response(response.body, { status: response.status, headers });
 }
 
-/**
- * A batch delete, its keys moved into `folder`; null if it's anything but
- * plain keys. Parsed strictly: an element it doesn't know (a namespace
- * prefix, a version) fails it rather than slipping past.
- */
+/** A batch delete, its keys moved into `folder`; null if it's anything but plain keys (see parseDelete). */
 export function rewriteDelete(xml: string, folder: string): string | null {
+	const asked = parseDelete(xml);
+	return asked && deleteXml(asked, folder);
+}
+
+function deleteXml(asked: { keys: string[]; quiet: boolean }, folder: string): string {
+	return (
+		`<?xml version="1.0" encoding="UTF-8"?><Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/">` +
+		(asked.quiet ? "<Quiet>true</Quiet>" : "") +
+		asked.keys.map((k) => `<Object><Key>${escapeXml(folder + k)}</Key></Object>`).join("") +
+		"</Delete>"
+	);
+}
+
+/**
+ * A batch delete's keys; null if it's anything but plain keys. Parsed
+ * strictly: an element it doesn't know (a namespace prefix, a version)
+ * fails it rather than slipping past.
+ */
+export function parseDelete(xml: string): { keys: string[]; quiet: boolean } | null {
 	const body = xml.replace(/^\s*<\?xml[^?]*\?>/, "").trim();
 	const tokens = body.match(/<[^>]*>|[^<]+/g) ?? [];
 	const keys: string[] = [];
@@ -277,12 +379,7 @@ export function rewriteDelete(xml: string, folder: string): string | null {
 		} else return null;
 	}
 	if (stack.length !== 0 || keys.length === 0 || keys.length > 1000) return null;
-	return (
-		`<?xml version="1.0" encoding="UTF-8"?><Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/">` +
-		(quiet ? "<Quiet>true</Quiet>" : "") +
-		keys.map((k) => `<Object><Key>${escapeXml(folder + k)}</Key></Object>`).join("") +
-		"</Delete>"
-	);
+	return { keys, quiet };
 }
 
 /** The bucket's XML with the account's folder taken off keys and prefixes, and the bucket behind named as the account's. */

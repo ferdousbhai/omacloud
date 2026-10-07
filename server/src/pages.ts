@@ -104,6 +104,11 @@ sign-in, or don't and it's deleted when the link expires. Cloudflare Turnstile c
 a person, and sees your browser and IP address to do it.</li>
 <li>Your account: when it was made, your storage quota and how much of it you use.</li>
 <li>Your encrypted data, and the sizes and times of what your computers upload.</li>
+<li>What your computers delete or replace: it's kept, encrypted as everything is, for 14 days,
+so a mistake or a break-in can be undone, and then removed. It doesn't count toward your
+quota, but up to as much as your quota is kept: past that, deleting or replacing files is
+paused until some of it expires. Undoing puts back what was deleted or replaced after a time
+you name; files added since stay.</li>
 <li>Service logs (which account made a request, what kind, and how it went), kept for a short
 time to run and debug the service.</li>
 </ul>
@@ -118,7 +123,8 @@ and about your account. Emails are sent through Cloudflare Email Sending.</p>
 <h2>Leaving</h2>
 <p>You can take your data out at any time (<code>omacloud export</code> gives you a standard
 restic repository). Ask at <a href="mailto:${PRIVACY}">${PRIVACY}</a> and your account and
-everything stored for it are deleted, or your address taken off the waitlist.</p>
+everything stored for it are deleted (what was kept of deleted files within 14 days), or your
+address taken off the waitlist.</p>
 <h2>Contact</h2>
 <p><a href="mailto:${PRIVACY}">${PRIVACY}</a></p>`,
 	);

@@ -115,6 +115,14 @@ removed computer's key no longer reaches your storage (`omacloud bucket
 set-key` from the terminal). Signing in with Google still gets any computer
 a new key, so anyone who can sign in to your Google account (on the lost
 computer, say) can reach your storage again: sign it out of Google too.
+Whatever is deleted or replaced on Omacloud storage, by a removed computer
+or anyone else, can be undone for 14 days: ask at
+privacy@omacloud.computer, saying when it started. Everything deleted or
+replaced since then is put back; files added since stay (they do no harm),
+and a computer already approved may show on Devices as asking to join
+again (don't approve one you removed). Once as much as your quota
+has been deleted in 14 days, more deleting and replacing is refused (a sync
+says `TooMuchDeleted`) until some of it expires.
 With your own bucket, make a new key at your provider and enter it; every
 other computer switches on its next sync, Devices shows when all have, and
 then you delete the old key at your provider.

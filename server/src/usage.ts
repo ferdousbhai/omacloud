@@ -46,18 +46,26 @@ export async function openUploads(env: Env, prefix: string, now = Date.now()): P
 			continue;
 		}
 		open = true;
-		let marker: string | null = null;
-		do {
-			const pq: [string, string][] = [["uploadId", id]];
-			if (marker) pq.push(["part-number-marker", marker]);
-			const p = await upstream(env, "GET", path, pq, [], EMPTY_SHA256, null);
-			if (!p.ok) break; // finished or aborted meanwhile
-			const parts = await p.text();
-			for (const m of parts.matchAll(/<Part>[\s\S]*?<Size>(\d+)<\/Size>[\s\S]*?<\/Part>/g)) bytes += Number(m[1]);
-			marker = /<IsTruncated>true<\/IsTruncated>/.test(parts) ? tag(parts, "NextPartNumberMarker") : null;
-		} while (marker);
+		// finished or aborted meanwhile: nothing
+		bytes += (await uploadBytes(env, path, id)) ?? 0;
 	}
 	return { bytes, open };
+}
+
+/** The bytes in an open multipart upload's parts (`path` encoded); null if it isn't open. */
+export async function uploadBytes(env: Env, path: string, id: string): Promise<number | null> {
+	let bytes = 0;
+	let marker: string | null = null;
+	do {
+		const pq: [string, string][] = [["uploadId", id]];
+		if (marker) pq.push(["part-number-marker", marker]);
+		const p = await upstream(env, "GET", path, pq, [], EMPTY_SHA256, null);
+		if (!p.ok) return null;
+		const parts = await p.text();
+		for (const m of parts.matchAll(/<Part>[\s\S]*?<Size>(\d+)<\/Size>[\s\S]*?<\/Part>/g)) bytes += Number(m[1]);
+		marker = /<IsTruncated>true<\/IsTruncated>/.test(parts) ? tag(parts, "NextPartNumberMarker") : null;
+	} while (marker);
+	return bytes;
 }
 
 export async function count(env: Env): Promise<void> {

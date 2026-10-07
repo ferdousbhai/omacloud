@@ -1,7 +1,7 @@
 // The emails Omacloud sends, through Cloudflare Email Sending: an
 // invitation, the link that confirms a waitlist request typed on the
-// website, and the admin's daily count of the waitlist. Logs never name the
-// address.
+// website, the admin's daily count of the waitlist, and alerts for the
+// admin. Logs never name the address.
 
 import { escapeXml } from "./upstream.ts";
 
@@ -72,3 +72,6 @@ export const digest = (count: number, since: number): Message =>
 		`${count} joined the waitlist ${since ? `since ${new Date(since * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC` : "so far"}.`,
 		"server/invite.sh list shows who; server/invite.sh <email> invites.",
 	]);
+
+/** For the admin: something to look at. Names accounts by id only. */
+export const alert = (subject: string, paragraphs: string[]): Message => message(subject, paragraphs);

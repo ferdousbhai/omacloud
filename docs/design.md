@@ -98,7 +98,19 @@ retires the account's other keys, a removed computer's among them. A
 removed computer could ask for keys or retire others in the meantime, but
 whatever it makes is retired with the rest, and a computer whose key was
 retired signs in with Google again (`bucket set-key --here-only`): at worst
-it makes the account's computers sign in again.
+it makes the account's computers sign in again. What any key deletes or
+overwrites meanwhile is kept: the gateway first copies it to a trash
+outside every account's folder, kept 14 days (`server/src/trash.ts`), from
+which Omacloud can put back what was deleted or overwritten after a given
+time. A single delete or put then goes ahead only if the object is still
+the version copied (`If-Match`), where the bucket checks that; one that
+turns the check down gets the request again without it. A batch delete, a
+finished multipart upload, and any delete or put on a bucket without the
+check, can lose a version another computer writes in the moment between
+the copy and the delete (milliseconds).
+The trash holds at most the account's quota: past that, deletes and
+overwrites are refused until some of it expires, rather than anything
+leaving it early.
 
 With delete protection on the bucket (object lock, R2 bucket locks), sync
 works as usual, and old epochs are deleted once their retention ends.

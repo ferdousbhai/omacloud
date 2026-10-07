@@ -3,7 +3,9 @@
 # locally by wrangler) with SeaweedFS as the bucket behind; another
 # account's key is shown it can't reach the first account's folder; then
 # two computers sign in (with a stand-in for Google) and sync, and the
-# waitlist takes a sign-in and a request from the website.
+# waitlist takes a sign-in and a request from the website. Last, a key of
+# the account deletes everything, and a restore from the trash brings it all
+# back.
 #
 #   scripts/gateway-sync.sh        (needs docker, node and python3)
 set -euo pipefail
@@ -37,7 +39,8 @@ docker run -d --name "$weed" -p "127.0.0.1:$wport:8333" -v "$work/s3.json:/etc/s
   chrislusf/seaweedfs server -s3 -s3.config=/etc/s3.json -dir=/data >/dev/null
 
 # s3 METHOD PATH [QUERY]: a SigV4-signed request; prints the status, then
-# the body. S3_HOST, S3_KEY, S3_SECRET, S3_REGION say where and as whom.
+# the body. S3_HOST, S3_KEY, S3_SECRET, S3_REGION say where and as whom;
+# S3_BODY names a file to send.
 cat >"$work/s3.py" <<'EOF'
 import os, sys, hashlib, hmac, datetime, urllib.request, urllib.error
 method, path = sys.argv[1], sys.argv[2]
@@ -55,6 +58,8 @@ for p in scope.split("/"):
 sig = hmac.new(k, sts.encode(), hashlib.sha256).hexdigest()
 url = f"http://{host}{path}" + (f"?{query}" if query else "")
 data = b"x" if method == "PUT" and path.count("/") > 1 else None
+if os.environ.get("S3_BODY"):
+    data = open(os.environ["S3_BODY"], "rb").read()
 req = urllib.request.Request(url, method=method, data=data, headers={
     "x-amz-date": stamp, "x-amz-content-sha256": h,
     "authorization": f"AWS4-HMAC-SHA256 Credential={key}/{scope}, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature={sig}"})
@@ -141,11 +146,13 @@ S3_ENDPOINT="http://127.0.0.1:$gport" S3_BUCKET=$a S3_REGION=omacloud \
   S3_KEY=OCAAAAAAAAAAAAAAAAAA S3_SECRET=$(secret OCAAAAAAAAAAAAAAAAAA) \
   scripts/s3-sync.sh || { echo "--- server log"; tail -30 "$work/server.log"; exit 1; }
 
-# everything a wrote is in its folder of the bucket behind
+# everything a wrote is in its folder of the bucket behind, and what it
+# deleted or overwrote in its trash
 listing=$(upstream GET /everyone list-type=2)
 keys=$(grep -o '<Key>[^<]*</Key>' <<<"$listing" || true)
 [ -n "$keys" ] || { echo "nothing in the bucket behind"; exit 1; }
-if grep -v "<Key>$a/" <<<"$keys"; then echo "written outside a's folder"; exit 1; fi
+if grep -v -e "<Key>$a/" -e "<Key>\.trash/$a/" <<<"$keys"; then echo "written outside a's folder"; exit 1; fi
+grep -q "<Key>\.trash/$a/" <<<"$keys" || { echo "a's trash is empty"; exit 1; }
 
 as_b() { S3_HOST=127.0.0.1:$gport S3_KEY=OCBBBBBBBBBBBBBBBBBB S3_SECRET=$(secret OCBBBBBBBBBBBBBBBBBB) S3_REGION=omacloud python3 "$work/s3.py" "$@"; }
 expect() { # status method path [query]
@@ -359,3 +366,62 @@ used=$(d1get "SELECT used FROM accounts WHERE id = '$a'")
 listed=$(upstream GET /everyone "list-type=2&prefix=$a%2F" | grep -o '<Size>[0-9]*</Size>' | grep -o '[0-9]*' | paste -sd+ | python3 -c 'print(eval(input()))')
 [ "$used" = "$listed" ] || { echo "usage $used, listed $listed"; exit 1; }
 echo "usage count ok"
+
+# the trash: someone with a key of alice's (ha's) deletes everything she
+# has, and the admin restores the account to just before (restore.sh, its cf
+# standing in on the local database); a new computer gets every file back
+echo alice >"$work/who"
+oc ha sync >/dev/null 2>&1 || { echo "ha can't sync before"; exit 1; }
+oc ha versions note.txt >/dev/null 2>&1 || { echo "ha has no versions before"; exit 1; }
+read -r abucket aid asecret < <(python3 -c 'import tomllib,sys; c=tomllib.load(open(sys.argv[1],"rb"))["coordination"]; print(c["bucket"], c["access_key_id"], c["secret_access_key"])' "$work/ha.toml")
+as_ha() { S3_HOST=127.0.0.1:$gport S3_KEY=$aid S3_SECRET=$asecret S3_REGION=omacloud python3 "$work/s3.py" "$@"; }
+alice_keys() { as_ha GET "/$abucket" list-type=2 | grep -o '<Key>[^<]*</Key>' || true; }
+[ "$(alice_keys | wc -l)" -gt 10 ] || { echo "alice has too little to delete"; exit 1; }
+before=$(date +%s)
+sleep 1
+while keys=$(alice_keys) && [ -n "$keys" ]; do
+  { echo "<Delete>"; sed 's|.*|<Object>&</Object>|' <<<"$keys"; echo "</Delete>"; } >"$work/delete.xml"
+  out=$(S3_BODY="$work/delete.xml" as_ha POST "/$abucket" delete=)
+  [ "$(head -1 <<<"$out")" = 200 ] || { echo "the attack failed: $out"; sleep 1; grep -A3 "trash failed" "$work/server.log" | tail; exit 1; }
+done
+if grep -q "<Key>$abucket/" <<<"$(upstream GET /everyone "list-type=2&prefix=$abucket%2F")"; then
+  echo "alice's folder isn't empty"; exit 1
+fi
+if oc ha versions note.txt >/dev/null 2>&1; then echo "alice's history is still there"; exit 1; fi
+# beside her folder, the trash has it all
+upstream GET /everyone "list-type=2&prefix=.trash%2F$abucket%2F" | grep -q '<Key>' || { echo "no trash"; exit 1; }
+cat >"$work/cf.py" <<'EOF'
+# cf, standing in for `cf d1 query <id> --sql ... | --batch ...` on the
+# local database file, parameters bound as D1 binds them
+import json, sqlite3, sys
+db, args = sys.argv[1], sys.argv[2:]
+assert args[:2] == ["d1", "query"], args
+c = sqlite3.connect(db, isolation_level=None)
+if args[3] == "--sql":
+    print(json.dumps(c.execute(args[4]).fetchall()))
+else:
+    c.execute("BEGIN")
+    for q in json.loads(args[4]):
+        c.execute(q["sql"], q.get("params", []))
+    c.execute("COMMIT")
+EOF
+sqlite=$(find "$work/state" -path '*D1*' -name '*.sqlite' | head -1)
+[ -n "$sqlite" ] || { echo "no local database"; exit 1; }
+restore() { OMACLOUD_CF="python3 $work/cf.py $sqlite" server/restore.sh "$@"; }
+if restore nobody@example.com "$before" 2>/dev/null; then echo "restored nobody"; exit 1; fi
+restore alice@example.com "$before" >/dev/null
+for _ in $(seq 20); do
+  curl -sf "http://localhost:$gport/__scheduled" >/dev/null
+  [ "$(d1get "SELECT count(*) FROM restores WHERE done IS NULL")" = 0 ] && break
+done
+restore status | grep -q "alice@example.com" || { echo "no restore in the status"; exit 1; }
+[ "$(d1get "SELECT count(*) FROM restores WHERE done IS NOT NULL AND restored > 10")" = 1 ] \
+  || { echo "the restore didn't finish"; grep -i restore "$work/server.log" | tail; exit 1; }
+oc ha versions note.txt >/dev/null 2>&1 || { echo "ha's history didn't come back"; exit 1; }
+oc ha sync >"$work/hasync.out" 2>&1 || { echo "ha can't sync after the restore"; cat "$work/hasync.out"; exit 1; }
+OMACLOUD_RECOVERY_CODE=$code oc hz init --hosted --folder "$work/HZ" --device hz >"$work/hz.out" 2>&1 \
+  || { cat "$work/hz.out"; exit 1; }
+oc hz sync >>"$work/hz.out" 2>&1 || { cat "$work/hz.out"; exit 1; }
+diff -r --no-dereference "$work/HA" "$work/HZ" || { echo "hz didn't get every file back"; exit 1; }
+for f in note.txt later.txt after.txt again.txt; do [ -s "$work/HZ/$f" ] || { echo "no $f"; exit 1; }; done
+echo "restore ok"

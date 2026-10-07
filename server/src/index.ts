@@ -6,6 +6,7 @@ import * as gateway from "./gateway.ts";
 import * as keys from "./keys.ts";
 import * as pages from "./pages.ts";
 import * as signin from "./signin.ts";
+import * as trash from "./trash.ts";
 import * as usage from "./usage.ts";
 import * as waitlist from "./waitlist.ts";
 
@@ -42,6 +43,9 @@ export default {
 			["invitations", () => waitlist.notifyInvites(env)],
 			["waitlist digest", () => waitlist.digest(env)],
 			["waitlist purge", () => waitlist.purge(env)],
+			["restore", () => trash.restore(env)],
+			["trash purge", () => trash.purge(env)],
+			["trash sweep", () => trash.sweep(env)],
 			["usage", () => usage.count(env)],
 		];
 		for (const [job, run] of jobs) {
