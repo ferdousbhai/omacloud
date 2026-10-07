@@ -58,14 +58,66 @@ keyring; scripts that make test accounts clear their keyring entries on exit
   pattern can match the shell running it.
 - Guard `rm -rf` paths built from variables: `"${dir:?}"/...`.
 
+## Packaging checks
+
+`python3 scripts/tests/installer.py` checks architecture selection,
+repository migration, and repeated installation with isolated files and
+commands. `python3 scripts/tests/release.py` checks that each repository
+contains only its architecture and that metadata, signing, or database
+failures stop publication. It needs `bsdtar` (libarchive-tools on Ubuntu).
+`python3 scripts/tests/verify-release.py` exercises the container verification
+commands, including wrong runtime/package architectures and embedded builder
+paths. CI runs these checks and builds/tests the application on a native
+ARM runner.
+
 ## Releases
 
-`scripts/release.sh <version>` (from a clean `master`, with the version in
-`Cargo.toml` and `CHANGELOG.md`) tags, builds and signs the package and the
-`[omacloud]` repository database, publishes them with `install.sh` as a
-GitHub release, then `scripts/verify-release.sh` installs it in a clean Arch
-container and takes the release back down if that fails. Signing needs the
-package-signing key whose fingerprint `install.sh` pins.
+Release packages must be built natively on both x86_64 and aarch64 from the
+same committed source, with `Cargo.toml` and `CHANGELOG.md` updated first.
+CI's `packages` jobs build both architectures in Arch containers and upload
+`omacloud-x86_64` and `omacloud-aarch64` artifacts. Each contains a zstd
+package and `source-commit.txt`. Download the other architecture's artifact
+from a successful CI run of the exact master commit you are releasing:
+
+```sh
+gh run download <run-id> --name omacloud-x86_64 --dir /tmp/omacloud-release-x86_64
+```
+
+The release script checks the source manifest when present and rejects a
+package from a different commit. Locally, `scripts/build-package.sh
+<architecture> <version> [output-directory]` runs the same container build;
+it needs Docker and `ARM_VERIFY_IMAGE` for an ARM build. The candidate tag
+is created inside the container and does not alter the checkout's tags.
+
+To build the other architecture manually instead:
+On the other builder, tag that commit locally as `v<version>` and run
+`cd pkgbuild && PKGEXT=.pkg.tar.zst makepkg`; transfer its package to the releasing machine,
+outside `dist/`. The release script creates its own tag on a clean `master`
+checkout and builds the host package:
+
+```sh
+ARM_VERIFY_IMAGE=<your-arch-linux-arm-image> \
+  scripts/release.sh <version> /path/to/omacloud-<version>-1-<other-architecture>.pkg.tar.zst
+```
+
+The script checks both packages' names, versions and architectures, signs
+both using the key pinned in `install.sh`, uses zstd package compression on both builders, and creates separate signed
+`omacloud` and `omacloud-aarch64` databases. It publishes these with the
+installer and the signing key under both repository names.
+
+Verification installs each architecture's package in a clean container,
+checks its package architecture and runs the CLI. Set `ARM_VERIFY_IMAGE` to
+an Arch Linux ARM image with pacman and archlinuxarm-keyring installed.
+For example, import the official [generic AArch64 root filesystem](https://archlinuxarm.org/platforms/armv8/generic):
+
+```sh
+curl -fL https://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz -o /tmp/omacloud-arch-arm.tar.gz
+docker import --platform linux/arm64 /tmp/omacloud-arch-arm.tar.gz omacloud-arch-arm
+```
+
+Then use `ARM_VERIFY_IMAGE=omacloud-arch-arm`. Docker needs native execution
+or configured emulation for both platforms. If either installation fails,
+the release and tag are taken back down.
 
 ## Checking a release
 

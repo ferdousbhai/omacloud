@@ -2,6 +2,10 @@
 
 ## 0.0.14 (2026-10-07)
 
+- Native aarch64 packages join x86_64 releases. The installer selects a
+  separate signed ARM repository and removes the incompatible repository
+  left by earlier installers on ARM computers.
+
 - Dropbox is available as your own storage. Create an App folder scoped
   Dropbox app, authorize it from setup, and Omacloud keeps its encrypted
   repository and coordination records there. Other computers join by code;

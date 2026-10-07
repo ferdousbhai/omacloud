@@ -1,5 +1,5 @@
 /target
 /pkgbuild/src/
 /pkgbuild/pkg/
-/pkgbuild/*.pkg.tar.zst
+/pkgbuild/*.pkg.tar.*
 /dist/

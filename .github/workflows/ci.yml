@@ -38,6 +38,59 @@ jobs:
       - name: Bucket key change, one computer offline
         run: scripts/bucket-key.sh target/debug/omacloud
 
+  arm:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libadwaita-1-dev
+      - run: cargo build --locked -p omacloud -p omacloud-app
+      - run: cargo test --locked --workspace
+
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libarchive-tools
+      - run: bash -n install.sh pkgbuild/PKGBUILD scripts/build-package.sh scripts/release.sh scripts/verify-release.sh
+      - run: python3 scripts/tests/installer.py
+      - run: python3 scripts/tests/release.py
+      - run: python3 scripts/tests/verify-release.py
+
+  packages:
+    needs: packaging
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x86_64
+            runner: ubuntu-latest
+          - architecture: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prepare Arch Linux ARM image
+        if: matrix.architecture == 'aarch64'
+        run: |
+          curl -fL --retry 3 https://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz -o "$RUNNER_TEMP/arch-arm.tar.gz"
+          docker import --platform linux/arm64 "$RUNNER_TEMP/arch-arm.tar.gz" omacloud-arch-arm
+      - name: Build and check native package
+        env:
+          ARM_VERIFY_IMAGE: omacloud-arch-arm
+          BUILD_ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          version=$(sed -n 's/^version = "\([0-9.]*\)"$/\1/p' Cargo.toml)
+          scripts/build-package.sh "$BUILD_ARCHITECTURE" "$version" "$RUNNER_TEMP/package"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omacloud-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/package/
+          if-no-files-found: error
+
   server:
     runs-on: ubuntu-latest
     defaults:

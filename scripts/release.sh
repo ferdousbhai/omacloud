@@ -4,7 +4,7 @@
 # and publish them as one GitHub release. Computers that ran install.sh get it
 # through `omarchy update`.
 #
-#   scripts/release.sh 0.0.1
+#   scripts/release.sh 0.0.1 /path/to/other-architecture.pkg.tar.zst
 #
 # The tag is v<version>; the PKGBUILD takes its version from it. CHANGELOG.md
 # and the workspace version must already say <version>. The release's assets
@@ -17,8 +17,40 @@ repo=omacloud
 gh_repo=ferdousbhai/omacloud
 
 version=${1:-}
-[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Usage: scripts/release.sh <major.minor.patch>" >&2; exit 1; }
+shift || true
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Usage: scripts/release.sh <major.minor.patch> <other-architecture.pkg.tar.zst>" >&2; exit 1; }
 tag=v$version
+# Build natively here; provide the package built from the same release
+# source on the other architecture. Both are signed with the local key.
+(( $# == 1 )) || { echo "Supply a native package for the other architecture." >&2; exit 1; }
+other_package=$(realpath "$1")
+[[ -f $other_package ]] || { echo "Package not found: $other_package" >&2; exit 1; }
+[[ $other_package != "$PWD/dist/"* ]] || { echo "Keep the supplied package outside dist (which is rebuilt)." >&2; exit 1; }
+# ARM verification needs an Arch Linux ARM container with pacman and
+# its distribution keyring installed; there is no official multiarch archlinux Docker image.
+[[ -n ${ARM_VERIFY_IMAGE:-} ]] || { echo "Set ARM_VERIFY_IMAGE to your Arch Linux ARM verification image." >&2; exit 1; }
+
+case "$(uname -m)" in
+  x86_64) other_architecture=aarch64 ;;
+  aarch64) other_architecture=x86_64 ;;
+  *) echo "Release builds require x86_64 or aarch64." >&2; exit 1 ;;
+esac
+validate_package() {
+  local package=$1 architecture=$2 metadata field
+  [[ $(basename "$package") == "$repo-$version-1-$architecture.pkg.tar.zst" ]] \
+    || { echo "Expected $repo-$version-1-$architecture.pkg.tar.zst, got $package." >&2; return 1; }
+  metadata=$(bsdtar -xOf "$package" .PKGINFO) || return 1
+  for field in "pkgname = $repo" "pkgver = $version-1" "arch = $architecture"; do
+    grep -qxF "$field" <<< "$metadata" \
+      || { echo "$package: expected $field" >&2; return 1; }
+  done
+}
+validate_package "$other_package" "$other_architecture" || exit 1
+source_manifest=$(dirname "$other_package")/source-commit.txt
+if [[ -f $source_manifest ]]; then
+  [[ $(cat "$source_manifest") == "$(git rev-parse HEAD)" ]] \
+    || { echo "The supplied CI package was built from a different commit." >&2; exit 1; }
+fi
 
 [[ -z $(git status --porcelain) ]] || { echo "Commit or stash your changes first." >&2; exit 1; }
 [[ $(git branch --show-current) == master ]] || { echo "Release from master." >&2; exit 1; }
@@ -41,37 +73,46 @@ undo_tag() { git tag -d "$tag" >/dev/null 2>&1 || true; }
 
 rm -rf dist
 mkdir dist
-(cd pkgbuild && PKGDEST="$PWD/../dist" makepkg --force --sign) \
-  || { echo "Building the package failed; not releasing." >&2; undo_tag; exit 1; }
+(cd pkgbuild && PKGDEST="$PWD/../dist" PKGEXT=.pkg.tar.zst makepkg --force) \
+  || { git checkout -q -- pkgbuild/PKGBUILD; echo "Building the package failed; not releasing." >&2; undo_tag; exit 1; }
 # makepkg writes the computed pkgver back into the PKGBUILD; keep the committed one.
 git checkout -q -- pkgbuild/PKGBUILD
-ls dist/"$repo-$version"-*.pkg.tar.zst >/dev/null \
-  || { echo "The package isn't version $version." >&2; undo_tag; exit 1; }
+cp "$other_package" dist/ || { undo_tag; exit 1; }
 
 (
   cd dist
-  repo-add --sign --verify "$repo.db.tar.gz" ./*.pkg.tar.zst
-  # repo-add leaves the names pacman asks for (omacloud.db, .files and their
-  # .sig) as symlinks, which a GitHub release cannot hold: copy them.
-  for name in db files; do
-    rm -f "$repo.$name" "$repo.$name.sig"
-    cp "$repo.$name.tar.gz" "$repo.$name"
-    cp "$repo.$name.tar.gz.sig" "$repo.$name.sig"
+  for architecture in x86_64 aarch64; do
+    package="$repo-$version-1-$architecture.pkg.tar.zst"
+    [[ -f $package ]] || { echo "Missing $package; both architectures are required." >&2; exit 1; }
+    validate_package "$package" "$architecture" || exit 1
+    gpg --batch --yes --local-user "$fingerprint" --detach-sign "$package" || exit 1
+    database=$repo
+    [[ $architecture == x86_64 ]] || database=$repo-$architecture
+    repo-add --sign --verify "$database.db.tar.gz" "$package" || exit 1
+    # GitHub assets cannot hold the symlinks repo-add creates.
+    for name in db files; do
+      rm -f "$database.$name" "$database.$name.sig"
+      cp "$database.$name.tar.gz" "$database.$name" || exit 1
+      cp "$database.$name.tar.gz.sig" "$database.$name.sig" || exit 1
+    done
+    gpg --batch --armor --export-filter keep-uid="uid =~ Omacloud" --export "$fingerprint" >"$database-signing-key.asc" || exit 1
   done
-  gpg --batch --armor --export-filter keep-uid="uid =~ Omacloud" --export "$fingerprint" >"$repo-signing-key.asc"
-  cp ../install.sh install.sh
-)
+  cp ../install.sh install.sh || exit 1
+) || { echo "Preparing the repositories failed; not releasing." >&2; undo_tag; exit 1; }
 
 git push -q origin "$tag"
 notes=$(awk -v v="## $version" '$0 ~ "^"v {on=1; next} /^## / && on {exit} on' CHANGELOG.md)
 notes+=$'\n\nInstall on Omarchy, then updates arrive through `omarchy update`:\n\n'
 notes+='```'$'\n''curl -fsSL https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh | sudo bash'$'\n''```'
-gh release create "$tag" dist/* --repo "$gh_repo" --title "Omacloud $version" --notes "$notes" --latest
+notes_file=$(mktemp)
+trap 'rm -f "$notes_file"' EXIT
+printf '%s\n' "$notes" > "$notes_file"
+gh release create "$tag" dist/* --repo "$gh_repo" --title "Omacloud $version" --notes-file "$notes_file" --latest
 echo "Published $tag: https://github.com/$gh_repo/releases/tag/$tag"
 
 # A release is shipped only once its installer installs it. If it doesn't,
 # take the release down so "latest" never points at a dud.
-if ! scripts/verify-release.sh "$version"; then
+if ! (scripts/verify-release.sh "$version" x86_64 && scripts/verify-release.sh "$version" aarch64); then
   echo "Rolling back $tag." >&2
   gh release delete "$tag" --repo "$gh_repo" --yes
   git push -q origin --delete "$tag" || true
