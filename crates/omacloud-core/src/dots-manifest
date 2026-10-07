@@ -17,3 +17,69 @@ shared .config/kitty/*.conf
 shared .config/btop/btop.conf
 shared .config/starship.toml
 shared .config/tmux/tmux.conf
+# Omacloud's additions, beyond Omarchy's dots: kept whichever manifest is
+# in use. Histories (.bash_history, fish_history, fish_variables) stay on
+# each machine, and .npmrc, which can hold tokens, goes in the secrets
+# bundle instead. Login files (.bash_profile, .profile) and fish's conf.d
+# stay too: installers append lines to them that only make sense where
+# they ran.
+shared .bash_aliases
+shared .inputrc
+shared .gitconfig
+shared .config/git/*
+local .config/git/credentials
+shared .config/fish/config.fish
+shared .config/fish/functions/*.fish
+shared .config/nvim/init.lua
+# (below lua/, Omarchy links the theme in: links are skipped, not taken
+# for a dotfile manager)
+shared .config/nvim/lua/**
+shared .config/mise/config.toml
+shared .config/lazygit/config.yml
+shared .config/mpv/*.conf
+shared .config/fastfetch/*.jsonc
+local .bash_history
+# herdr's settings, never its sockets, logs or sessions
+shared .config/herdr/config.toml
+# AI agents: their settings, instructions, skills, hooks and themes, never
+# their sign-ins, sessions, history, caches or databases (all outside
+# these entries; Omacloud also refuses any credential, auth or token file
+# by name). Skills and plugins their tools install and manage stay.
+# Codex's config.toml and pi's settings.json sync without their
+# machine-only parts (project trust, version notes): see agents.rs.
+shared .claude/settings.json
+shared .claude/CLAUDE.md
+shared .claude/keybindings.json
+shared .claude/agents/**
+shared .claude/commands/**
+shared .claude/skills/**
+local .claude/skills/synced/**
+shared .claude/hooks/**
+shared .claude/themes/**
+local .claude/settings.local.json
+local .claude/.credentials.json
+shared .codex/AGENTS.md
+shared .codex/hooks.json
+shared .codex/rules/**
+shared .codex/skills/**
+local .codex/skills/.system/**
+local .codex/auth.json
+shared .gemini/settings.json
+shared .gemini/GEMINI.md
+shared .gemini/skills/**
+shared .config/opencode/opencode.json
+shared .config/opencode/tui.json
+shared .config/opencode/tui.jsonc
+shared .config/opencode/skills/**
+shared .config/opencode/plugins/**
+shared .cursor/hooks.json
+shared .pi/agent/models.json
+shared .pi/agent/skills/**
+shared .pi/agent/themes/**
+shared .pi/agent/extensions/**
+local .pi/agent/auth.json
+shared .grok/config.toml
+shared .grok/hooks/**
+local .grok/auth.json
+shared .copilot/settings.json
+shared .copilot/hooks/**

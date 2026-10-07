@@ -122,7 +122,35 @@ machines and which stay local (`settings.rs`). Omacloud syncs the shared
 ones, inside the same encrypted history, with three-way merges and a backup
 of anything it replaces. A change made on two machines that doesn't merge is
 held for you to choose (Keep Mine or Keep Theirs). Settings sync stands down
-when another dotfile manager owns those files.
+when another dotfile manager owns those files. Omacloud's own entries
+(shell dotfiles, AI agents' settings and skills) add a `dir/**` form for
+whole folders: text files only, at most 2 MiB, never through a symlink,
+`node_modules`, `.git` or a cache. Whatever the manifest says, a file named
+like a credential, auth file or token never syncs as a setting; keys
+written inside a synced settings file sync with it, encrypted like
+everything else. A link among Omacloud's entries is skipped, and only a
+link among Omarchy's own makes settings sync stand down. Codex's
+`config.toml` and pi's `settings.json` sync as documents without their
+machine-only parts (`agents.rs`).
+
+Chromium's profiles and the saved Wi-Fi networks aren't files to copy, so
+they sync as documents (`merged.rs`): each computer reads the app's own
+store into a canonical document (bookmarks by guid, search engines by
+Chromium's `sync_guid`, an allowlist of plain preferences, the set of Web
+Store extensions; networks by name and security), merges it three ways
+against the last synced version, and writes the result back into the app.
+A merge always settles: what one side changed wins over what it left
+alone, an edit beats a delete, and the same thing changed on both sides
+keeps the merging computer's version and says so in a record each
+computer keeps in the synced tree, so the computer whose edit gave way
+shows it too. A document is written back only after the app is read
+afresh: whatever changed there since the last look merges in first, and
+one that can't be read right then isn't written. Chromium is written only while it's closed
+(`chromium/`); preferences Chromium guards with a MAC are never touched.
+Wi-Fi goes through NetworkManager as the user at the desktop
+(`wifi.rs`), keys on `nmcli`'s standard input. These documents are in the
+same encrypted history as everything else: the storage can't read them,
+and every computer of the account can, Wi-Fi keys included.
 
 ## What each party can see
 

@@ -30,6 +30,14 @@ hmac = "0.12"
 # rustic_core's pack size settings take its ByteSize
 bytesize = "2"
 ureq = "3.4.2"
+# Chromium's search engines live in SQLite (`Web Data`); bundled, so no
+# system library is needed
+rusqlite = { version = "0.37", features = ["bundled"] }
+# Chromium's bookmarks checksum is MD5 (bookmark_codec.cc)
+md-5 = "0.11"
+# Codex's config.toml loses its machine-only tables keeping the rest as
+# written (comments, order)
+toml_edit = "0.25"
 
 [dev-dependencies]
 serde_json.workspace = true

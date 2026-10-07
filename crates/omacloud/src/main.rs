@@ -654,12 +654,27 @@ fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
         root: config.root.clone(),
         state_path: Some(paths.state()),
         settings: if config.settings {
+            let home = home_dir()?;
+            let merged = paths.data.join("merged");
+            // Chromium's profiles and the saved Wi-Fi networks merge too
+            let mut groups: Vec<Arc<dyn omacloud_core::merged::Group>> =
+                omacloud_core::chromium::Chromium::for_home(&home, &merged.join("scratch"))
+                    .into_iter()
+                    .map(|c| Arc::new(c) as Arc<dyn omacloud_core::merged::Group>)
+                    .collect();
+            groups.push(Arc::new(omacloud_core::agents::Agents::new(&home)));
+            let user = std::env::var("USER").unwrap_or_default();
+            groups.push(Arc::new(omacloud_core::wifi::Wifi::new(Box::new(
+                omacloud_core::wifi::Nmcli::new(&user),
+            ))));
             Some(SettingsSetup {
-                home: home_dir()?,
+                home,
                 manifest: Manifest::load()?,
                 backups: paths.data.join("settings"),
                 packages: paths.data.join("packages"),
                 secrets: paths.data.join("secrets"),
+                merged,
+                groups,
             })
         } else {
             None
@@ -809,6 +824,9 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     let config_mtime = || fs::metadata(&paths.config).and_then(|m| m.modified()).ok();
     let mut config_seen = config_mtime();
     let (mut seen_marker, mut full_at, mut folders_changed) = (None, None, false);
+    // the change marker, looked at no more than once a poll: a browser's
+    // files wake this loop every second or two, and need no storage request
+    let (mut marker_at, mut last_marker): (Option<Instant>, Option<String>) = (None, None);
     // when everything was last looked over, whether or not that sync went
     // through: a sync that keeps failing mustn't walk every file each poll
     let mut rescan_at: Option<Instant> = None;
@@ -845,12 +863,14 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
                 .collect()
         };
         // settings live in a few directories under home; watch just those
-        wanted.extend(
-            engine
-                .settings_watch_dirs()
-                .into_iter()
-                .map(|d| (d, RecursiveMode::NonRecursive)),
-        );
+        wanted.extend(engine.settings_watch_dirs().into_iter().map(|(d, deep)| {
+            let mode = if deep {
+                RecursiveMode::Recursive
+            } else {
+                RecursiveMode::NonRecursive
+            };
+            (d, mode)
+        }));
         if watches.follow(&wanted) {
             // what changed before the watch began went unseen
             engine.request_rescan();
@@ -873,9 +893,15 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
         // sync now and then in case a write didn't mark itself
         let marker = if paused {
             None
+        } else if marker_at.is_some_and(|t| t.elapsed() < poll) {
+            last_marker.clone()
         } else {
-            engine.remote_marker().ok().flatten()
+            marker_at = Some(Instant::now());
+            last_marker = engine.remote_marker().ok().flatten();
+            last_marker.clone()
         };
+        // apps that wrote files: a cheap local look, at most once a minute
+        engine.look_at_apps();
         let idle = !engine.has_pending()
             && !folders_changed
             && marker.is_some()
@@ -915,7 +941,8 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             }
         }
         let mut notice = |changed: Option<Vec<PathBuf>>| match changed {
-            Some(paths) => engine.notice(paths),
+            // what matters is pending now; the rest needs nothing
+            Some(paths) => _ = engine.notice(paths),
             None => engine.request_rescan(),
         };
         match rx.recv_timeout(poll) {
@@ -1385,6 +1412,15 @@ fn main() -> Result<()> {
                 fingerprint(&me),
                 members.valid.len()
             );
+            let settings = e.settings_status();
+            match (settings.on, &settings.dormant) {
+                (false, _) => println!("settings off"),
+                (true, Some(why)) => println!("settings standing down: {why}"),
+                (true, None) => {
+                    println!("settings");
+                    print_groups(&settings.groups, "  ");
+                }
+            }
             Ok(())
         }
         Cmd::DeviceKey => {
@@ -1832,12 +1868,38 @@ fn print_settings(st: &omacloud_core::SettingsStatus) {
         (true, Some(why)) => println!("settings sync stands down: {why}"),
         (true, None) => println!("settings sync is on, following {source}"),
     }
+    print_groups(&st.groups, "  ");
     for p in &st.held {
         println!(
             "  waiting: ~/{} changed here and on another device; `omacloud settings resolve ~/{} --keep local|remote`",
             p.display(),
             p.display()
         );
+    }
+}
+
+/// Each settings group and how it stands, one line each, then what to do.
+fn print_groups(groups: &[omacloud_core::merged::Item], indent: &str) {
+    for g in groups {
+        let state = match (g.group.as_str(), g.state.as_str()) {
+            (_, "synced") => "in sync",
+            (_, "new") => "not synced yet",
+            ("chromium", "waiting") => "waiting for Chromium to close",
+            (_, "waiting") => "waiting to apply",
+            (_, "install") => "to install",
+            (_, "settled") => "edits settled",
+            (_, "refused") => "not applied",
+            (_, "failed") => "can't write",
+            (_, "conflict") => "to resolve",
+            (_, other) => other,
+        };
+        println!("{indent}{:<22} {state}: {}", g.title, g.detail);
+        for i in &g.install {
+            println!("{indent}  install {}: {}", i.name, i.command.join(" "));
+        }
+        for n in &g.not_synced {
+            println!("{indent}  not synced: {n}");
+        }
     }
 }
 
@@ -2181,6 +2243,7 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
             "on": settings.on,
             "dormant": settings.dormant,
             "held": settings.held,
+            "groups": settings.groups,
         },
         "secrets": e.secrets_devices(),
         "daemon": daemon,

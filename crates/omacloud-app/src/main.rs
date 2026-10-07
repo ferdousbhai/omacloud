@@ -1109,7 +1109,7 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
             },
         );
     });
-    settings.set_subtitle("Bindings, themes, terminal and shell setup");
+    settings.set_subtitle("Shell, AI agents, desktop and apps, Chromium, Wi-Fi");
     g.add(&settings);
 
     let add = button("Add Folder…", Some("flat"));
@@ -1488,8 +1488,10 @@ fn settings(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     let on = st["on"].as_bool().unwrap_or(false);
     let g = group(
         "Omarchy settings",
-        "The shared files in Omarchy's dots manifest: bindings, look and feel, terminals, \
-         shell. Machine specific ones, like monitors, stay on each machine.",
+        "The shared files in Omarchy's dots manifest (bindings, look and feel, terminals, \
+         shell), AI agents' settings and skills, Chromium's bookmarks and settings, and \
+         saved Wi-Fi networks. Machine specific ones, like monitors, and sign-in files stay \
+         on each machine; API keys written into settings files sync with them, encrypted.",
     );
     let switch = adw::SwitchRow::builder()
         .title("Sync settings on this device")
@@ -1510,6 +1512,20 @@ fn settings(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         g.add(&row("Standing down", why));
     }
     page.add(&g);
+
+    let empty_groups = Vec::new();
+    let groups = st["groups"].as_array().unwrap_or(&empty_groups);
+    if on && !groups.is_empty() {
+        let g = group(
+            "What syncs",
+            "Edits on two computers merge. Chromium's are written in while it's closed; \
+             history, passwords, cookies and open tabs stay on each computer.",
+        );
+        for item in groups {
+            g.add(&setting_group(ui, item));
+        }
+        page.add(&g);
+    }
 
     let empty = Vec::new();
     let held = st["held"].as_array().unwrap_or(&empty);
@@ -1540,6 +1556,86 @@ fn settings(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         page.add(&g);
     }
     page
+}
+
+/// What a settings group's state reads as; the same as `omacloud settings`
+/// says. Only Chromium waits for an app to close.
+fn state_label(group: &str, state: &str) -> String {
+    match (group, state) {
+        (_, "synced") => "In sync",
+        (_, "new") => "Not synced yet",
+        ("chromium", "waiting") => "Waiting for Chromium to close",
+        (_, "waiting") => "Waiting to apply",
+        (_, "install") => "Extensions to install",
+        (_, "settled") => "Edits settled",
+        (_, "refused") => "Not applied",
+        (_, "failed") => "Can't write",
+        (_, "conflict") => "Choose below",
+        (_, "unavailable") => "Not available",
+        (_, other) => other,
+    }
+    .to_string()
+}
+
+/// One settings group: its state, extensions to install, and what stays
+/// on this computer. The same as `omacloud settings` lists.
+fn setting_group(ui: &Rc<Ui>, item: &Value) -> gtk::Widget {
+    let state = state_label(
+        item["group"].as_str().unwrap_or_default(),
+        item["state"].as_str().unwrap_or_default(),
+    );
+    let empty = Vec::new();
+    let install = item["install"].as_array().unwrap_or(&empty);
+    let not_synced = item["not_synced"].as_array().unwrap_or(&empty);
+    let tag = gtk::Label::new(Some(&state));
+    tag.add_css_class("dim-label");
+    if install.is_empty() && not_synced.is_empty() {
+        let r = row(&text(&item["title"]), &text(&item["detail"]));
+        r.add_suffix(&tag);
+        return r.upcast();
+    }
+    let x = adw::ExpanderRow::builder()
+        .title(text(&item["title"]))
+        .subtitle(text(&item["detail"]))
+        .title_selectable(false)
+        .build();
+    x.set_use_markup(false);
+    x.add_suffix(&tag);
+    for i in install {
+        let r = row(&text(&i["name"]), &text(&i["url"]));
+        let b = button("Install", Some("flat"));
+        let argv: Vec<String> = i["command"]
+            .as_array()
+            .unwrap_or(&empty)
+            .iter()
+            .map(text)
+            .collect();
+        let ui = ui.clone();
+        b.connect_clicked(move |_| {
+            // Chromium opens the extension's page in that profile, where
+            // Add to Chromium installs it; the browser stays open after
+            let Some((program, args)) = argv.split_first() else {
+                return;
+            };
+            let started = Command::new(program)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+            match started {
+                // reaped when it exits, however long the browser stays open
+                Ok(mut child) => _ = std::thread::spawn(move || child.wait()),
+                Err(e) => ui.toast(&format!("running {program}: {e}")),
+            }
+        });
+        r.add_suffix(&b);
+        x.add_row(&r);
+    }
+    for n in not_synced {
+        x.add_row(&row("Not synced", &text(n)));
+    }
+    x.upcast()
 }
 
 fn secrets(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
@@ -1895,6 +1991,16 @@ fn show_text(ui: &Rc<Ui>, heading: &str, body: &str, content: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_chromium_waits_for_chromium() {
+        assert_eq!(
+            super::state_label("chromium", "waiting"),
+            "Waiting for Chromium to close"
+        );
+        assert_eq!(super::state_label("wifi", "waiting"), "Waiting to apply");
+        assert_eq!(super::state_label("wifi", "settled"), "Edits settled");
+    }
+
     use super::s3_location;
 
     fn loc(

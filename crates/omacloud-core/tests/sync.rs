@@ -908,6 +908,8 @@ impl World {
             backups: self.tmp.path().join(format!("{device}-backups")),
             packages: self.tmp.path().join(format!("{device}-packages")),
             secrets: self.tmp.path().join(format!("{device}-secrets")),
+            merged: self.tmp.path().join(format!("{device}-merged")),
+            groups: Vec::new(),
         });
         Engine::new(setup, self.coord.clone())
     }
@@ -1469,5 +1471,1232 @@ fn a_setting_saved_during_a_pull_is_kept() -> Result<()> {
     let backups = w.tmp.path().join("b-backups");
     assert_eq!(mode(backups.clone()), 0o700);
     assert_eq!(mode(backups.join("held").join(bindings)), 0o600);
+    Ok(())
+}
+
+const CHROMIUM_FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/chromium");
+
+/// A Chromium user data dir from the fixtures, with one profile.
+fn chromium_profile(data: &Path) {
+    let f = Path::new(CHROMIUM_FIXTURES);
+    let default = data.join("Default");
+    fs::create_dir_all(&default).unwrap();
+    fs::copy(f.join("Local State"), data.join("Local State")).unwrap();
+    fs::copy(f.join("Bookmarks"), default.join("Bookmarks")).unwrap();
+    fs::copy(f.join("Preferences"), default.join("Preferences")).unwrap();
+    let db = rusqlite::Connection::open(default.join("Web Data")).unwrap();
+    db.execute_batch(&fs::read_to_string(f.join("keywords.sql")).unwrap())
+        .unwrap();
+}
+
+/// A stand-in NetworkManager: saved networks in memory.
+#[derive(Default, Clone)]
+struct FakeNm {
+    saved: Arc<std::sync::Mutex<Vec<omacloud_core::wifi::Saved>>>,
+    /// How many times NetworkManager was asked for the saved networks.
+    asked: Arc<std::sync::atomic::AtomicUsize>,
+    /// Connections in use.
+    in_use: Arc<std::sync::Mutex<Vec<String>>>,
+    /// Fail to export a connection (a transient error, not a refusal).
+    export_fails: Arc<std::sync::atomic::AtomicBool>,
+    /// Turn every change down, and how many were tried.
+    refuse: Arc<std::sync::atomic::AtomicBool>,
+    changes: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl FakeNm {
+    fn turn_down(&self) -> Result<()> {
+        _ = self
+            .changes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if self.refuse.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(omacloud_core::merged::Refused("refused".into()).into());
+        }
+        Ok(())
+    }
+    fn uuid(&self, ssid: &str) -> String {
+        self.saved
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.name == ssid)
+            .unwrap()
+            .uuid
+            .clone()
+    }
+}
+
+impl omacloud_core::wifi::Manager for FakeNm {
+    fn ready(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn saved(&self) -> Result<Vec<omacloud_core::wifi::Saved>> {
+        _ = self
+            .asked
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(self.saved.lock().unwrap().clone())
+    }
+    fn active(&self) -> Vec<String> {
+        self.in_use.lock().unwrap().clone()
+    }
+    fn add(&self, n: &omacloud_core::wifi::Network) -> Result<()> {
+        self.turn_down()?;
+        let mut s = self.saved.lock().unwrap();
+        let uuid = format!("uuid-{}", s.len());
+        s.push(omacloud_core::wifi::Saved {
+            uuid,
+            name: n.ssid.clone(),
+            key: Some(n.key()),
+            network: Ok(n.clone()),
+        });
+        Ok(())
+    }
+    fn change(&self, uuid: &str, n: &omacloud_core::wifi::Network) -> Result<()> {
+        self.turn_down()?;
+        for s in self.saved.lock().unwrap().iter_mut() {
+            if s.uuid == uuid {
+                s.network = Ok(n.clone());
+            }
+        }
+        Ok(())
+    }
+    fn forget(&self, uuid: &str) -> Result<()> {
+        self.turn_down()?;
+        self.saved.lock().unwrap().retain(|s| s.uuid != uuid);
+        Ok(())
+    }
+    fn export(&self, uuid: &str) -> Result<String> {
+        if self.export_fails.load(std::sync::atomic::Ordering::Relaxed) {
+            anyhow::bail!("nmcli connection failed");
+        }
+        Ok(format!("connection.uuid:{uuid}\n"))
+    }
+}
+
+impl FakeNm {
+    fn ssids(&self) -> Vec<String> {
+        let mut v: Vec<String> = self
+            .saved
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
+        v.sort();
+        v
+    }
+    fn psk(&self, ssid: &str) -> Option<String> {
+        self.saved
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|s| s.name == ssid)
+            .and_then(|s| s.network.as_ref().ok()?.psk.clone())
+    }
+    /// The network's key turns unreadable here (a keyring takes it).
+    fn hide_key(&self, ssid: &str) {
+        for s in self.saved.lock().unwrap().iter_mut() {
+            if s.name == ssid {
+                s.network = Err("its key isn't readable here".into());
+            }
+        }
+    }
+}
+
+fn network(ssid: &str, psk: &str) -> omacloud_core::wifi::Network {
+    omacloud_core::wifi::Network {
+        ssid: ssid.into(),
+        security: "wpa-psk".into(),
+        psk: Some(psk.into()),
+        hidden: false,
+        autoconnect: true,
+        priority: 0,
+    }
+}
+
+impl World {
+    /// A device with settings, its Chromium in `<device>-home/.config/chromium`
+    /// and Wi-Fi through `nm`.
+    fn engine_with_apps(&self, device: &str, nm: &FakeNm) -> Result<Engine> {
+        let dir = self.dir(device);
+        fs::create_dir_all(&dir)?;
+        let home = self.home(device);
+        fs::create_dir_all(&home)?;
+        let merged = self.tmp.path().join(format!("{device}-merged"));
+        let mut groups: Vec<Arc<dyn omacloud_core::merged::Group>> =
+            omacloud_core::chromium::Chromium::for_home(&home, &merged.join("scratch"))
+                .into_iter()
+                .map(|c| Arc::new(c) as Arc<dyn omacloud_core::merged::Group>)
+                .collect();
+        groups.push(Arc::new(omacloud_core::wifi::Wifi::new(Box::new(
+            nm.clone(),
+        ))));
+        groups.push(Arc::new(omacloud_core::agents::Agents::new(&home)));
+        let mut setup = self.setup(
+            device,
+            dir,
+            Some(self.tmp.path().join(format!("{device}.state.json"))),
+        );
+        setup.settings = Some(omacloud_core::SettingsSetup {
+            home,
+            manifest: omacloud_core::settings::Manifest::bundled(),
+            backups: self.tmp.path().join(format!("{device}-backups")),
+            packages: self.tmp.path().join(format!("{device}-packages")),
+            secrets: self.tmp.path().join(format!("{device}-secrets")),
+            merged,
+            groups,
+        });
+        Engine::new(setup, self.coord.clone())
+    }
+}
+
+fn read_json(p: &Path) -> serde_json::Value {
+    serde_json::from_slice(&fs::read(p).unwrap()).unwrap()
+}
+
+fn bookmark_names(bookmarks: &Path) -> Vec<String> {
+    fn walk(v: &serde_json::Value, out: &mut Vec<String>) {
+        if v["type"] == "url" {
+            out.push(v["name"].as_str().unwrap().to_string());
+        }
+        for c in v["children"].as_array().into_iter().flatten() {
+            walk(c, out);
+        }
+    }
+    let f = read_json(bookmarks);
+    let mut out = Vec::new();
+    for r in ["bookmark_bar", "other", "synced"] {
+        walk(&f["roots"][r], &mut out);
+    }
+    out
+}
+
+/// Add a bookmark to a `Bookmarks` file's other folder, as Chromium would.
+fn add_bookmark(bookmarks: &Path, id: &str, guid: &str, name: &str) {
+    let mut f = read_json(bookmarks);
+    f["roots"]["other"]["children"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "date_added": "13400000990000000", "date_last_used": "0", "guid": guid,
+            "id": id, "name": name, "type": "url", "url": format!("https://{id}.example.com/"),
+        }));
+    fs::write(bookmarks, serde_json::to_vec_pretty(&f).unwrap()).unwrap();
+}
+
+#[test]
+fn chromium_merges_across_computers_and_waits_while_open() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ca, cb) = (
+        w.home("a").join(".config/chromium"),
+        w.home("b").join(".config/chromium"),
+    );
+    chromium_profile(&ca);
+    chromium_profile(&cb);
+    let nm = FakeNm::default();
+    let (mut a, mut b) = (w.engine_with_apps("a", &nm)?, w.engine_with_apps("b", &nm)?);
+    a.sync()?;
+    b.sync()?;
+    a.sync()?;
+    // the same profile on both: nothing doubles
+    assert_eq!(bookmark_names(&cb.join("Default/Bookmarks")).len(), 4);
+
+    // a adds a bookmark and a font size; b has an extension a lacks
+    add_bookmark(
+        &ca.join("Default/Bookmarks"),
+        "20",
+        "6d2f1b0e-2222-4a5b-9c3d-000000000001",
+        "From a",
+    );
+    let mut prefs = read_json(&ca.join("Default/Preferences"));
+    prefs["webkit"]["webprefs"]["default_font_size"] = serde_json::json!(20);
+    fs::write(ca.join("Default/Preferences"), serde_json::to_vec(&prefs)?)?;
+    let mut prefs = read_json(&cb.join("Default/Preferences"));
+    prefs["extensions"]["settings"]["gighmmpiobklfepjocnamgkkbiglidom"] = serde_json::json!(
+        {"from_webstore": true, "location": 1, "manifest": {"name": "Example Tool"}}
+    );
+    fs::write(cb.join("Default/Preferences"), serde_json::to_vec(&prefs)?)?;
+    a.notice([ca.join("Default/Bookmarks"), ca.join("Default/Preferences")]);
+    b.notice([cb.join("Default/Preferences")]);
+    a.sync()?;
+
+    // b's Chromium is open: nothing written into its profile
+    let me = format!("{}-{}", hostname(), std::process::id());
+    symlink(&me, cb.join("SingletonLock"))?;
+    let before = fs::read(cb.join("Default/Bookmarks"))?;
+    b.sync()?;
+    assert_eq!(fs::read(cb.join("Default/Bookmarks"))?, before);
+    let chromium = |e: &Engine| {
+        e.settings_status()
+            .groups
+            .into_iter()
+            .find(|g| g.title == "Chromium: Default")
+            .unwrap()
+    };
+    let st = chromium(&b);
+    assert_eq!(st.state, "waiting");
+    assert!(st.detail.contains("bookmarks"));
+    // an edit on b meanwhile merges with what waits
+    add_bookmark(
+        &cb.join("Default/Bookmarks"),
+        "21",
+        "6d2f1b0e-2222-4a5b-9c3d-000000000002",
+        "From b",
+    );
+    b.notice([cb.join("Default/Bookmarks")]);
+    b.sync()?;
+    assert!(!bookmark_names(&cb.join("Default/Bookmarks")).contains(&"From a".to_string()));
+
+    // closed: the next sync writes it all in
+    fs::remove_file(cb.join("SingletonLock"))?;
+    b.notice([cb.join("SingletonLock")]);
+    b.look_at_apps();
+    assert!(b.has_pending());
+    b.sync()?;
+    a.sync()?;
+    let names = bookmark_names(&cb.join("Default/Bookmarks"));
+    assert!(names.contains(&"From a".to_string()) && names.contains(&"From b".to_string()));
+    assert_eq!(
+        bookmark_names(&ca.join("Default/Bookmarks")),
+        bookmark_names(&cb.join("Default/Bookmarks"))
+    );
+    let f = read_json(&cb.join("Default/Bookmarks"));
+    let sum = omacloud_core::chromium::bookmarks::checksums(&f).0;
+    assert_eq!(f["checksum"], serde_json::json!(sum));
+    let pb = read_json(&cb.join("Default/Preferences"));
+    assert_eq!(pb["webkit"]["webprefs"]["default_font_size"], 20);
+    // protected preferences stay as b had them
+    assert_eq!(pb["homepage"], "https://home.example.com/");
+    assert_eq!(
+        pb["protection"],
+        read_json(&Path::new(CHROMIUM_FIXTURES).join("Preferences"))["protection"]
+    );
+    // b's extension is offered to a's Chromium, for its next start
+    assert!(
+        ca.join("External Extensions/gighmmpiobklfepjocnamgkkbiglidom.json")
+            .is_file()
+    );
+    assert_eq!(chromium(&b).state, "synced");
+    // what was replaced is backed up
+    assert!(w.tmp.path().join("b-merged/backups/history").is_dir());
+
+    // settled: nothing more moves, nothing is rewritten
+    let (fa, fb) = (
+        fs::read(ca.join("Default/Bookmarks"))?,
+        fs::read(cb.join("Default/Bookmarks"))?,
+    );
+    a.request_rescan();
+    b.request_rescan();
+    assert_eq!(a.sync()?.pushed + b.sync()?.pushed, 0);
+    assert_eq!(fs::read(ca.join("Default/Bookmarks"))?, fa);
+    assert_eq!(fs::read(cb.join("Default/Bookmarks"))?, fb);
+    Ok(())
+}
+
+fn hostname() -> String {
+    fs::read_to_string("/proc/sys/kernel/hostname")
+        .unwrap()
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn wifi_networks_merge_and_deletes_travel_from_who_had_them() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (na, nb) = (FakeNm::default(), FakeNm::default());
+    omacloud_core::wifi::Manager::add(&na, &network("Home", "home-key"))?;
+    omacloud_core::wifi::Manager::add(&nb, &network("Office", "office-key"))?;
+    let (mut a, mut b) = (w.engine_with_apps("a", &na)?, w.engine_with_apps("b", &nb)?);
+    a.sync()?;
+    b.sync()?;
+    a.sync()?;
+    let ssids = |nm: &FakeNm| -> Vec<String> {
+        let mut v: Vec<String> = nm
+            .saved
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|s| s.network.as_ref().unwrap().ssid.clone())
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(ssids(&na), ["Home", "Office"]);
+    assert_eq!(ssids(&nb), ["Home", "Office"]);
+    // the document syncs in the settings tree, keys and all (encrypted)
+    let doc = read_json(&w.tmp.path().join("a-merged/synced/wifi/networks.json"));
+    assert_eq!(doc["wpa-psk Office"]["psk"], "office-key");
+
+    // a forgets Home: b, which had it, forgets it too
+    let home = na
+        .saved
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|s| s.name == "Home")
+        .unwrap()
+        .uuid
+        .clone();
+    omacloud_core::wifi::Manager::forget(&na, &home)?;
+    // (a new look, as after the five minutes a look stands)
+    let mut a = w.engine_with_apps("a", &na)?;
+    a.sync()?;
+    let mut b = w.engine_with_apps("b", &nb)?;
+    b.sync()?;
+    assert_eq!(ssids(&nb), ["Office"]);
+    Ok(())
+}
+
+#[test]
+fn new_dotfiles_sync_and_a_missing_one_is_no_delete() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ha, hb) = (w.home("a"), w.home("b"));
+    write(&ha, ".gitconfig", "[user]\n\tname = A\n");
+    write(&ha, ".config/nvim/lua/plugins/theme.lua", "return {}\n");
+    write(&ha, ".config/fish/fish_variables", "machine state\n");
+    write(&ha, ".npmrc", "//registry.example.com/:_authToken=x\n");
+    write(&hb, ".inputrc", "set bell-style none\n");
+    let (mut a, mut b) = (w.engine_with_settings("a")?, w.engine_with_settings("b")?);
+    a.sync()?;
+    b.sync()?;
+    a.sync()?;
+    assert_eq!(
+        fs::read_to_string(hb.join(".gitconfig"))?,
+        "[user]\n\tname = A\n"
+    );
+    assert!(hb.join(".config/nvim/lua/plugins/theme.lua").is_file());
+    assert!(!hb.join(".config/fish/fish_variables").exists());
+    assert!(!hb.join(".npmrc").exists());
+    // b never had .gitconfig's history before; a lacked .inputrc: both arrive
+    assert_eq!(
+        fs::read_to_string(ha.join(".inputrc"))?,
+        "set bell-style none\n"
+    );
+    let shell = b
+        .settings_status()
+        .groups
+        .into_iter()
+        .find(|g| g.group == "shell")
+        .unwrap();
+    assert_eq!(shell.state, "synced");
+    Ok(())
+}
+
+#[test]
+fn a_network_saved_since_the_last_look_is_never_forgotten() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (na, nb) = (FakeNm::default(), FakeNm::default());
+    omacloud_core::wifi::Manager::add(&na, &network("Home", "home-key"))?;
+    let (mut a, mut b) = (w.engine_with_apps("a", &na)?, w.engine_with_apps("b", &nb)?);
+    a.sync()?;
+    b.sync()?;
+    // b saves a network; a saves another right after its last look
+    omacloud_core::wifi::Manager::add(&nb, &network("Office", "office-key"))?;
+    let mut b = w.engine_with_apps("b", &nb)?; // its next look
+    b.sync()?;
+    omacloud_core::wifi::Manager::add(&na, &network("Cafe", "cafe-key"))?;
+    a.sync()?; // a's look isn't due: the write looks first
+    a.sync()?;
+    assert_eq!(na.ssids(), ["Cafe", "Home", "Office"]);
+    let mut b = w.engine_with_apps("b", &nb)?;
+    b.sync()?;
+    assert_eq!(nb.ssids(), ["Cafe", "Home", "Office"]);
+    Ok(())
+}
+
+#[test]
+fn one_network_two_keys_each_computer_keeps_its_own() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (na, nb) = (FakeNm::default(), FakeNm::default());
+    omacloud_core::wifi::Manager::add(&na, &network("Home", "key-on-a"))?;
+    omacloud_core::wifi::Manager::add(&nb, &network("Home", "key-on-b"))?;
+    let (mut a, mut b) = (w.engine_with_apps("a", &na)?, w.engine_with_apps("b", &nb)?);
+    a.sync()?;
+    b.sync()?;
+    a.sync()?;
+    assert_eq!(na.psk("Home").as_deref(), Some("key-on-a"));
+    assert_eq!(nb.psk("Home").as_deref(), Some("key-on-b"));
+    // the computer whose key the merge didn't take hears of it too
+    let wifi = a
+        .settings_status()
+        .groups
+        .into_iter()
+        .find(|g| g.group == "wifi")
+        .unwrap();
+    assert_eq!(wifi.state, "settled");
+    assert!(wifi.detail.contains("each keeps its own"));
+    assert!(!wifi.detail.contains("key-on"));
+    // the router's password changes and a's key with it: now b takes it
+    let home = na
+        .saved
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|s| s.name == "Home")
+        .unwrap()
+        .uuid
+        .clone();
+    omacloud_core::wifi::Manager::change(&na, &home, &network("Home", "new-key"))?;
+    let mut a = w.engine_with_apps("a", &na)?;
+    a.sync()?;
+    let mut b = w.engine_with_apps("b", &nb)?;
+    b.sync()?;
+    assert_eq!(nb.psk("Home").as_deref(), Some("new-key"));
+    // a computer that doesn't have it takes the synced key
+    let w2 = w.engine_with_apps("b", &nb)?;
+    drop(w2);
+    // and a key changed on one later travels, after a backup of the old
+    let nb2 = nb.clone();
+    let mut b = w.engine_with_apps("b", &nb2)?;
+    omacloud_core::wifi::Manager::add(&na, &network("Office", "old"))?;
+    let mut a = w.engine_with_apps("a", &na)?;
+    a.sync()?;
+    b.sync()?;
+    let office = na
+        .saved
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|s| s.name == "Office")
+        .unwrap()
+        .uuid
+        .clone();
+    omacloud_core::wifi::Manager::change(&na, &office, &network("Office", "new"))?;
+    let mut a = w.engine_with_apps("a", &na)?;
+    a.sync()?;
+    let mut b = w.engine_with_apps("b", &nb)?;
+    b.sync()?;
+    assert_eq!(nb.psk("Office").as_deref(), Some("new"));
+    let history = w.tmp.path().join("b-merged/backups/history");
+    let backed_up = fs::read_dir(&history)?
+        .flatten()
+        .any(|d| fs::read_dir(d.path().join("wifi")).is_ok_and(|mut f| f.next().is_some()));
+    assert!(backed_up);
+    Ok(())
+}
+
+#[test]
+fn a_network_that_cant_be_read_is_neither_forgotten_nor_doubled() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (na, nb) = (FakeNm::default(), FakeNm::default());
+    omacloud_core::wifi::Manager::add(&na, &network("Home", "k"))?;
+    omacloud_core::wifi::Manager::add(&na, &network("Office", "o"))?;
+    omacloud_core::wifi::Manager::add(&nb, &network("Office", "o"))?;
+    nb.hide_key("Office"); // b has it, its key out of reach
+    let (mut a, mut b) = (w.engine_with_apps("a", &na)?, w.engine_with_apps("b", &nb)?);
+    a.sync()?;
+    b.sync()?;
+    assert_eq!(nb.ssids(), ["Home", "Office"]); // not a second Office
+    // Home turns unreadable on a: b keeps it
+    na.hide_key("Home");
+    let mut a = w.engine_with_apps("a", &na)?;
+    a.sync()?;
+    let mut b = w.engine_with_apps("b", &nb)?;
+    b.sync()?;
+    assert_eq!(nb.ssids(), ["Home", "Office"]);
+    Ok(())
+}
+
+#[test]
+fn an_engine_added_while_chromium_writes_its_database_is_kept() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ca, cb) = (
+        w.home("a").join(".config/chromium"),
+        w.home("b").join(".config/chromium"),
+    );
+    chromium_profile(&ca);
+    chromium_profile(&cb);
+    let nm = FakeNm::default();
+    let (mut a, mut b) = (w.engine_with_apps("a", &nm)?, w.engine_with_apps("b", &nm)?);
+    a.sync()?;
+    b.sync()?;
+    // a adds an engine; b adds one, mid-write when b syncs
+    let add = |dir: &Path, k: &str, guid: &str| {
+        let db = rusqlite::Connection::open(dir.join("Default/Web Data")).unwrap();
+        db.execute(
+            "INSERT INTO keywords (short_name, keyword, favicon_url, url, safe_for_autoreplace, sync_guid) VALUES (?1, ?1, '', ?2, 0, ?3)",
+            [k, &format!("https://{k}.example.com/?q={{searchTerms}}"), guid],
+        )
+        .unwrap();
+    };
+    add(&ca, "fromA", "bbbbbbbb-0000-4000-8000-00000000000a");
+    a.notice([ca.join("Default/Web Data")]);
+    a.sync()?;
+    add(&cb, "fromB", "bbbbbbbb-0000-4000-8000-00000000000b");
+    fs::write(cb.join("Default/Web Data-journal"), "mid-write")?;
+    b.sync()?;
+    let keywords = |dir: &Path| -> Vec<String> {
+        let db = rusqlite::Connection::open(dir.join("Default/Web Data")).unwrap();
+        let mut st = db
+            .prepare("SELECT keyword FROM keywords ORDER BY keyword")
+            .unwrap();
+        st.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    assert!(keywords(&cb).contains(&"fromB".to_string()));
+    // written once readable, with both (reading it above may have
+    // cleared the made-up journal already)
+    _ = fs::remove_file(cb.join("Default/Web Data-journal"));
+    let mut b = w.engine_with_apps("b", &nm)?;
+    b.sync()?;
+    a.sync()?;
+    for dir in [&ca, &cb] {
+        let k = keywords(dir);
+        assert!(
+            k.contains(&"fromA".to_string()) && k.contains(&"fromB".to_string()),
+            "{k:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn chromium_rewriting_preferences_costs_a_local_look_at_most_once_a_minute() -> Result<()> {
+    let w = World::new(&["a"])?;
+    let ca = w.home("a").join(".config/chromium");
+    chromium_profile(&ca);
+    let mut a = w.engine_with_apps("a", &FakeNm::default())?;
+    a.sync()?;
+    assert!(!a.has_pending());
+    let prefs = ca.join("Default/Preferences");
+    let edit = |f: &dyn Fn(&mut serde_json::Value)| {
+        let mut p = read_json(&prefs);
+        f(&mut p);
+        fs::write(&prefs, serde_json::to_vec(&p).unwrap()).unwrap();
+    };
+    // window placement: nothing that syncs, nothing to push
+    edit(&|p| p["browser"]["window_placement"]["top"] = serde_json::json!(99));
+    a.notice([prefs.clone()]);
+    a.look_at_apps();
+    assert!(!a.has_pending());
+    // a font size within the minute: looked at later, not now
+    edit(&|p| p["webkit"]["webprefs"]["default_font_size"] = serde_json::json!(24));
+    a.notice([prefs.clone()]);
+    a.look_at_apps();
+    assert!(!a.has_pending());
+    // a fresh engine (a minute on): it's found and pushed
+    let mut a = w.engine_with_apps("a", &FakeNm::default())?;
+    a.sync()?;
+    edit(&|p| p["webkit"]["webprefs"]["default_font_size"] = serde_json::json!(26));
+    a.notice([prefs]);
+    a.look_at_apps();
+    assert!(a.has_pending());
+    Ok(())
+}
+
+#[test]
+fn a_bookmark_renamed_on_both_says_so_on_both() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ca, cb) = (
+        w.home("a").join(".config/chromium"),
+        w.home("b").join(".config/chromium"),
+    );
+    chromium_profile(&ca);
+    chromium_profile(&cb);
+    let nm = FakeNm::default();
+    let (mut a, mut b) = (w.engine_with_apps("a", &nm)?, w.engine_with_apps("b", &nm)?);
+    a.sync()?;
+    b.sync()?;
+    let rename = |dir: &Path, name: &str| {
+        let f = dir.join("Default/Bookmarks");
+        let mut v = read_json(&f);
+        v["roots"]["other"]["children"][0]["name"] = serde_json::json!(name);
+        fs::write(&f, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
+    };
+    rename(&ca, "Soup (a)");
+    rename(&cb, "Soup (b)");
+    a.notice([ca.join("Default/Bookmarks")]);
+    b.notice([cb.join("Default/Bookmarks")]);
+    a.sync()?;
+    b.sync()?; // b merges: its name stays
+    a.sync()?;
+    for e in [&a, &b] {
+        let item = e
+            .settings_status()
+            .groups
+            .into_iter()
+            .find(|g| g.title == "Chromium: Default")
+            .unwrap();
+        assert_eq!(item.state, "settled");
+        assert!(
+            item.detail.contains("Soup (a)") && item.detail.contains("kept b's"),
+            "{}",
+            item.detail
+        );
+        assert!(!item.detail.contains("https://"));
+    }
+    Ok(())
+}
+
+#[test]
+fn agent_settings_and_skills_travel_but_never_their_sign_ins() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ha, hb) = (w.home("a"), w.home("b"));
+    write(&ha, ".claude/settings.json", "{\"theme\": \"dark\"}\n");
+    write(&ha, ".claude/skills/review/SKILL.md", "# Review\n");
+    write(&ha, ".claude/.credentials.json", "{\"token\": \"x\"}\n");
+    write(&ha, ".codex/auth.json", "{}\n");
+    write(&ha, ".config/herdr/config.toml", "theme = \"x\"\n");
+    // b keeps its pi skills in a repo of its own, linked in
+    write(&hb, "repo/skills/mine/SKILL.md", "b's own\n");
+    write(&ha, ".pi/agent/skills/mine/SKILL.md", "a's\n");
+    fs::create_dir_all(hb.join(".pi/agent"))?;
+    symlink(hb.join("repo/skills"), hb.join(".pi/agent/skills"))?;
+    let (mut a, mut b) = (w.engine_with_settings("a")?, w.engine_with_settings("b")?);
+    a.sync()?;
+    b.sync()?;
+    assert_eq!(
+        fs::read_to_string(hb.join(".claude/skills/review/SKILL.md"))?,
+        "# Review\n"
+    );
+    assert!(hb.join(".config/herdr/config.toml").is_file());
+    assert!(!hb.join(".claude/.credentials.json").exists());
+    assert!(!hb.join(".codex/auth.json").exists());
+    // nothing written through b's link
+    assert_eq!(
+        fs::read_to_string(hb.join("repo/skills/mine/SKILL.md"))?,
+        "b's own\n"
+    );
+    assert!(b.settings_status().dormant.is_none());
+    // a binary or a sign-in noticed by the watcher still isn't pushed
+    fs::write(ha.join(".claude/skills/review/icon.png"), b"\x89PNG\0\0")?;
+    a.notice([
+        ha.join(".claude/skills/review/icon.png"),
+        ha.join(".claude/.credentials.json"),
+    ]);
+    assert_eq!(a.sync()?.pushed, 0);
+    let agents = a
+        .settings_status()
+        .groups
+        .into_iter()
+        .find(|g| g.group == "agents")
+        .unwrap();
+    assert!(agents.detail.starts_with("3 files"), "{}", agents.detail);
+    Ok(())
+}
+
+#[test]
+fn a_browsers_busy_files_cost_nothing_and_its_look_leaves_wifi_alone() -> Result<()> {
+    let w = World::new(&["a"])?;
+    let ca = w.home("a").join(".config/chromium");
+    chromium_profile(&ca);
+    let nm = FakeNm::default();
+    let mut a = w.engine_with_apps("a", &nm)?;
+    a.sync()?;
+    // the journals a browser writes every second: nothing to do
+    assert!(!a.notice([
+        ca.join("Default/Cookies-journal"),
+        ca.join("Default/History")
+    ]));
+    assert!(!a.has_pending());
+    // its bookmarks: a look at Chromium, not at Wi-Fi
+    let asked = nm.asked.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(a.notice([ca.join("Default/Bookmarks")]));
+    a.look_at_apps();
+    assert_eq!(nm.asked.load(std::sync::atomic::Ordering::Relaxed), asked);
+    Ok(())
+}
+
+#[test]
+fn codex_trust_stays_put_while_its_settings_travel() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ha, hb) = (w.home("a"), w.home("b"));
+    let config = |model: &str, projects: &[&str]| {
+        let mut c = format!("model = \"{model}\"\n");
+        for p in projects {
+            c.push_str(&format!(
+                "\n[projects.\"{p}\"]\ntrust_level = \"trusted\"\n"
+            ));
+        }
+        c
+    };
+    write(
+        &ha,
+        ".codex/config.toml",
+        &config("gpt-5", &["/home/a/work"]),
+    );
+    write(
+        &hb,
+        ".codex/config.toml",
+        &config("gpt-5", &["/home/b/play"]),
+    );
+    let nm = FakeNm::default();
+    let (mut a, mut b) = (w.engine_with_apps("a", &nm)?, w.engine_with_apps("b", &nm)?);
+    a.sync()?;
+    b.sync()?;
+    a.sync()?;
+    // each trusts one more project, and a changes the model
+    write(
+        &ha,
+        ".codex/config.toml",
+        &config("gpt-6", &["/home/a/work", "/home/a/two"]),
+    );
+    write(
+        &hb,
+        ".codex/config.toml",
+        &config("gpt-5", &["/home/b/play", "/home/b/two"]),
+    );
+    let (mut a, mut b) = (w.engine_with_apps("a", &nm)?, w.engine_with_apps("b", &nm)?);
+    a.sync()?;
+    b.sync()?;
+    a.sync()?;
+    let (ca, cb) = (
+        fs::read_to_string(ha.join(".codex/config.toml"))?,
+        fs::read_to_string(hb.join(".codex/config.toml"))?,
+    );
+    assert!(cb.contains("gpt-6"), "{cb}");
+    assert!(cb.contains("/home/b/play") && cb.contains("/home/b/two") && !cb.contains("/home/a/"));
+    assert!(ca.contains("/home/a/two") && !ca.contains("/home/b/"));
+    assert!(b.settings_status().held.is_empty());
+    Ok(())
+}
+
+#[test]
+fn with_settings_off_or_standing_down_the_daemon_can_idle() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let mut a = w.engine("a")?;
+    a.sync()?;
+    assert!(!a.has_pending());
+    // b stands down next to a dotfile manager
+    fs::create_dir_all(w.home("b").join(".git"))?;
+    let mut b = w.engine_with_apps("b", &FakeNm::default())?;
+    b.sync()?;
+    assert!(b.settings_status().dormant.is_some());
+    assert!(!b.has_pending());
+    Ok(())
+}
+
+#[test]
+fn the_default_engine_kept_here_isnt_written_again_and_again() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ca, cb) = (
+        w.home("a").join(".config/chromium"),
+        w.home("b").join(".config/chromium"),
+    );
+    chromium_profile(&ca);
+    chromium_profile(&cb);
+    // b searches with its own engine, m, by default
+    let mut prefs = read_json(&cb.join("Default/Preferences"));
+    prefs["default_search_provider_data"]["template_url_data"]["synced_guid"] =
+        serde_json::json!("aaaaaaaa-0000-4000-8000-000000000005");
+    fs::write(cb.join("Default/Preferences"), serde_json::to_vec(&prefs)?)?;
+    let nm = FakeNm::default();
+    let (mut a, mut b) = (w.engine_with_apps("a", &nm)?, w.engine_with_apps("b", &nm)?);
+    a.sync()?;
+    b.sync()?;
+    // a deletes m
+    let db = rusqlite::Connection::open(ca.join("Default/Web Data"))?;
+    _ = db.execute("DELETE FROM keywords WHERE keyword = 'm'", [])?;
+    drop(db);
+    a.notice([ca.join("Default/Web Data")]);
+    a.sync()?;
+    b.sync()?;
+    let history = w.tmp.path().join("b-merged/backups/history");
+    let count = || fs::read_dir(&history).map_or(0, |d| d.count());
+    let before = count();
+    for _ in 0..3 {
+        b.sync()?;
+    }
+    assert_eq!(count(), before);
+    let item = b
+        .settings_status()
+        .groups
+        .into_iter()
+        .find(|g| g.title == "Chromium: Default")
+        .unwrap();
+    assert_ne!(item.state, "waiting");
+    // b's default is still there
+    let db = rusqlite::Connection::open(cb.join("Default/Web Data"))?;
+    let n: i64 = db.query_row(
+        "SELECT COUNT(*) FROM keywords WHERE keyword = 'm'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(n, 1);
+    Ok(())
+}
+
+#[test]
+fn a_network_this_computer_cant_take_isnt_tried_every_sync() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (na, nb) = (FakeNm::default(), FakeNm::default());
+    omacloud_core::wifi::Manager::add(&na, &network("Cafe", "k"))?;
+    omacloud_core::wifi::Manager::add(&nb, &network("Cafe", "k"))?;
+    nb.hide_key("Cafe");
+    let (mut a, mut b) = (w.engine_with_apps("a", &na)?, w.engine_with_apps("b", &nb)?);
+    a.sync()?;
+    b.sync()?;
+    b.sync()?;
+    let asked = nb.asked.load(std::sync::atomic::Ordering::Relaxed);
+    b.sync()?;
+    b.sync()?;
+    assert_eq!(nb.asked.load(std::sync::atomic::Ordering::Relaxed), asked);
+    let wifi = b
+        .settings_status()
+        .groups
+        .into_iter()
+        .find(|g| g.group == "wifi")
+        .unwrap();
+    assert_ne!(wifi.state, "waiting");
+    assert!(wifi.not_synced.iter().any(|n| n.starts_with("Cafe")));
+    Ok(())
+}
+
+#[test]
+fn a_network_in_use_goes_once_disconnected() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (na, nb) = (FakeNm::default(), FakeNm::default());
+    for nm in [&na, &nb] {
+        omacloud_core::wifi::Manager::add(nm, &network("Home", "k"))?;
+        omacloud_core::wifi::Manager::add(nm, &network("Cafe", "c"))?;
+    }
+    let (mut a, mut b) = (w.engine_with_apps("a", &na)?, w.engine_with_apps("b", &nb)?);
+    a.sync()?;
+    b.sync()?;
+    // a forgets Cafe; b is connected to it
+    omacloud_core::wifi::Manager::forget(&na, &na.uuid("Cafe"))?;
+    nb.in_use.lock().unwrap().push(nb.uuid("Cafe"));
+    let mut a = w.engine_with_apps("a", &na)?;
+    a.sync()?;
+    let mut b = w.engine_with_apps("b", &nb)?;
+    b.sync()?;
+    assert_eq!(nb.ssids(), ["Cafe", "Home"]);
+    let wifi = b
+        .settings_status()
+        .groups
+        .into_iter()
+        .find(|g| g.group == "wifi")
+        .unwrap();
+    assert_eq!(wifi.state, "waiting");
+    assert!(wifi.detail.contains("in use"), "{}", wifi.detail);
+    // disconnected: the next sync forgets it
+    nb.in_use.lock().unwrap().clear();
+    b.sync()?;
+    assert_eq!(nb.ssids(), ["Home"]);
+    Ok(())
+}
+
+#[test]
+fn a_change_networkmanager_turns_down_is_tried_once_and_said() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (na, nb) = (FakeNm::default(), FakeNm::default());
+    omacloud_core::wifi::Manager::add(&na, &network("Home", "old"))?;
+    omacloud_core::wifi::Manager::add(&nb, &network("Home", "old"))?;
+    let (mut a, mut b) = (w.engine_with_apps("a", &na)?, w.engine_with_apps("b", &nb)?);
+    a.sync()?;
+    b.sync()?;
+    omacloud_core::wifi::Manager::change(&na, &na.uuid("Home"), &network("Home", "new"))?;
+    let mut a = w.engine_with_apps("a", &na)?;
+    a.sync()?;
+    nb.refuse.store(true, std::sync::atomic::Ordering::Relaxed);
+    let tried = nb.changes.load(std::sync::atomic::Ordering::Relaxed);
+    let mut b = w.engine_with_apps("b", &nb)?;
+    for _ in 0..4 {
+        b.sync()?;
+    }
+    assert_eq!(
+        nb.changes.load(std::sync::atomic::Ordering::Relaxed),
+        tried + 1
+    );
+    let copies = fs::read_dir(w.tmp.path().join("b-merged/backups/history"))?
+        .flatten()
+        .filter(|d| d.path().join("wifi").is_dir())
+        .count();
+    assert_eq!(copies, 1);
+    let wifi = b
+        .settings_status()
+        .groups
+        .into_iter()
+        .find(|g| g.group == "wifi")
+        .unwrap();
+    assert_eq!(wifi.state, "refused");
+    assert!(wifi.detail.contains("not applied"), "{}", wifi.detail);
+    Ok(())
+}
+
+/// An app kept in memory whose writes fail a given number of times, as
+/// when Chromium opens between the check and the write.
+#[derive(Default, Clone)]
+struct FlakyApp {
+    state: Arc<std::sync::Mutex<serde_json::Value>>,
+    fail: Arc<std::sync::atomic::AtomicUsize>,
+    /// Writes tried.
+    tries: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl omacloud_core::merged::Group for FlakyApp {
+    fn name(&self) -> &str {
+        "flaky"
+    }
+    fn docs(&self) -> Vec<String> {
+        vec!["doc.json".into()]
+    }
+    fn capture(
+        &self,
+        _doc: &str,
+        _applied: Option<&serde_json::Value>,
+    ) -> Result<Option<serde_json::Value>> {
+        Ok(Some(self.state.lock().unwrap().clone()))
+    }
+    fn busy(&self, _doc: &str) -> Option<String> {
+        None
+    }
+    fn apply(
+        &self,
+        _doc: &str,
+        value: &serde_json::Value,
+        _applied: Option<&serde_json::Value>,
+        backups: &Path,
+    ) -> Result<()> {
+        use std::sync::atomic::Ordering::Relaxed;
+        _ = self.tries.fetch_add(1, Relaxed);
+        let before = self.state.lock().unwrap().to_string();
+        omacloud_core::merged::back_up_bytes(backups, Path::new("flaky/doc"), before.as_bytes())?;
+        if self.fail.load(Relaxed) > 0 {
+            _ = self.fail.fetch_sub(1, Relaxed);
+            anyhow::bail!("Chromium is open");
+        }
+        *self.state.lock().unwrap() = value.clone();
+        Ok(())
+    }
+    fn merge(
+        &self,
+        _doc: &str,
+        base: Option<&serde_json::Value>,
+        ours: &serde_json::Value,
+        theirs: &serde_json::Value,
+    ) -> omacloud_core::merged::Merged {
+        // a change on one side wins
+        let changed_here = base != Some(ours);
+        omacloud_core::merged::Merged {
+            value: if changed_here { ours } else { theirs }.clone(),
+            conflicts: Vec::new(),
+        }
+    }
+    fn status(
+        &self,
+        _mirror: &Path,
+        _waiting: &[(String, String)],
+    ) -> Vec<omacloud_core::merged::Item> {
+        vec![omacloud_core::merged::Item {
+            group: "flaky".into(),
+            title: "Flaky".into(),
+            state: "synced".into(),
+            detail: String::new(),
+            install: Vec::new(),
+            not_synced: Vec::new(),
+            scope: "flaky/".into(),
+        }]
+    }
+    fn watch_dirs(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+    fn concerns(&self, _path: &Path) -> omacloud_core::merged::Concern {
+        omacloud_core::merged::Concern::No
+    }
+}
+
+impl World {
+    fn engine_with_group(
+        &self,
+        device: &str,
+        group: Arc<dyn omacloud_core::merged::Group>,
+    ) -> Result<Engine> {
+        let dir = self.dir(device);
+        fs::create_dir_all(&dir)?;
+        let home = self.home(device);
+        fs::create_dir_all(&home)?;
+        let mut setup = self.setup(
+            device,
+            dir,
+            Some(self.tmp.path().join(format!("{device}.state.json"))),
+        );
+        setup.settings = Some(omacloud_core::SettingsSetup {
+            home,
+            manifest: omacloud_core::settings::Manifest::bundled(),
+            backups: self.tmp.path().join(format!("{device}-backups")),
+            packages: self.tmp.path().join(format!("{device}-packages")),
+            secrets: self.tmp.path().join(format!("{device}-secrets")),
+            merged: self.tmp.path().join(format!("{device}-merged")),
+            groups: vec![group],
+        });
+        Engine::new(setup, self.coord.clone())
+    }
+}
+
+#[test]
+fn a_write_that_fails_for_now_is_tried_again() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (pa, pb) = (FlakyApp::default(), FlakyApp::default());
+    *pa.state.lock().unwrap() = serde_json::json!({"v": 1});
+    *pb.state.lock().unwrap() = serde_json::json!({"v": 1});
+    let mut a = w.engine_with_group("a", Arc::new(pa.clone()))?;
+    let mut b = w.engine_with_group("b", Arc::new(pb.clone()))?;
+    a.sync()?;
+    b.sync()?;
+    *pa.state.lock().unwrap() = serde_json::json!({"v": 2});
+    a.sync()?;
+    // the app opens just as b writes: not a refusal
+    pb.fail.store(1, std::sync::atomic::Ordering::Relaxed);
+    b.sync()?;
+    assert_eq!(*pb.state.lock().unwrap(), serde_json::json!({"v": 1}));
+    b.sync()?;
+    assert_eq!(*pb.state.lock().unwrap(), serde_json::json!({"v": 2}));
+    Ok(())
+}
+
+#[test]
+fn a_held_forget_costs_no_more_than_a_look_a_minute() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (na, nb) = (FakeNm::default(), FakeNm::default());
+    for nm in [&na, &nb] {
+        omacloud_core::wifi::Manager::add(nm, &network("Home", "k"))?;
+        omacloud_core::wifi::Manager::add(nm, &network("Cafe", "c"))?;
+    }
+    let (mut a, mut b) = (w.engine_with_apps("a", &na)?, w.engine_with_apps("b", &nb)?);
+    a.sync()?;
+    b.sync()?;
+    omacloud_core::wifi::Manager::forget(&na, &na.uuid("Cafe"))?;
+    nb.in_use.lock().unwrap().push(nb.uuid("Cafe"));
+    let mut a = w.engine_with_apps("a", &na)?;
+    a.sync()?;
+    let mut b = w.engine_with_apps("b", &nb)?;
+    b.sync()?;
+    let asked = nb.asked.load(std::sync::atomic::Ordering::Relaxed);
+    for _ in 0..10 {
+        b.sync()?;
+    }
+    assert_eq!(nb.asked.load(std::sync::atomic::Ordering::Relaxed), asked);
+    assert_eq!(nb.ssids(), ["Cafe", "Home"]);
+    Ok(())
+}
+
+#[test]
+fn a_held_forget_outlives_a_refusal_beside_it() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (na, nb) = (FakeNm::default(), FakeNm::default());
+    for nm in [&na, &nb] {
+        omacloud_core::wifi::Manager::add(nm, &network("Home", "old"))?;
+        omacloud_core::wifi::Manager::add(nm, &network("Cafe", "c"))?;
+    }
+    let (mut a, mut b) = (w.engine_with_apps("a", &na)?, w.engine_with_apps("b", &nb)?);
+    a.sync()?;
+    b.sync()?;
+    // a forgets Cafe (b is on it) and changes Home's key (b refuses)
+    omacloud_core::wifi::Manager::forget(&na, &na.uuid("Cafe"))?;
+    omacloud_core::wifi::Manager::change(&na, &na.uuid("Home"), &network("Home", "new"))?;
+    let mut a = w.engine_with_apps("a", &na)?;
+    a.sync()?;
+    nb.in_use.lock().unwrap().push(nb.uuid("Cafe"));
+    nb.refuse.store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut b = w.engine_with_apps("b", &nb)?;
+    b.sync()?;
+    assert_eq!(nb.ssids(), ["Cafe", "Home"]);
+    // disconnected, and NetworkManager willing: both go through
+    nb.in_use.lock().unwrap().clear();
+    nb.refuse.store(false, std::sync::atomic::Ordering::Relaxed);
+    b.sync()?;
+    assert_eq!(nb.ssids(), ["Home"]);
+    assert_eq!(nb.psk("Home").as_deref(), Some("new"));
+    Ok(())
+}
+
+#[test]
+fn while_a_forget_is_held_newer_changes_still_land() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (na, nb) = (FakeNm::default(), FakeNm::default());
+    for nm in [&na, &nb] {
+        omacloud_core::wifi::Manager::add(nm, &network("Home", "k"))?;
+        omacloud_core::wifi::Manager::add(nm, &network("Cafe", "c"))?;
+    }
+    let (mut a, mut b) = (w.engine_with_apps("a", &na)?, w.engine_with_apps("b", &nb)?);
+    a.sync()?;
+    b.sync()?;
+    omacloud_core::wifi::Manager::forget(&na, &na.uuid("Cafe"))?;
+    nb.in_use.lock().unwrap().push(nb.uuid("Cafe"));
+    let mut a = w.engine_with_apps("a", &na)?;
+    a.sync()?;
+    let mut b = w.engine_with_apps("b", &nb)?;
+    b.sync()?; // held: b is on Cafe
+    assert_eq!(nb.ssids(), ["Cafe", "Home"]);
+    // a saves a new network: it lands on b while b stays connected
+    omacloud_core::wifi::Manager::add(&na, &network("Office", "o"))?;
+    let mut a = w.engine_with_apps("a", &na)?;
+    a.sync()?;
+    b.sync()?;
+    assert_eq!(nb.ssids(), ["Cafe", "Home", "Office"]);
+    // a minute on (a new look), still connected: still held
+    let mut b = w.engine_with_apps("b", &nb)?;
+    b.sync()?;
+    assert_eq!(nb.ssids(), ["Cafe", "Home", "Office"]);
+    // disconnected: the same engine's next sync forgets it
+    nb.in_use.lock().unwrap().clear();
+    b.sync()?;
+    assert_eq!(nb.ssids(), ["Home", "Office"]);
+    Ok(())
+}
+
+#[test]
+fn a_write_that_keeps_failing_backs_off_with_one_backup() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (pa, pb) = (FlakyApp::default(), FlakyApp::default());
+    *pa.state.lock().unwrap() = serde_json::json!({"v": 1});
+    *pb.state.lock().unwrap() = serde_json::json!({"v": 1});
+    let mut a = w.engine_with_group("a", Arc::new(pa.clone()))?;
+    let mut b = w.engine_with_group("b", Arc::new(pb.clone()))?;
+    a.sync()?;
+    b.sync()?;
+    *pa.state.lock().unwrap() = serde_json::json!({"v": 2});
+    a.sync()?;
+    pb.fail.store(1000, std::sync::atomic::Ordering::Relaxed);
+    for _ in 0..8 {
+        b.sync()?;
+    }
+    // once, once more at the next sync, then not for a while
+    assert_eq!(pb.tries.load(std::sync::atomic::Ordering::Relaxed), 2);
+    let copies = fs::read_dir(w.tmp.path().join("b-merged/backups/history"))?.count();
+    assert_eq!(copies, 1);
+    let item = b
+        .settings_status()
+        .groups
+        .into_iter()
+        .find(|g| g.group == "flaky")
+        .unwrap();
+    assert_eq!(item.state, "failed");
+    assert!(item.detail.contains("Chromium is open"), "{}", item.detail);
+    Ok(())
+}
+
+#[test]
+fn nmcli_not_answering_isnt_a_refusal() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (na, nb) = (FakeNm::default(), FakeNm::default());
+    omacloud_core::wifi::Manager::add(&na, &network("Home", "old"))?;
+    omacloud_core::wifi::Manager::add(&nb, &network("Home", "old"))?;
+    let (mut a, mut b) = (w.engine_with_apps("a", &na)?, w.engine_with_apps("b", &nb)?);
+    a.sync()?;
+    b.sync()?;
+    omacloud_core::wifi::Manager::change(&na, &na.uuid("Home"), &network("Home", "new"))?;
+    let mut a = w.engine_with_apps("a", &na)?;
+    a.sync()?;
+    nb.export_fails
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut b = w.engine_with_apps("b", &nb)?;
+    b.sync()?;
+    assert_eq!(nb.psk("Home").as_deref(), Some("old"));
+    let wifi = b
+        .settings_status()
+        .groups
+        .into_iter()
+        .find(|g| g.group == "wifi")
+        .unwrap();
+    assert_ne!(wifi.state, "refused");
+    // it answers again: the next sync takes the change
+    nb.export_fails
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    b.sync()?;
+    assert_eq!(nb.psk("Home").as_deref(), Some("new"));
     Ok(())
 }

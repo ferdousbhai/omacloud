@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.14 (2026-10-07)
 
 - Deleting can be undone on Omacloud storage. Whatever your computers
   delete or replace there is kept for 14 days, encrypted like everything
@@ -12,6 +12,57 @@
   and replacing files on Omacloud storage is refused until some expires.
 - An object on Omacloud storage can be at most 5 GiB (Omacloud's own are
   far smaller).
+- Chromium follows you: bookmarks, search engines, browser settings and
+  extensions sync between your computers with settings sync, and edits
+  made on two computers merge: a bookmark added on each, or one moved here
+  and renamed there, both land. The same thing changed on both (one
+  bookmark renamed twice) keeps one computer's version, and `omacloud
+  settings` and the app say which, on every computer, for a week. Changes from another computer are written into
+  Chromium once it's closed, never while it runs; `omacloud settings` and
+  the app say when some wait. An extension added on one computer installs
+  on the others at Chromium's next start, without root; for a profile
+  other than the first, the app offers it to install. History, passwords,
+  cookies, open tabs and extensions' own data stay on each computer, as do
+  the home page, startup pages and default search engine, which Chromium
+  guards against change.
+- Saved Wi-Fi networks sync too, keys and all, through NetworkManager and
+  without root. A network forgotten on one computer is forgotten on the
+  others that had it. One saved on two computers with different keys keeps
+  each computer's own key until it's changed on one of them, and a network's old settings are backed up
+  before a change from another computer replaces them. A network you're
+  connected to isn't forgotten under you: it goes once you disconnect. A
+  change NetworkManager turns down is shown as not applied, not tried
+  again every sync. A write into Chromium or NetworkManager that fails
+  for another reason is tried again, less often each time, and `omacloud
+  settings` says why. Enterprise (802.1X) and WEP networks stay on each
+  computer, and with iwd instead of NetworkManager, Wi-Fi doesn't sync
+  (iwd keeps its networks where only root can read them); `omacloud
+  settings` says which.
+- More of your setup follows you: `.bash_aliases`, `.inputrc`, git's
+  settings, fish's `config.fish` and functions, Neovim's `init.lua` and
+  `lua/`, and the settings of mise, lazygit, mpv and fastfetch. Shell
+  histories stay on each computer, and so do `.bash_profile`, `.profile`
+  and fish's `conf.d`, where installers add lines that only work where
+  they ran.
+  `.npmrc`, which can hold a token, goes in the keys you seal with
+  `omacloud secrets save`, as does git's `credentials` file.
+- Your AI agents' setup follows you too: the settings, instructions,
+  skills, hooks and themes of Claude Code, Codex, Gemini, opencode, Cursor,
+  pi, Grok and Copilot, and herdr's config. Their sign-ins, sessions,
+  history, caches and databases stay on each computer, and Omacloud
+  refuses any credential, auth or token file by name whatever else says
+  to sync it. Below a skills or hooks folder only text files up to 2 MiB
+  sync, never `node_modules`, `.git` or caches, and a file or folder you
+  link in from elsewhere is left alone (and listed), rather than stopping
+  settings sync. API keys written into these settings files sync with
+  them, end-to-end encrypted, readable by every computer of yours.
+  Codex's trusted projects and pi's version note stay on each computer;
+  two computers' first Codex configs combine, servers and all.
+- `omacloud settings`, `omacloud status` and the app's Omarchy page list
+  what syncs (shell and dotfiles, AI agents, desktop and apps, Chromium
+  by profile, Wi-Fi) and how each stands: in sync, waiting for Chromium to close,
+  extensions to install, edits settled lately, a change to choose, or not
+  available and why.
 
 ## 0.0.13 (2026-10-07)
 

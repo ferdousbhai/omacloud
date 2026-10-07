@@ -405,7 +405,22 @@ else:
         c.execute(q["sql"], q.get("params", []))
     c.execute("COMMIT")
 EOF
-sqlite=$(find "$work/state" -path '*D1*' -name '*.sqlite' | head -1)
+sqlite=$(python3 - "$work/state" <<'PY'
+import pathlib, sqlite3, sys
+
+for path in pathlib.Path(sys.argv[1]).rglob("*.sqlite"):
+    if "D1" not in str(path):
+        continue
+    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as db:
+        try:
+            if db.execute("SELECT count(*) FROM accounts WHERE email = 'alice@example.com'").fetchone()[0] == 1 \
+                    and db.execute("SELECT 1 FROM sqlite_master WHERE name = 'restores'").fetchone():
+                print(path)
+                break
+        except sqlite3.OperationalError:
+            pass
+PY
+)
 [ -n "$sqlite" ] || { echo "no local database"; exit 1; }
 restore() { OMACLOUD_CF="python3 $work/cf.py $sqlite" server/restore.sh "$@"; }
 if restore nobody@example.com "$before" 2>/dev/null; then echo "restored nobody"; exit 1; fi

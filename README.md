@@ -80,8 +80,46 @@ file.
   computer, as on iCloud.
 - **Omarchy settings:** the shared files in Omarchy's dots manifest
   (bindings, look and feel, terminals, `.bashrc`), never machine-local ones
-  like `monitors.lua`. Edits on two machines merge; when they can't, the app
-  asks which to keep.
+  like `monitors.lua`, and your shell's: `.bash_aliases`, `.inputrc`,
+  git's settings, fish's `config.fish` and functions, Neovim, mise,
+  lazygit, mpv and fastfetch (not `.bash_profile`, `.profile` or fish's
+  `conf.d`, where installers add lines for one machine), and herdr's
+  config.
+- **AI agents:** the settings, instructions (`CLAUDE.md`, `AGENTS.md`),
+  skills, hooks and themes of Claude Code, Codex, Gemini, opencode,
+  Cursor, pi, Grok and Copilot. Never their sign-ins, sessions, history,
+  caches or databases: any credential, auth or token file is refused by
+  name. API keys written into these settings files (a provider's
+  `apiKey`, an MCP server's env or headers) sync with them, end-to-end
+  encrypted; every computer of yours can read them. In skill and hook
+  folders only text files up to 2 MiB sync, without `node_modules`,
+  `.git` or caches. A file or folder linked in from elsewhere (a
+  `CLAUDE.md` pointing at your notes, say) is left as it is, and
+  `omacloud settings` lists it. Codex's trusted projects and pi's version
+  note stay with each computer while the rest of those files syncs. Edits on
+  two machines merge; when they can't, the app asks which to keep.
+- **Chromium:** bookmarks, search engines, browser settings and the
+  extensions you added from the Web Store, for each profile (matched by
+  name). Edits on two computers merge; the same bookmark or setting
+  changed on both keeps one version, and every computer shows which for a
+  week. Changes from another computer are written in once Chromium is
+  closed. An extension from
+  another computer installs at Chromium's next start; for profiles other
+  than the first, the app offers it to install. History, passwords,
+  cookies, open tabs and extensions' own data stay on each computer, as do
+  the home page, startup pages and default search engine, which Chromium
+  guards against change.
+- **Wi-Fi:** saved networks and their keys, through NetworkManager, without
+  root. A network saved with different keys on two computers keeps each
+  one's key, until the key is changed on one of them: that new key then
+  goes to all. Enterprise (802.1X) and WEP networks stay put, and with iwd
+  Wi-Fi doesn't sync. Like everything else, the keys are encrypted before they
+  leave the computer, and every computer of yours can read them.
+
+`omacloud settings` (and the app's Omarchy page) shows each of these and
+how it stands: in sync, waiting for Chromium to close, extensions to
+install, edits settled lately, a change to choose, or not available here
+and why.
 - **Packages:** each computer's package list, so `omacloud packages restore
   --from laptop` installs what the laptop has and this one doesn't.
 - **Keys:** `omacloud secrets save` (or Keys in the app) seals `~/.ssh`,
@@ -186,7 +224,7 @@ edits.
 
 | path | what |
 |---|---|
-| `crates/omacloud-core` | sync engine (`sync.rs`), signed heads (`head.rs`), device chain (`devices.rs`, `account.rs`), repository keys and rotation (`epoch.rs`), coordination in your bucket (`bucket.rs`, `bucket_key.rs`) |
+| `crates/omacloud-core` | sync engine (`sync.rs`), settings (`settings.rs`; Chromium and Wi-Fi as merged documents: `merged.rs`, `chromium/`, `wifi.rs`), signed heads (`head.rs`), device chain (`devices.rs`, `account.rs`), repository keys and rotation (`epoch.rs`), coordination in your bucket (`bucket.rs`, `bucket_key.rs`) |
 | `crates/omacloud` | CLI and `watch` daemon |
 | `crates/omacloud-app` | the Omacloud app (GTK4, libadwaita), driving the CLI |
 | `vendor/rustic_core` | rustic_core 0.13 plus pack padding and `splice_tree` (upstream PRs in `vendor/upstream-patches`) |

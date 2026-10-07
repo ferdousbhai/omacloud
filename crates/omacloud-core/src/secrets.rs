@@ -24,6 +24,9 @@ pub const DEFAULT_PATHS: &[&str] = &[
     ".gnupg",
     ".netrc",
     ".git-credentials",
+    ".config/git/credentials",
+    // npm registry tokens; kept out of settings for that reason
+    ".npmrc",
     ".config/gh/hosts.yml",
     ".config/icloud-md",
 ];

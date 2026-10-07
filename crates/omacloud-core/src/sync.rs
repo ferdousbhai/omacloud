@@ -39,12 +39,14 @@ use rustic_core::{
     repofile::{Metadata, Node, NodeType},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{
     devices::{Action, DeviceChain, JoinRequest, public_hex, random_secret},
     epoch::{EpochChain, EpochError, EpochRecord, EpochSecret, Grant},
     head::{Coordinator, Head, HeadTracker, write_private},
     ignore::{Ignores, TEMP_PREFIX},
+    merged::{self, Concern, Group, Item, PREFIX as MERGED},
     repo::{Repo, RepoSpec, copy_snapshots, hex, snapshot_hex},
     settings::{self, Manifest, PREFIX as SETTINGS},
 };
@@ -61,6 +63,72 @@ const MAX_COMPARE: u64 = 64 << 20;
 /// Where a file goes in a pull's queue: small before big, then by folder,
 /// then newest first.
 type PullOrder = (bool, u8, std::cmp::Reverse<Option<Timestamp>>);
+
+/// A write into an app that failed again is tried after this, twice as
+/// long each time it fails again, up to [`MAX_RETRY`] (seconds).
+const RETRY: u64 = 30;
+const MAX_RETRY: u64 = 3600;
+
+/// How often [`Engine::look_at_apps`] looks at most.
+const APPS_LOOK: Duration = Duration::from_secs(60);
+
+/// Where each computer's record of settled conflicts lives under
+/// [`MERGED`], one file per computer, and how many it keeps.
+const CONFLICTS: &str = "conflicts";
+const RECORD: usize = 50;
+
+/// One edit made on two computers that a merge settled.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct Settled {
+    /// When, in seconds since the epoch.
+    at: u64,
+    /// The document, like `chromium/Default/bookmarks.json`.
+    doc: String,
+    text: String,
+}
+
+/// What came of writing a merged document into its app.
+enum Applied {
+    /// Nothing to write, or not now.
+    Nothing,
+    Done,
+    /// Written but for a part the app can't take yet, and why.
+    Held(String),
+}
+
+/// Whether a merged document holds changes for its app here: pending, and
+/// not just what was written last time with the app as it was then.
+fn waits(
+    s: &SettingsSetup,
+    g: &dyn Group,
+    doc: &str,
+    mirror: &Value,
+    applied: Option<&Value>,
+) -> bool {
+    if !g.pending(doc, mirror, applied) {
+        return false;
+    }
+    let tried = merged::read(&s.merged.join("tried").join(g.name()).join(doc));
+    tried.is_none_or(|t| {
+        t.get("mirror") != Some(mirror) || t.get("applied") != Some(applied.unwrap_or(&Value::Null))
+    })
+}
+
+/// Every computer's settled conflicts of the last week, oldest first.
+fn settled(dir: &Path) -> Vec<Settled> {
+    let now = unix_now();
+    let mut out: Vec<Settled> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| merged::read(&e.path()))
+        .filter_map(|v| serde_json::from_value::<Vec<Settled>>(v).ok())
+        .flatten()
+        .filter(|c| now.saturating_sub(c.at) < 7 * 86_400)
+        .collect();
+    out.sort_by_key(|c| c.at);
+    out
+}
 
 /// Settings backups kept: the newest this many, one per second in which a
 /// pull replaced or deleted settings.
@@ -122,6 +190,11 @@ pub struct SettingsSetup {
     /// Where each device's sealed secrets bundle lives locally (see
     /// [`crate::secrets`]).
     pub secrets: PathBuf,
+    /// Where merged documents live locally (see [`crate::merged`]): the
+    /// synced copies in `synced`, what the apps held in `applied`.
+    pub merged: PathBuf,
+    /// Apps whose settings sync as merged documents: Chromium, Wi-Fi.
+    pub groups: Vec<Arc<dyn Group>>,
 }
 
 /// Where package lists live in the synced tree, one file per device.
@@ -139,6 +212,8 @@ pub struct SettingsStatus {
     /// Settings changed on both sides that didn't merge, waiting for
     /// `resolve`: path relative to home.
     pub held: Vec<PathBuf>,
+    /// Each group of settings and how it stands here.
+    pub groups: Vec<Item>,
 }
 
 /// The outcome of [`Engine::rotate`].
@@ -264,6 +339,17 @@ pub struct Engine {
     settings: Option<SettingsSetup>,
     /// Why settings sync stands down right now, if it does.
     dormant: Option<String>,
+    /// Sync the apps' merged documents now (at start, or an app now
+    /// allows writing what waits).
+    merged_dirty: bool,
+    /// An app wrote a file that may change its documents, and when the last
+    /// look for that was: see [`Engine::look_at_apps`].
+    apps_touched: BTreeSet<String>,
+    apps_looked: Option<Instant>,
+    /// Merged documents with a part held back at the last write.
+    held_docs: BTreeMap<PathBuf, Value>,
+    /// The groups due a look this sync, as they were before it looked.
+    due_now: BTreeSet<String>,
     folders: Option<Folders>,
     /// The folders syncing here, when syncing chosen folders of home:
     /// the account's, less the skipped ones.
@@ -317,6 +403,11 @@ impl Engine {
             reserved: BTreeSet::new(),
             settings,
             dormant: None,
+            merged_dirty: true,
+            apps_touched: BTreeSet::new(),
+            apps_looked: None,
+            held_docs: BTreeMap::new(),
+            due_now: BTreeSet::new(),
             synced: folders
                 .as_ref()
                 .map(|f| f.add.difference(&f.skip).cloned().collect())
@@ -539,7 +630,8 @@ impl Engine {
     /// Local changes noticed and not pushed yet.
     #[must_use]
     pub fn has_pending(&self) -> bool {
-        !self.pending.is_empty()
+        // with settings sync off or standing down, no app waits for a sync
+        !self.pending.is_empty() || (self.merged_dirty && self.settings_on().is_some())
     }
 
     /// Join requests waiting for approval.
@@ -863,6 +955,11 @@ impl Engine {
         if let Ok(name) = path.strip_prefix(SECRETS) {
             return self.settings.as_ref().map(|s| s.secrets.join(name));
         }
+        if let Ok(rest) = path.strip_prefix(MERGED) {
+            return self
+                .settings_on()
+                .map(|s| s.merged.join("synced").join(rest));
+        }
         match path.strip_prefix(SETTINGS) {
             Ok(rest) => self.settings_on().map(|s| s.home.join(rest)),
             Err(_) => Some(self.on_disk(path)),
@@ -886,12 +983,19 @@ impl Engine {
                 || name.components().count() != 1
                 || name.extension().is_none_or(|e| e != "sealed");
         }
+        // merged documents: `<group>/.../<doc>.json`
+        if let Ok(rest) = path.strip_prefix(MERGED) {
+            return self.settings_on().is_none()
+                || is_dir
+                || rest.components().count() < 2
+                || rest.extension().is_none_or(|e| e != "json");
+        }
         match path.strip_prefix(SETTINGS) {
             // settings are files the manifest shares; directories under
             // home are never managed
-            Ok(rest) => self
-                .settings_on()
-                .is_none_or(|s| is_dir || !s.manifest.is_shared(rest)),
+            Ok(rest) => self.settings_on().is_none_or(|s| {
+                is_dir || !s.manifest.is_shared(rest) || s.manifest.through_link(&s.home, rest)
+            }),
             Err(_) => {
                 path.starts_with(".omacloud")
                     || (self.folders.is_some()
@@ -988,23 +1092,449 @@ impl Engine {
             .settings
             .as_ref()
             .and_then(|s| s.manifest.dormant(&s.home));
+        let held: Vec<PathBuf> = self
+            .state
+            .held
+            .keys()
+            .filter_map(|p| p.strip_prefix(SETTINGS).ok().map(Path::to_path_buf))
+            .collect();
+        let groups = match (&self.settings, &dormant) {
+            (Some(s), None) => self.groups_status(s, &held),
+            _ => Vec::new(),
+        };
         SettingsStatus {
             on: self.settings.is_some(),
             dormant,
-            held: self
-                .state
-                .held
-                .keys()
-                .filter_map(|p| p.strip_prefix(SETTINGS).ok().map(Path::to_path_buf))
-                .collect(),
+            held,
+            groups,
         }
     }
 
-    /// Directories a watcher should watch (not recursively) for settings.
+    /// The shell's and apps' setting files, then each merged group.
+    fn groups_status(&self, s: &SettingsSetup, held: &[PathBuf]) -> Vec<Item> {
+        let files = s.manifest.shared_files(&s.home);
+        let linked = s.manifest.linked(&s.home);
+        let mut out = Vec::new();
+        for (group, title, what) in [
+            (
+                "shell",
+                "Shell and dotfiles",
+                "bash, fish, git, Neovim, herdr and the like",
+            ),
+            (
+                "agents",
+                "AI agents",
+                "Claude Code, Codex, opencode and others: settings, skills, hooks",
+            ),
+            (
+                "apps",
+                "Desktop and apps",
+                "Hyprland bindings, look and feel, terminals",
+            ),
+        ] {
+            let n = files
+                .iter()
+                .filter(|p| settings::group_of(p) == group)
+                .count();
+            let h = held
+                .iter()
+                .filter(|p| settings::group_of(p) == group)
+                .count();
+            out.push(Item {
+                group: group.into(),
+                title: title.into(),
+                state: if h > 0 { "conflict" } else { "synced" }.into(),
+                detail: if h > 0 {
+                    format!("{h} changed here and on another computer: choose which to keep")
+                } else {
+                    format!("{n} file{} ({what})", if n == 1 { "" } else { "s" })
+                },
+                install: Vec::new(),
+                not_synced: linked
+                    .iter()
+                    .filter(|p| settings::group_of(p) == group)
+                    .map(|p| format!("~/{}: a link, left as it is", p.display()))
+                    .collect(),
+                scope: String::new(),
+            });
+        }
+        let mut failed: Vec<(String, String)> = Vec::new();
+        for g in &s.groups {
+            let mut waiting = Vec::new();
+            for doc in g.docs() {
+                let rel = Path::new(g.name()).join(&doc);
+                let Some(mirror) = merged::read(&s.merged.join("synced").join(&rel)) else {
+                    continue;
+                };
+                let applied = merged::read(&s.merged.join("applied").join(&rel));
+                let failure = merged::read(&s.merged.join("failed").join(&rel))
+                    .filter(|f| f.get("mirror") == Some(&mirror))
+                    .and_then(|f| f.get("error").and_then(Value::as_str).map(str::to_string));
+                if let Some(error) = failure {
+                    failed.push((rel.to_string_lossy().into_owned(), error));
+                } else if waits(s, g.as_ref(), &doc, &mirror, applied.as_ref()) {
+                    let why = g.busy(&doc).unwrap_or_else(|| "next sync".into());
+                    waiting.push((doc, why));
+                } else if let Some(refused) = merged::read(&s.merged.join("tried").join(&rel))
+                    .and_then(|t| t.get("refused").and_then(Value::as_str).map(str::to_string))
+                    .filter(|_| g.pending(&doc, &mirror, applied.as_ref()))
+                {
+                    waiting.push((doc, format!("refused: {refused}")));
+                }
+            }
+            out.extend(g.status(&s.merged.join("synced").join(g.name()), &waiting));
+        }
+        // edits made on two computers that a merge settled lately, on any
+        // computer: the one whose edit gave way sees it too
+        // writes that keep failing for now: said, with the error
+        for i in out.iter_mut().filter(|i| !i.scope.is_empty()) {
+            for (doc, error) in failed.iter().filter(|(d, _)| d.starts_with(&i.scope)) {
+                i.state = "failed".into();
+                let what = doc
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(doc)
+                    .trim_end_matches(".json");
+                i.detail.push_str(&format!(
+                    "; {what} couldn't be written: {error} (trying again)"
+                ));
+            }
+        }
+        let settled = settled(&s.merged.join("synced").join(CONFLICTS));
+        for i in out.iter_mut().filter(|i| !i.scope.is_empty()) {
+            let mine: Vec<&Settled> = settled
+                .iter()
+                .filter(|c| c.doc.starts_with(&i.scope))
+                .collect();
+            let Some(latest) = mine.last() else { continue };
+            if matches!(i.state.as_str(), "synced" | "new") {
+                i.state = "settled".into();
+            }
+            i.detail.push_str(&format!(
+                "; {} edit{} made on two computers settled this week (latest: {})",
+                mine.len(),
+                if mine.len() == 1 { "" } else { "s" },
+                latest.text
+            ));
+        }
+        // nothing has synced yet: nothing is in sync
+        if self.state.synced_at == 0 {
+            for i in out.iter_mut().filter(|i| i.state == "synced") {
+                i.state = "new".into();
+            }
+        }
+        out
+    }
+
+    /// Read each merged group's documents from its app, and merge what
+    /// changed here into the synced copy, which the next push sends.
+    fn capture_merged(&mut self) {
+        self.merged_dirty = false;
+        let Some(s) = self.settings_on().cloned() else {
+            return;
+        };
+        self.apps_touched.clear();
+        let due = self.due_now.clone();
+        for g in s.groups.iter().filter(|g| due.contains(g.name())) {
+            for doc in g.docs() {
+                if let Err(e) = self.capture_doc(&s, g.as_ref(), &doc) {
+                    warn!("reading {} {doc}: {e:#}", g.name());
+                }
+            }
+        }
+    }
+
+    /// Look at the apps after they wrote files that may matter, at most
+    /// once a minute (Chromium rewrites `Preferences` constantly): a
+    /// document that changed is pushed, and what waited for an app to
+    /// allow writing (Chromium closed) syncs now. A look costs no network.
+    pub fn look_at_apps(&mut self) {
+        if self.apps_touched.is_empty() || self.apps_looked.is_some_and(|t| t.elapsed() < APPS_LOOK)
+        {
+            return;
+        }
+        self.apps_looked = Some(Instant::now());
+        self.refresh_dormant();
+        let Some(s) = self.settings_on().cloned() else {
+            return;
+        };
+        // only the apps whose files changed (Wi-Fi's look costs a call to
+        // NetworkManager per network; it waits for a sync)
+        let touched = std::mem::take(&mut self.apps_touched);
+        for g in s.groups.iter().filter(|g| touched.contains(g.name())) {
+            for doc in g.docs() {
+                if let Err(e) = self.capture_doc(&s, g.as_ref(), &doc) {
+                    warn!("reading {} {doc}: {e:#}", g.name());
+                }
+                let rel = Path::new(g.name()).join(&doc);
+                let mirror = merged::read(&s.merged.join("synced").join(&rel));
+                let applied = merged::read(&s.merged.join("applied").join(&rel));
+                if mirror.is_some_and(|m| waits(&s, g.as_ref(), &doc, &m, applied.as_ref()))
+                    && g.busy(&doc).is_none()
+                {
+                    self.merged_dirty = true;
+                }
+            }
+        }
+    }
+
+    /// Capture one document; a change here merges into the synced copy.
+    /// Returns what the app holds now, `None` if it can't be read now.
+    fn capture_doc(
+        &mut self,
+        s: &SettingsSetup,
+        g: &dyn Group,
+        doc: &str,
+    ) -> Result<Option<Value>> {
+        let rel = Path::new(g.name()).join(doc);
+        let (mirror_path, applied_path) = (
+            s.merged.join("synced").join(&rel),
+            s.merged.join("applied").join(&rel),
+        );
+        let applied = merged::read(&applied_path);
+        let Some(now) = g.capture(doc, applied.as_ref())? else {
+            return Ok(None);
+        };
+        if applied.as_ref() == Some(&now) {
+            return Ok(Some(now));
+        }
+        let mirror = merged::read(&mirror_path);
+        let next = match &mirror {
+            None => now.clone(),
+            Some(m) => {
+                let r = g.merge(doc, applied.as_ref(), &now, m);
+                self.record_conflicts(s, &rel, &r.conflicts);
+                r.value
+            }
+        };
+        if mirror.as_ref() != Some(&next) {
+            debug!("{} {doc} changed here", g.name());
+            merged::write(&mirror_path, &next)?;
+            _ = self.pending.insert(Path::new(MERGED).join(&rel));
+        }
+        merged::write(&applied_path, &now)?;
+        Ok(Some(now))
+    }
+
+    /// Write what came from other computers into each app that isn't busy;
+    /// the rest waits for a later sync. The app is read afresh first, and
+    /// anything changed there since the last look merges in rather than
+    /// being overwritten; a document that can't be read now isn't written.
+    fn apply_merged(&mut self) {
+        let Some(s) = self.settings_on().cloned() else {
+            return;
+        };
+        let mut tried = false;
+        for g in &s.groups {
+            for doc in g.docs() {
+                match self.apply_doc(&s, g.as_ref(), &doc) {
+                    Ok(Applied::Nothing) => {}
+                    Ok(Applied::Done) => {
+                        tried = true;
+                        info!("{} {doc}: applied changes from other computers", g.name());
+                    }
+                    Ok(Applied::Held(why)) => debug!("{} {doc}: part waits ({why})", g.name()),
+                    Err(e) => {
+                        tried = true;
+                        warn!("applying {} {doc}: {e:#}", g.name());
+                    }
+                }
+            }
+        }
+        // a write that failed may have backed something up too
+        if tried {
+            // their own history: never pushes dotfile backups out
+            _ = prune_history(&s.merged.join("backups/history"), KEEP_BACKUPS);
+        }
+    }
+
+    fn apply_doc(&mut self, s: &SettingsSetup, g: &dyn Group, doc: &str) -> Result<Applied> {
+        let rel = Path::new(g.name()).join(doc);
+        let (mirror_path, applied_path) = (
+            s.merged.join("synced").join(&rel),
+            s.merged.join("applied").join(&rel),
+        );
+        // a part held back (a network in use) is tried again when the app
+        // is due a look, or at once when something newer came
+        if let Some(held) = self.held_docs.get(&rel)
+            && !self.due_now.contains(g.name())
+            && merged::read(&mirror_path).as_ref() == Some(held)
+        {
+            return Ok(Applied::Nothing);
+        }
+        // a write that failed waits longer each time, while nothing changes
+        let failed_path = s.merged.join("failed").join(&rel);
+        if let Some(f) = merged::read(&failed_path)
+            && f.get("mirror") == merged::read(&mirror_path).as_ref()
+            && f.get("applied") == Some(&merged::read(&applied_path).unwrap_or(Value::Null))
+            && f.get("next")
+                .and_then(Value::as_u64)
+                .is_some_and(|n| unix_now() < n)
+        {
+            return Ok(Applied::Nothing);
+        }
+        let waits = |mirror: Option<&Value>, applied: Option<&Value>| {
+            mirror.is_some_and(|m| waits(s, g, doc, m, applied))
+        };
+        if !waits(
+            merged::read(&mirror_path).as_ref(),
+            merged::read(&applied_path).as_ref(),
+        ) {
+            return Ok(Applied::Nothing);
+        }
+        if let Some(why) = g.busy(doc) {
+            debug!("{} {doc}: changes wait ({why})", g.name());
+            return Ok(Applied::Nothing);
+        }
+        g.forget();
+        if self.capture_doc(s, g, doc)?.is_none() {
+            debug!("{} {doc}: not readable now; changes wait", g.name());
+            return Ok(Applied::Nothing);
+        }
+        let (mirror, applied) = (merged::read(&mirror_path), merged::read(&applied_path));
+        let Some(mirror) = mirror.filter(|m| waits(Some(m), applied.as_ref())) else {
+            return Ok(Applied::Nothing);
+        };
+        let result = g.apply(doc, &mirror, applied.as_ref(), &s.merged.join("backups"));
+        g.forget();
+        let now = g.capture(doc, applied.as_ref())?;
+        if let Some(now) = &now {
+            merged::write(&applied_path, now)?;
+        }
+        let tried_path = s.merged.join("tried").join(&rel);
+        let held = g.held(doc);
+        if held.is_some() {
+            _ = self.held_docs.insert(rel.clone(), mirror.clone());
+        } else {
+            _ = self.held_docs.remove(&rel);
+        }
+        match &result {
+            Err(e) if e.downcast_ref::<merged::Refused>().is_none() => {
+                let before =
+                    merged::read(&failed_path).filter(|f| f.get("mirror") == Some(&mirror));
+                let attempts = before
+                    .and_then(|f| f.get("attempts").and_then(Value::as_u64))
+                    .unwrap_or(0)
+                    + 1;
+                // once at the next sync (Chromium may just have opened),
+                // then longer each time
+                let wait = match attempts {
+                    1 => 0,
+                    n => (RETRY << (n - 2).min(8)).min(MAX_RETRY),
+                };
+                merged::write(
+                    &failed_path,
+                    &serde_json::json!({
+                        "mirror": mirror, "applied": now.clone().unwrap_or(Value::Null),
+                        "attempts": attempts, "next": unix_now() + wait, "error": format!("{e:#}"),
+                    }),
+                )?;
+            }
+            _ => _ = fs::remove_file(&failed_path),
+        }
+        match (&result, held) {
+            // something waits for the app (a network in use): never
+            // recorded, so it goes through once it can
+            (_, Some(why)) => {
+                _ = fs::remove_file(&tried_path);
+                result.map(|()| Applied::Held(why))
+            }
+            // what the app took of it: the same again is never written
+            // again (an engine Chromium keeps as the default, a network
+            // this computer can't take) until something changes
+            (Ok(()), None) => {
+                merged::write(
+                    &tried_path,
+                    &serde_json::json!({ "mirror": mirror, "applied": now }),
+                )?;
+                Ok(Applied::Done)
+            }
+            // the app said no (NetworkManager turned a change down):
+            // likewise; anything else (Chromium opened meanwhile, a full
+            // disk) is tried again
+            (Err(e), None) => {
+                if let Some(r) = e.downcast_ref::<merged::Refused>() {
+                    merged::write(
+                        &tried_path,
+                        &serde_json::json!({ "mirror": mirror, "applied": now, "refused": r.to_string() }),
+                    )?;
+                }
+                result.map(|()| Applied::Done)
+            }
+        }
+    }
+
+    /// Edits made on two computers that a merge settled: in a log beside the
+    /// backups, and in this computer's record in the synced tree, which
+    /// every computer's status reads (the daemon's log says only how many).
+    fn record_conflicts(&mut self, s: &SettingsSetup, rel: &Path, lines: &[String]) {
+        use std::io::Write;
+        if lines.is_empty() {
+            return;
+        }
+        info!(
+            "{}: {} edit(s) made on two computers settled, this computer's kept",
+            rel.display(),
+            lines.len()
+        );
+        let lines: Vec<String> = lines
+            .iter()
+            .map(|l| l.replace(merged::ME, &self.device))
+            .collect();
+        let stamp = Timestamp::now()
+            .to_zoned(TimeZone::system())
+            .strftime("%Y-%m-%d %H:%M:%S")
+            .to_string();
+        let log = s.merged.join("conflicts.log");
+        let written = private_dirs(&s.merged, &s.merged).and_then(|()| {
+            let mut f = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log)?;
+            for l in &lines {
+                writeln!(f, "{stamp} {}: {l}", rel.display())?;
+            }
+            Ok(())
+        });
+        // the record that syncs: the last month's, at most RECORD of them
+        let name = Path::new(CONFLICTS).join(format!("{}.json", self.device));
+        let path = s.merged.join("synced").join(&name);
+        let now = unix_now();
+        let mut record: Vec<Settled> = merged::read(&path)
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        record.retain(|c| now.saturating_sub(c.at) < 30 * 86_400);
+        record.extend(lines.iter().map(|l| Settled {
+            at: now,
+            doc: rel.to_string_lossy().into_owned(),
+            text: l.clone(),
+        }));
+        let excess = record.len().saturating_sub(RECORD);
+        _ = record.drain(..excess);
+        let synced = serde_json::to_value(&record)
+            .map_err(anyhow::Error::from)
+            .and_then(|v| merged::write(&path, &v));
+        if written.and(synced).is_err() {
+            warn!("recording merge conflicts failed");
+        }
+        _ = self.pending.insert(Path::new(MERGED).join(name));
+    }
+
+    /// Directories a watcher should watch for settings, and whether
+    /// recursively (a manifest's `**` entry) or not.
     #[must_use]
-    pub fn settings_watch_dirs(&self) -> Vec<PathBuf> {
+    pub fn settings_watch_dirs(&self) -> Vec<(PathBuf, bool)> {
         self.settings_on()
-            .map(|s| s.manifest.watch_dirs(&s.home))
+            .map(|s| {
+                let mut dirs = s.manifest.watch_dirs(&s.home);
+                dirs.extend(
+                    s.groups
+                        .iter()
+                        .flat_map(|g| g.watch_dirs())
+                        .map(|d| (d, false)),
+                );
+                dirs
+            })
             .unwrap_or_default()
     }
 
@@ -1059,8 +1589,27 @@ impl Engine {
 
     /// Mark paths as possibly changed: absolute under the folder or (for
     /// settings) under home, or relative to the folder.
-    pub fn notice(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+    /// Returns whether any of them matters: a path that syncs, or an app's
+    /// file worth a look. The rest (a browser's journals, say) need nothing,
+    /// not even a look at the storage.
+    pub fn notice(&mut self, paths: impl IntoIterator<Item = PathBuf>) -> bool {
+        let mut relevant = false;
         for p in paths {
+            let concern = self.settings_on().and_then(|s| {
+                s.groups
+                    .iter()
+                    .map(|g| (g.name().to_string(), g.concerns(&p)))
+                    .find(|(_, c)| *c != Concern::No)
+            });
+            if let Some((group, concern)) = concern {
+                relevant = true;
+                _ = self.apps_touched.insert(group);
+                if concern == Concern::Now {
+                    // a look now, whenever the last one was
+                    self.apps_looked = None;
+                }
+                continue;
+            }
             // (home can be both the folder and where settings live)
             let rel = if let Some(rel) = p
                 .strip_prefix(&self.folder)
@@ -1079,8 +1628,10 @@ impl Engine {
             if rel.as_os_str().is_empty() || rel.is_absolute() || self.excluded(&rel, false) {
                 continue;
             }
+            relevant = true;
             _ = self.pending.insert(rel);
         }
+        relevant
     }
 
     /// Compare every local and every synced path on the next sync, to catch
@@ -1097,22 +1648,45 @@ impl Engine {
     /// history this device can't verify (see [`crate::head::HeadError`]).
     pub fn sync(&mut self) -> Result<Stats> {
         self.clean_leftovers();
+        self.refresh_dormant();
+        // asked once, before this sync's look makes the answer no
+        self.due_now = self
+            .settings_on()
+            .map(|s| {
+                s.groups
+                    .iter()
+                    .filter(|g| g.due())
+                    .map(|g| g.name().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.capture_merged();
+        let stats = self.sync_rounds()?;
+        self.apply_merged();
+        Ok(stats)
+    }
+
+    fn refresh_dormant(&mut self) {
+        let dormant = self
+            .settings
+            .as_ref()
+            .and_then(|s| s.manifest.dormant(&s.home));
+        if dormant != self.dormant {
+            match &dormant {
+                Some(why) => warn!("settings sync stands down: {why}"),
+                None if self.settings.is_some() => info!("settings sync is on"),
+                None => {}
+            }
+            self.dormant = dormant;
+        }
+    }
+
+    fn sync_rounds(&mut self) -> Result<Stats> {
         let mut stats = Stats::default();
         for _ in 0..MAX_ROUNDS {
             // the folder's rules file syncs too, so reread it every cycle
             self.ignores = Ignores::load(&self.folder, &self.ignore_rules)?;
-            let dormant = self
-                .settings
-                .as_ref()
-                .and_then(|s| s.manifest.dormant(&s.home));
-            if dormant != self.dormant {
-                match &dormant {
-                    Some(why) => warn!("settings sync stands down: {why}"),
-                    None if self.settings.is_some() => info!("settings sync is on"),
-                    None => {}
-                }
-                self.dormant = dormant;
-            }
+            self.refresh_dormant();
             // head first, then the index: a writer's index lands before its
             // head, so this index covers every blob the head needs
             self.state.devices.advance(self.coord.as_ref())?;
@@ -1325,6 +1899,12 @@ impl Engine {
                     .into_iter()
                     .map(|p| Path::new(SETTINGS).join(p)),
             );
+            let mut docs = BTreeSet::new();
+            let synced = s.merged.join("synced");
+            if synced.is_dir() {
+                walk_local(&synced, Path::new(""), &|_: &Path, _| false, &mut docs)?;
+            }
+            paths.extend(docs.into_iter().map(|p| Path::new(MERGED).join(p)));
         }
         self.pending.extend(paths);
         Ok(())
@@ -1431,6 +2011,12 @@ impl Engine {
                     );
                 }
             } else if meta.is_file() {
+                // a big or binary file below a `**` entry stays put
+                if let (Some(s), Ok(rest)) = (self.settings_on(), path.strip_prefix(SETTINGS))
+                    && !s.manifest.admits(rest, &full)
+                {
+                    continue;
+                }
                 let mut same = base.as_ref().is_some_and(|b| {
                     b.is_file() && b.meta.size == meta.len() && b.meta.mtime == Some(mtime)
                 });
@@ -1506,7 +2092,7 @@ impl Engine {
                 continue;
             }
             stats.pulled += 1;
-            if path.starts_with(SETTINGS) {
+            if path.starts_with(SETTINGS) || path.starts_with(MERGED) {
                 self.pull_setting(
                     repo,
                     base_tree,
@@ -1661,6 +2247,9 @@ impl Engine {
                 let ancestor = base.as_ref().map(dump).transpose()?.unwrap_or_default();
                 let (ours, theirs) = (fs::read(&dest)?, dump(&r)?);
                 _ = local.remove(&path);
+                if path.starts_with(MERGED) {
+                    return self.merge_doc(&path, &dest, &ancestor, &ours, &theirs);
+                }
                 if let Some(merged) = settings::merge(&ancestor, &ours, &theirs) {
                     info!("merged {} with {}'s changes", path.display(), self.device);
                     self.back_up(&path)?;
@@ -1676,6 +2265,45 @@ impl Engine {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// A merged document changed here and elsewhere: its group merges it,
+    /// which always settles (see [`merged::merge_map`]).
+    fn merge_doc(
+        &mut self,
+        path: &Path,
+        dest: &Path,
+        ancestor: &[u8],
+        ours: &[u8],
+        theirs: &[u8],
+    ) -> Result<()> {
+        let s = self
+            .settings_on()
+            .cloned()
+            .ok_or_else(|| anyhow!("settings sync is off"))?;
+        let rel = path.strip_prefix(MERGED)?.to_path_buf();
+        let mut parts = rel.components();
+        let name = parts
+            .next()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned());
+        let doc = parts.as_path().to_string_lossy().into_owned();
+        let parse = |b: &[u8]| serde_json::from_slice::<serde_json::Value>(b).ok();
+        let group = s.groups.iter().find(|g| Some(g.name()) == name.as_deref());
+        let merged = match (group, parse(ours), parse(theirs)) {
+            (Some(g), Some(o), Some(t)) => {
+                let r = g.merge(&doc, parse(ancestor).as_ref(), &o, &t);
+                self.record_conflicts(&s, &rel, &r.conflicts);
+                r.value
+            }
+            // one side isn't readable: the other stands
+            (_, Some(o), None) => o,
+            (_, _, Some(t)) => t,
+            (_, None, None) => return Ok(()),
+        };
+        info!("merged {} with another computer's changes", path.display());
+        merged::write(dest, &merged)?;
+        _ = self.pending.insert(path.to_path_buf());
         Ok(())
     }
 
@@ -1802,6 +2430,12 @@ impl Engine {
             _ = self.pending.insert(path.to_path_buf());
             return Ok(());
         }
+        if path.starts_with(MERGED) {
+            match fs::remove_file(&dest) {
+                Err(e) if e.kind() != ErrorKind::NotFound => return Err(e.into()),
+                _ => return Ok(()),
+            }
+        }
         if path.starts_with(SETTINGS) {
             // a setting goes to history first, and home's directories stay
             self.back_up(path)?;
@@ -1862,7 +2496,7 @@ impl Engine {
         let dest = self
             .local(path)
             .ok_or_else(|| anyhow!("settings sync is off"))?;
-        if path.starts_with(SETTINGS) {
+        if path.starts_with(SETTINGS) || path.starts_with(MERGED) {
             self.back_up(path)?;
             fs::create_dir_all(dest.parent().ok_or_else(|| anyhow!("bad path"))?)?;
             return Ok(());
@@ -2496,7 +3130,7 @@ fn walk_tree(
         let path = rel.join(name);
         // settings directories are walked for the files in them
         let settings_dir = node.is_dir()
-            && [SETTINGS, PACKAGES, SECRETS]
+            && [SETTINGS, PACKAGES, SECRETS, MERGED]
                 .iter()
                 .any(|p| Path::new(p).starts_with(&path) || path.starts_with(p));
         if !settings_dir && skip(&path, node.is_dir()) {
