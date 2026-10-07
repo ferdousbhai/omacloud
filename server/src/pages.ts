@@ -2,7 +2,8 @@
 
 import { escapeXml } from "./upstream.ts";
 
-const CONTACT = "ferdousbd@gmail.com";
+const PRIVACY = "privacy@omacloud.computer";
+const LEGAL = "legal@omacloud.computer";
 const UPDATED = "7 October 2026";
 
 function layout(title: string, body: string): Response {
@@ -116,10 +117,10 @@ run your account and to contact you about it: to confirm a waitlist request, to 
 and about your account. Emails are sent through Cloudflare Email Sending.</p>
 <h2>Leaving</h2>
 <p>You can take your data out at any time (<code>omacloud export</code> gives you a standard
-restic repository). Ask at <a href="mailto:${CONTACT}">${CONTACT}</a> and your account and
+restic repository). Ask at <a href="mailto:${PRIVACY}">${PRIVACY}</a> and your account and
 everything stored for it are deleted, or your address taken off the waitlist.</p>
 <h2>Contact</h2>
-<p><a href="mailto:${CONTACT}">${CONTACT}</a></p>`,
+<p><a href="mailto:${PRIVACY}">${PRIVACY}</a></p>`,
 	);
 
 export const terms = () =>
@@ -145,5 +146,5 @@ the service being unavailable.</p>
 <p>You can stop using Omacloud storage and ask for your account to be deleted at any time.
 If the service ends, you'll be told in advance and given time to export your data.</p>
 <h2>Contact</h2>
-<p><a href="mailto:${CONTACT}">${CONTACT}</a></p>`,
+<p><a href="mailto:${LEGAL}">${LEGAL}</a></p>`,
 	);
