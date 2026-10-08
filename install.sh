@@ -64,6 +64,16 @@ if ! command -v pacman >/dev/null; then
   echo "pacman not found: this installer is for Omarchy." >&2
   exit 1
 fi
+# GitHub release assets share one flat directory, so each architecture has
+# its own database name. Keep the original x86_64 name for existing installs.
+case "$(uname -m)" in
+  x86_64) ;;
+  aarch64) REPO=omacloud-aarch64 ;;
+  *)
+    echo "Unsupported architecture: $(uname -m). Omacloud supports x86_64 and aarch64; nothing was changed." >&2
+    exit 1
+    ;;
+esac
 if [[ ! $SIGNING_KEY_FINGERPRINT =~ ^[0-9A-F]{40}$ ]]; then
   echo "This copy of install.sh has no signing key pinned; nothing was changed." >&2
   exit 1
@@ -93,7 +103,27 @@ remove_onecloud() {
 # first: syncing would fail on the old repository, which no longer exists
 remove_onecloud
 
+# Earlier installers added the x86_64 repository even on ARM. Leaving it
+# enabled would keep exposing incompatible packages during system updates.
+if [[ $REPO == omacloud-aarch64 ]]; then
+  remove_x86_repo() {
+    local sudo='' include='Include = /etc/pacman.d/omacloud.conf' rest user home
+    (( EUID == 0 )) || sudo=sudo
+    if grep -qxF "$include" /etc/pacman.conf; then
+      rest="$(grep -vxF "$include" /etc/pacman.conf || true)"
+      printf '%s\n' "$rest" | $sudo tee /etc/pacman.conf >/dev/null
+    fi
+    $sudo rm -f /etc/pacman.d/omacloud.conf
+    user="${SUDO_USER:-${USER:-$(id -un)}}"
+    home="$(getent passwd "$user" | cut -d: -f6)"
+    [[ -z $home ]] || $sudo rm -f "$home/.config/omarchy/hooks/pre-refresh-pacman.d/omacloud"
+  }
+  remove_x86_repo
+fi
+
 echo "Adding the [$REPO] repository"
+# The shared helper downloads a key named after its repository, so releases
+# publish the same pinned key under both repository names.
 add_signed_repo "$REPO" "$RELEASES" "$SIGNING_KEY_FINGERPRINT"
 
 echo "Installing omacloud"

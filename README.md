@@ -16,16 +16,33 @@ your data.
 
 ## Install
 
-On Omarchy:
+On Omarchy (x86_64 or aarch64):
 
 ```sh
 curl -fsSL https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh | sudo bash
 ```
 
-It adds the signed `[omacloud]` package repository (key fingerprint
+It adds the signed package repository for your architecture (key fingerprint
 `5213 0299 581D AD68 5226 900C A89C A1A6 A1E7 4251`) and installs Omacloud;
-from then on `omarchy update` keeps it current. To build from a checkout
-instead: `cd pkgbuild && makepkg -si`.
+from then on `omarchy update` keeps it current.
+
+Releases use separate signed package databases for x86_64 (`[omacloud]`)
+and aarch64 (`[omacloud-aarch64]`). The installer selects the native
+architecture and, on ARM, removes the incompatible repository left by
+older installers. This requires a release containing both architectures;
+releases through 0.0.13 contain x86_64 packages only.
+
+To build locally on either architecture, run as your desktop user with
+Rust/Cargo and the base-devel tools installed:
+
+```sh
+git clone https://github.com/ferdousbhai/omacloud.git
+cd omacloud/pkgbuild
+makepkg -si
+```
+
+Locally built packages must be rebuilt from an updated checkout to receive
+new versions until you install the signed repository.
 
 ## Set up
 

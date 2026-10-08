@@ -1,0 +1,71 @@
+name: Release verification
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.event.release.prerelease == false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x86_64
+            runner: ubuntu-latest
+          - architecture: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - name: Prepare Arch Linux ARM image
+        if: matrix.architecture == 'aarch64'
+        run: |
+          curl -fL --retry 3 https://ca.us.mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz -o "$RUNNER_TEMP/arch-arm.tar.gz"
+          docker import --platform linux/arm64 "$RUNNER_TEMP/arch-arm.tar.gz" omacloud-arch-arm
+      - name: Install the signed release
+        id: install
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_ARCHITECTURE: ${{ matrix.architecture }}
+          ARM_VERIFY_IMAGE: omacloud-arch-arm
+        run: scripts/verify-release.sh "${RELEASE_TAG#v}" "$RELEASE_ARCHITECTURE"
+
+      - name: Record a confirmed package failure
+        if: failure() && steps.install.outputs.confirmed_failure == 'true'
+        run: mkdir -p confirmed-failure && touch confirmed-failure/${{ matrix.architecture }}
+      - uses: actions/upload-artifact@v4
+        if: failure() && steps.install.outputs.confirmed_failure == 'true'
+        with:
+          name: confirmed-install-failure-${{ matrix.architecture }}
+          path: confirmed-failure/
+          if-no-files-found: error
+
+  rollback:
+    needs: verify
+    if: failure() && needs.verify.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: confirmed-install-failure-*
+          path: confirmed-failure
+          merge-multiple: true
+      - name: Remove the failed release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ -f confirmed-failure/x86_64 || -f confirmed-failure/aarch64 ]]; then
+            gh release delete "$RELEASE_TAG" --yes --cleanup-tag
+          else
+            echo "No confirmed package defect; retaining release and tag."
+          fi
