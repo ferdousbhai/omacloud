@@ -72,6 +72,26 @@ ARM runner.
 
 ## Releases
 
+From a regular terminal with the existing signing key imported, publish
+packages from the latest successful CI push build of master:
+
+```sh
+scripts/release-ci.sh 0.0.14
+```
+
+This path needs gh, GPG, repo-add, bsdtar, and Python; it does not need local
+Docker access or a Rust rebuild. It downloads both native packages, checks
+their source manifests and metadata, signs and verifies their signatures,
+and publishes the repository databases and installer at the tested commit.
+The signing key remains local. The Release verification workflow installs
+the signed release on native x86_64 and ARM runners; if either fails, it
+removes the release and tag. Assets remain under dist for inspection.
+A specific successful master run can be selected with a second argument.
+`python3 scripts/tests/release-ci.py` checks provenance, signing failures,
+and master changing while the release is being prepared.
+
+### Build a package locally for a release
+
 Release packages must be built natively on both x86_64 and aarch64 from the
 same committed source, with `Cargo.toml` and `CHANGELOG.md` updated first.
 CI's `packages` jobs build both architectures in Arch containers and upload

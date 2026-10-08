@@ -1,0 +1,50 @@
+name: Release verification
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.event.release.prerelease == false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x86_64
+            runner: ubuntu-latest
+          - architecture: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - name: Prepare Arch Linux ARM image
+        if: matrix.architecture == 'aarch64'
+        run: |
+          curl -fL --retry 3 https://ca.us.mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz -o "$RUNNER_TEMP/arch-arm.tar.gz"
+          docker import --platform linux/arm64 "$RUNNER_TEMP/arch-arm.tar.gz" omacloud-arch-arm
+      - name: Install the signed release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_ARCHITECTURE: ${{ matrix.architecture }}
+          ARM_VERIFY_IMAGE: omacloud-arch-arm
+        run: scripts/verify-release.sh "${RELEASE_TAG#v}" "$RELEASE_ARCHITECTURE"
+
+  rollback:
+    needs: verify
+    if: failure() && needs.verify.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Remove the failed release and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release delete "$RELEASE_TAG" --yes --cleanup-tag
