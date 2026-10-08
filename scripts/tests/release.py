@@ -31,7 +31,7 @@ def check(host, failure='', manifest=False):
         script = root / 'scripts/release.sh'
         script.write_text((ROOT / 'scripts/release.sh').read_text())
         verify = root / 'scripts/verify-release.sh'
-        verify.write_text('#!/bin/bash\necho "verify $*" >> "$TEST_LOG"\n[[ $FAILURE != verification || $2 != aarch64 ]]\n')
+        verify.write_text('#!/bin/bash\necho "verify $*" >> "$TEST_LOG"\nif [[ $FAILURE == infrastructure ]]; then exit 2; fi\n[[ $FAILURE != verification || $2 != aarch64 ]]\n')
         verify.chmod(0o755)
         other = 'aarch64' if host == 'x86_64' else 'x86_64'
         host_package = root / f'omacloud-{VERSION}-1-{host}.pkg.tar.zst'
@@ -74,13 +74,20 @@ touch "$files.sig"''',
         calls = log.read_text() if log.exists() else ''
         if failure:
             assert result.returncode != 0, result
-            if failure == 'verification':
+            if failure == 'infrastructure':
+                assert result.returncode == 2
+                assert 'gh release create v1.2.3' in calls
+                assert 'gh release delete' not in calls
+                assert 'git push -q origin --delete' not in calls
+            elif failure == 'verification':
                 assert 'gh release create v1.2.3' in calls, calls
                 assert 'gh release delete v1.2.3' in calls, calls
                 assert 'git push -q origin --delete v1.2.3' in calls, calls
             else:
                 assert 'gh release create' not in calls, calls
-            if failure in ('metadata', 'manifest'):
+            if failure == 'infrastructure':
+                assert 'git tag -d' not in calls
+            elif failure in ('metadata', 'manifest'):
                 assert 'git tag -a' not in calls, calls
             else:
                 assert 'git tag -d v1.2.3' in calls, calls
@@ -97,5 +104,5 @@ touch "$files.sig"''',
 for host in ('x86_64', 'aarch64'):
     check(host)
 check('aarch64', manifest=True)
-for failure in ('metadata', 'manifest', 'build', 'signing', 'database', 'verification'):
+for failure in ('metadata', 'manifest', 'build', 'signing', 'database', 'verification', 'infrastructure'):
     check('aarch64', failure)

@@ -87,4 +87,4 @@ NOTES
 gh release create "v$version" "$assets/"* --repo "$repository" --target "$source_commit" \
   --title "Omacloud $version" --notes-file "$staging/notes.md" --latest
 echo "Published v$version; watch the Release verification workflow."
-echo "If installation fails on either architecture, that workflow removes the release and tag."
+echo "Confirmed package defects remove the release and tag; infrastructure failures retain them."

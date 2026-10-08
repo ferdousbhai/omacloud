@@ -110,12 +110,18 @@ printf '%s\n' "$notes" > "$notes_file"
 gh release create "$tag" dist/* --repo "$gh_repo" --title "Omacloud $version" --notes-file "$notes_file" --latest
 echo "Published $tag: https://github.com/$gh_repo/releases/tag/$tag"
 
-# A release is shipped only once its installer installs it. If it doesn't,
-# take the release down so "latest" never points at a dud.
-if ! (scripts/verify-release.sh "$version" x86_64 && scripts/verify-release.sh "$version" aarch64); then
-  echo "Rolling back $tag." >&2
-  gh release delete "$tag" --repo "$gh_repo" --yes
-  git push -q origin --delete "$tag" || true
-  undo_tag
-  exit 1
-fi
+# Infrastructure/installer failures retain the release for investigation.
+for architecture in x86_64 aarch64; do
+  result=0
+  scripts/verify-release.sh "$version" "$architecture" || result=$?
+  if (( result == 1 )); then
+    echo "Rolling back $tag after a confirmed package defect." >&2
+    gh release delete "$tag" --repo "$gh_repo" --yes
+    git push -q origin --delete "$tag" || true
+    undo_tag
+    exit 1
+  elif (( result != 0 )); then
+    echo "Verification incomplete; retaining $tag for investigation." >&2
+    exit "$result"
+  fi
+done

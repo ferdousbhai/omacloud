@@ -84,8 +84,8 @@ Docker access or a Rust rebuild. It downloads both native packages, checks
 their source manifests and metadata, signs and verifies their signatures,
 and publishes the repository databases and installer at the tested commit.
 The signing key remains local. The Release verification workflow installs
-the signed release on native x86_64 and ARM runners; if either fails, it
-removes the release and tag. Assets remain under dist for inspection.
+the signed release on native x86_64 and ARM runners; a confirmed defect after installation removes the release and tag.
+Infrastructure and installer failures retain them for investigation. Assets remain under dist for inspection.
 A specific successful master run can be selected with a second argument.
 `python3 scripts/tests/release-ci.py` checks provenance, signing failures,
 and master changing while the release is being prepared.
@@ -136,8 +136,9 @@ docker import --platform linux/arm64 /tmp/omacloud-arch-arm.tar.gz omacloud-arch
 ```
 
 Then use `ARM_VERIFY_IMAGE=omacloud-arch-arm`. Docker needs native execution
-or configured emulation for both platforms. If either installation fails,
-the release and tag are taken back down.
+or configured emulation for both platforms. Verification pins the installer and repository assets to the release tag.
+Only a confirmed defect after installation removes the release and tag;
+infrastructure and installer failures retain them for investigation.
 
 ## Checking a release
 
