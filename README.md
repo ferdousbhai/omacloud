@@ -26,6 +26,13 @@ It adds the signed package repository for your architecture (key fingerprint
 `5213 0299 581D AD68 5226 900C A89C A1A6 A1E7 4251`) and installs Omacloud;
 from then on `omarchy update` keeps it current.
 
+If Omarchy's own `[omarchy]` repository already carries Omacloud, the
+installer installs it from there instead and adds no repository of its own,
+removing one an earlier run added. pacman takes a package from the first
+repository that has it, and `[omarchy]` comes first, so a second copy of
+Omacloud's repository would go unused. New versions then reach you once
+Omarchy publishes them, which can be a day or more after a release here.
+
 Releases use separate signed package databases for x86_64 (`[omacloud]`)
 and aarch64 (`[omacloud-aarch64]`). The installer selects the native
 architecture and, on ARM, removes the incompatible repository left by

@@ -61,7 +61,8 @@ keyring; scripts that make test accounts clear their keyring entries on exit
 ## Packaging checks
 
 `python3 scripts/tests/installer.py` checks architecture selection,
-repository migration, and repeated installation with isolated files and
+repository migration, deferring to Omarchy's `[omarchy]` repository when it
+carries omacloud, and repeated installation with isolated files and
 commands. `python3 scripts/tests/release.py` checks that each repository
 contains only its architecture and that metadata, signing, or database
 failures stop publication. It needs `bsdtar` (libarchive-tools on Ubuntu).
