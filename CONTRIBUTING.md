@@ -68,7 +68,10 @@ contains only its architecture and that metadata, signing, or database
 failures stop publication. It needs `bsdtar` (libarchive-tools on Ubuntu).
 `python3 scripts/tests/verify-release.py` exercises the container verification
 commands, including wrong runtime/package architectures and embedded builder
-paths. CI runs these checks and builds/tests the application on a native
+paths. `python3 scripts/tests/omarchy-recipe.py` checks that the Omarchy
+recipe builds the same package as `pkgbuild/PKGBUILD`, and
+`python3 scripts/tests/omarchy-pkgs.py` how a release reaches omarchy-pkgs
+(below). CI runs these checks and builds/tests the application on a native
 ARM runner.
 
 ## Releases
@@ -90,6 +93,18 @@ Infrastructure and installer failures retain them for investigation. Assets rema
 A specific successful master run can be selected with a second argument.
 `python3 scripts/tests/release-ci.py` checks provenance, signing failures,
 and master changing while the release is being prepared.
+
+Omarchy's `[omarchy]` repository builds Omacloud from the recipe in
+`packaging/omarchy-pkgs/omacloud`, which downloads the tag's source tarball;
+change it together with `pkgbuild/PKGBUILD`. After publishing,
+`scripts/release-ci.sh` runs `scripts/omarchy-pkgs.sh <version>`, which
+renders the recipe for the tag (pkgver, sha256 of the tarball) and, while
+omacom/omarchy-pkgs#778 is open, pushes it to that pull request's branch
+(`omacloud` on ferdousbhai/omarchy-pkgs). Once #778 is merged, Omarchy's
+sync-upstream bot bumps pkgver and sha256sums for each tag itself, so the
+script opens a pull request only when the recipe changed otherwise. It
+prints the next step; a failure only warns, and it can be rerun (with
+`--dry-run` to see what it would do).
 
 ### Build a package locally for a release
 

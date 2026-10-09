@@ -53,11 +53,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y libarchive-tools
-      - run: bash -n install.sh pkgbuild/PKGBUILD scripts/build-package.sh scripts/release.sh scripts/release-ci.sh scripts/verify-release.sh
+      - run: bash -n install.sh pkgbuild/PKGBUILD packaging/omarchy-pkgs/omacloud/PKGBUILD scripts/build-package.sh scripts/release.sh scripts/release-ci.sh scripts/omarchy-pkgs.sh scripts/verify-release.sh
       - run: python3 scripts/tests/installer.py
       - run: python3 scripts/tests/release.py
       - run: python3 scripts/tests/release-ci.py
       - run: python3 scripts/tests/verify-release.py
+      - run: python3 scripts/tests/omarchy-recipe.py
+      - run: python3 scripts/tests/omarchy-pkgs.py
 
   packages:
     needs: packaging

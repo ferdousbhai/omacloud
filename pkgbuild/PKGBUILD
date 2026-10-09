@@ -2,6 +2,9 @@
 #
 # Builds from this checkout; a plain `makepkg` in this directory builds the
 # package locally. scripts/release.sh builds, signs and publishes releases.
+# packaging/omarchy-pkgs/omacloud/PKGBUILD builds the same package from a
+# release tarball for Omarchy's repository; scripts/tests/omarchy-recipe.py
+# keeps the two in step.
 
 pkgname=omacloud
 pkgver=0.0.0.r4
@@ -45,6 +48,7 @@ build() {
 check() {
   cd "$srcdir/$pkgname"
   export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
   cargo test --frozen --release -p omacloud-core --lib
 }
 
@@ -59,6 +63,6 @@ package() {
   # turns it on too; the unit's condition skips users without omacloud.
   install -dm755 "$pkgdir/usr/lib/systemd/user/default.target.wants"
   ln -s ../omacloud.service "$pkgdir/usr/lib/systemd/user/default.target.wants/omacloud.service"
-  install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+  install -Dm644 README.md docs/design.md -t "$pkgdir/usr/share/doc/$pkgname"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
