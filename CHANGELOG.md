@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.14 (2026-10-07)
+## 0.0.14 (2026-10-09)
 
 - Native aarch64 packages join x86_64 releases. The installer selects a
   separate signed ARM repository and removes the incompatible repository
