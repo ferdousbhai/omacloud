@@ -37,12 +37,10 @@ docker run --rm --platform "$platform" \
     git clone --no-hardlinks /source /build
     source_commit=$(git -C /source rev-parse HEAD)
     [[ $(git -C /build rev-parse HEAD) == "$source_commit" ]]
-    tag=v$BUILD_VERSION
-    if git -C /build rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-      [[ $(git -C /build rev-list -n1 "$tag") == "$source_commit" ]]
-    else
-      git -C /build tag "$tag"
-    fi
+    # pkgver() reads the version from the tag, so the commit being built gets
+    # it here. After a release, CI builds commits past the release tag;
+    # this clone is discarded, and source-commit.txt names what was built.
+    git -C /build tag -f "v$BUILD_VERSION" >/dev/null
     useradd -m builder
     chown -R builder:builder /build /output
     su builder -c "cd /build/pkgbuild && PKGDEST=/output PKGEXT=.pkg.tar.zst makepkg --force"
