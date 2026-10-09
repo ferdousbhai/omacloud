@@ -88,3 +88,7 @@ gh release create "v$version" "$assets/"* --repo "$repository" --target "$source
   --title "Omacloud $version" --notes-file "$staging/notes.md" --latest
 echo "Published v$version; watch the Release verification workflow."
 echo "Confirmed package defects remove the release and tag; infrastructure failures retain them."
+# Omarchy's repository builds from the tag's tarball; carry the release there.
+# The release stands either way, so a failure here only warns.
+bash scripts/omarchy-pkgs.sh "$version" \
+  || echo "Warning: the Omarchy recipe was not updated; run scripts/omarchy-pkgs.sh $version again." >&2

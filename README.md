@@ -22,16 +22,19 @@ On Omarchy (x86_64 or aarch64):
 curl -fsSL https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh | sudo bash
 ```
 
-It adds the signed package repository for your architecture (key fingerprint
-`5213 0299 581D AD68 5226 900C A89C A1A6 A1E7 4251`) and installs Omacloud;
-from then on `omarchy update` keeps it current.
+Where Omarchy's own `[omarchy]` package repository carries Omacloud, the
+installer installs it from there, as do Install > Service > Omacloud in the
+Omarchy menu (where it's listed) and `omarchy pkg add omacloud`. Otherwise
+it adds Omacloud's signed package repository for your architecture (key
+fingerprint `5213 0299 581D AD68 5226 900C A89C A1A6 A1E7 4251`) and
+installs from that. Either way `omarchy update` keeps it current.
 
-If Omarchy's own `[omarchy]` repository already carries Omacloud, the
-installer installs it from there instead and adds no repository of its own,
-removing one an earlier run added. pacman takes a package from the first
-repository that has it, and `[omarchy]` comes first, so a second copy of
-Omacloud's repository would go unused. New versions then reach you once
-Omarchy publishes them, which can be a day or more after a release here.
+If you installed from Omacloud's repository and Omarchy's comes to carry
+Omacloud, run the install command again: it switches you over and removes
+the repository and Omarchy hook it added. pacman takes a package from the
+first repository that has it, and `[omarchy]` comes first, so Omacloud's
+own would go unused. New versions then reach you once Omarchy publishes
+them, which can be a day or more after a release here.
 
 Releases use separate signed package databases for x86_64 (`[omacloud]`)
 and aarch64 (`[omacloud-aarch64]`). The installer selects the native

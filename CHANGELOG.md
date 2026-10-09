@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.0.15 (2026-10-09)
+
+- Once Omarchy's own `[omarchy]` package repository carries Omacloud, the
+  installer installs it from there and adds no repository of its own, and
+  removes the `[omacloud]` (or `[omacloud-aarch64]`) repository and Omarchy
+  hook an earlier install added: pacman would never use them, since
+  `[omarchy]` comes first. If you installed from Omacloud's repository, run
+  the install command again once Omacloud is in Omarchy's repository to
+  switch over. (#27)
+- The recipe Omarchy's repository builds Omacloud from lives here, in
+  `packaging/omarchy-pkgs/omacloud`, and CI checks it builds the same
+  package as `pkgbuild/PKGBUILD`. After a release,
+  `scripts/omarchy-pkgs.sh` carries the new version to it. The package now
+  also installs `docs/design.md` beside the README.
+- CI builds packages for commits after a release tag, which it refused
+  until the next version bump. (#28)
+
 ## 0.0.14 (2026-10-09)
 
 - Native aarch64 packages join x86_64 releases. The installer selects a

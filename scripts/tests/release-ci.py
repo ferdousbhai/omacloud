@@ -21,6 +21,8 @@ def check(failure=''):
         (root / 'install.sh').write_text((ROOT / 'install.sh').read_text())
         script = root / 'scripts/release-ci.sh'
         script.write_text((ROOT / 'scripts/release-ci.sh').read_text())
+        # Its Omarchy recipe step fails here (no recipe at the tag), which must only warn.
+        (root / 'scripts/omarchy-pkgs.sh').write_text((ROOT / 'scripts/omarchy-pkgs.sh').read_text())
         for architecture in ('x86_64', 'aarch64'):
             artifact = root / architecture
             artifact.mkdir()
@@ -102,6 +104,8 @@ done
                 assert not alias.is_symlink()
                 assert alias.read_text().strip() == f'omacloud-1.2.3-1-{architecture}.pkg.tar.zst'
             assert (assets / 'install.sh').exists()
+            assert calls.index('gh release create') < calls.index('contents/packaging/omarchy-pkgs'), calls
+            assert 'the Omarchy recipe was not updated' in result.stderr, result.stderr
         print(f'{failure or "success"}: passed')
 
 
