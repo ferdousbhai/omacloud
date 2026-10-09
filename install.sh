@@ -4,11 +4,13 @@
 #
 #   curl -fsSL https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh | sudo bash
 #
-# Every step is idempotent, so re-running is safe. It trusts the
-# package-signing key (checked against the fingerprint pinned below), adds
-# the [omacloud] repository, installs an Omarchy hook that restores it after
-# `omarchy refresh pacman` rewrites /etc/pacman.conf, and installs omacloud.
-# From then on `omarchy update` brings new versions.
+# Every step is idempotent, so re-running is safe. When Omarchy's own
+# [omarchy] repository carries omacloud, it installs from there and adds
+# nothing. Otherwise it trusts the package-signing key (checked against the
+# fingerprint pinned below), adds the [omacloud] repository, installs an
+# Omarchy hook that restores it after `omarchy refresh pacman` rewrites
+# /etc/pacman.conf, and installs omacloud. Either way `omarchy update` brings
+# new versions from then on.
 set -euo pipefail
 
 REPO=omacloud
@@ -103,28 +105,55 @@ remove_onecloud() {
 # first: syncing would fail on the old repository, which no longer exists
 remove_onecloud
 
+# Remove a repository this installer added: its pacman.conf Include, its
+# file and its Omarchy hook. The signing key stays trusted; it signs nothing
+# else.
+remove_repo() {
+  local name="$1" sudo='' include rest user home
+  (( EUID == 0 )) || sudo=sudo
+  include="Include = /etc/pacman.d/$name.conf"
+  if grep -qxF "$include" /etc/pacman.conf; then
+    rest="$(grep -vxF "$include" /etc/pacman.conf || true)"
+    printf '%s\n' "$rest" | $sudo tee /etc/pacman.conf >/dev/null
+  fi
+  $sudo rm -f "/etc/pacman.d/$name.conf"
+  user="${SUDO_USER:-${USER:-$(id -un)}}"
+  home="$(getent passwd "$user" | cut -d: -f6)"
+  [[ -z $home ]] || $sudo rm -f "$home/.config/omarchy/hooks/pre-refresh-pacman.d/$name"
+}
+
 # Earlier installers added the x86_64 repository even on ARM. Leaving it
 # enabled would keep exposing incompatible packages during system updates.
-if [[ $REPO == omacloud-aarch64 ]]; then
-  remove_x86_repo() {
-    local sudo='' include='Include = /etc/pacman.d/omacloud.conf' rest user home
-    (( EUID == 0 )) || sudo=sudo
-    if grep -qxF "$include" /etc/pacman.conf; then
-      rest="$(grep -vxF "$include" /etc/pacman.conf || true)"
-      printf '%s\n' "$rest" | $sudo tee /etc/pacman.conf >/dev/null
-    fi
-    $sudo rm -f /etc/pacman.d/omacloud.conf
-    user="${SUDO_USER:-${USER:-$(id -un)}}"
-    home="$(getent passwd "$user" | cut -d: -f6)"
-    [[ -z $home ]] || $sudo rm -f "$home/.config/omarchy/hooks/pre-refresh-pacman.d/omacloud"
-  }
-  remove_x86_repo
-fi
+[[ $REPO != omacloud-aarch64 ]] || remove_repo omacloud
 
-echo "Adding the [$REPO] repository"
-# The shared helper downloads a key named after its repository, so releases
-# publish the same pinned key under both repository names.
-add_signed_repo "$REPO" "$RELEASES" "$SIGNING_KEY_FINGERPRINT"
+# Omarchy's own repository is named exactly [omarchy] (pkgs.omarchy.org, on
+# both architectures) and comes first in its pacman.conf. pacman takes a
+# package from the first repository that has it, whatever the version, so
+# once [omarchy] carries omacloud, a repository of ours appended after it
+# would never be used for omacloud. Install from [omarchy] then, and drop
+# ours rather than leave a shadowed copy that looks like it is in charge.
+omarchy_provides_omacloud() {
+  local sudo=''
+  (( EUID == 0 )) || sudo=sudo
+  pacman-conf --repo-list 2>/dev/null | grep -qx omarchy || return 1
+  $sudo pacman -Sy >/dev/null
+  pacman -Sl omarchy 2>/dev/null | awk '$2 == "omacloud" { found = 1 } END { exit !found }'
+}
+
+if omarchy_provides_omacloud; then
+  echo "Omarchy's [omarchy] repository provides omacloud; installing from it"
+  for name in omacloud omacloud-aarch64; do
+    if [[ -e /etc/pacman.d/$name.conf ]] || grep -qxF "Include = /etc/pacman.d/$name.conf" /etc/pacman.conf; then
+      echo "Removing the [$name] repository an earlier install added: pacman uses [omarchy] for omacloud"
+      remove_repo "$name"
+    fi
+  done
+else
+  echo "Adding the [$REPO] repository"
+  # The shared helper downloads a key named after its repository, so releases
+  # publish the same pinned key under both repository names.
+  add_signed_repo "$REPO" "$RELEASES" "$SIGNING_KEY_FINGERPRINT"
+fi
 
 echo "Installing omacloud"
 if command -v omarchy-pkg-add >/dev/null; then
