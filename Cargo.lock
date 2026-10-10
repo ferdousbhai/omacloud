@@ -2959,6 +2959,7 @@ name = "omacloud"
 version = "0.0.15"
 dependencies = [
  "anyhow",
+ "base64",
  "clap",
  "ed25519-dalek",
  "env_logger",

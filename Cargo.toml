@@ -24,6 +24,7 @@ rand = "0.8"
 sha2 = "0.10"
 crypto_box = { version = "0.9", features = ["seal"] }
 hex = "0.4"
+base64 = "0.23"
 notify = "8"
 ignore = "0.4"
 libc = "0.2"
