@@ -2,11 +2,16 @@ name: ci
 
 on:
   push:
+    branches: [master]
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -40,6 +45,7 @@ jobs:
 
   arm:
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -50,6 +56,7 @@ jobs:
 
   packaging:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y libarchive-tools
@@ -72,6 +79,7 @@ jobs:
           - architecture: aarch64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -96,6 +104,7 @@ jobs:
 
   server:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: server
