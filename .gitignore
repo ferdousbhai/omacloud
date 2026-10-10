@@ -3,3 +3,4 @@
 /pkgbuild/pkg/
 /pkgbuild/*.pkg.tar.*
 /dist/
+.cloudflare/
