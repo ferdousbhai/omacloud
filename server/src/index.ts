@@ -19,6 +19,7 @@ export default {
 			if (req.method === "GET" && url.pathname === "/") return pages.home(env);
 			if (req.method === "GET" && url.pathname === "/privacy") return pages.privacy();
 			if (req.method === "GET" && url.pathname === "/terms") return pages.terms();
+			if (req.method === "GET" && url.pathname === "/llms.txt") return pages.llms(env);
 			if (req.method === "GET" && url.pathname === "/health") return new Response("ok");
 			if (req.method === "GET" && url.pathname === "/signin") return await signin.start(req, url, env);
 			if (req.method === "GET" && url.pathname === "/auth/google/callback") return await signin.back(url, env);

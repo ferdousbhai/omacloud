@@ -1,4 +1,4 @@
-// The public pages of omacloud.computer: home, privacy and terms.
+// The public pages of omacloud.computer: home, privacy, terms and llms.txt.
 
 import { escapeXml } from "./upstream.ts";
 
@@ -154,3 +154,48 @@ If the service ends, you'll be told in advance and given time to export your dat
 <h2>Contact</h2>
 <p><a href="mailto:${LEGAL}">${LEGAL}</a></p>`,
 	);
+
+/** /llms.txt (llmstxt.org): what Omacloud is, for language models and agents. */
+export const llms = (env: Env) => {
+	const site = env.PUBLIC_URL.replace(/\/$/, "");
+	const repo = "https://github.com/ferdousbhai/omacloud";
+	return new Response(
+		`# Omacloud
+
+> Your files and settings on every Omarchy computer, end to end encrypted. Desktop, Documents
+> and Pictures sync in place; Omarchy settings, AI agent settings, Chromium, Wi-Fi, package lists
+> and ssh and gpg keys follow; every version is kept. Storage is Omacloud storage (sign in with
+> Google, by invitation), a bucket of your own (Hetzner, R2, B2, any S3) or a Dropbox app.
+> Underneath it is plain restic, so restic or rustic restore everything without Omacloud.
+
+Everything is encrypted on the computer before upload: the storage, Omacloud's included, holds
+only what it can't read. Omacloud runs on Omarchy (Arch Linux, x86_64 and aarch64), as a GTK app
+and the \`omacloud\` command line tool that drives it. Install with
+\`curl -fsSL ${repo}/releases/latest/download/install.sh | sudo bash\` (or, where Omarchy's own repository carries it, \`omarchy pkg add omacloud\`).
+
+## Docs
+
+- [README](${repo}/blob/master/README.md): install, setup, what syncs, versions, lost computers, trusted contacts, configuration
+- [How Omacloud works](${repo}/blob/master/docs/design.md): the encryption, device approval and threat model
+- [Storage providers](${repo}/blob/master/docs/providers.md): setting up Hetzner, Cloudflare R2, Backblaze B2 and Dropbox
+- [Changelog](${repo}/blob/master/CHANGELOG.md): what each release changed
+
+## Command line
+
+- [omacloud CLI](${repo}/blob/master/README.md#set-up): \`omacloud --help\` lists every command; \`omacloud status --json\` reports state as JSON. Secrets come from environment variables (OMACLOUD_RECOVERY_CODE, OMACLOUD_JOIN_CODE, OMACLOUD_SECRET_ACCESS_KEY) or a prompt, never arguments
+- [Restoring without Omacloud](${repo}/blob/master/README.md#versions-and-leaving): \`omacloud export\` prints the restic repository location and password
+
+## Omacloud storage
+
+- [Home](${site}/): what Omacloud is and how to ask for an invitation
+- [Privacy](${site}/privacy): what Omacloud storage can and can't see, and where data lives
+- [Terms](${site}/terms): terms of service
+
+## Optional
+
+- [Source](${repo}): MIT licensed Rust (sync engine, CLI, GTK app) and the Cloudflare Worker behind Omacloud storage
+- [Contributing](${repo}/blob/master/CONTRIBUTING.md): building, testing and releases
+`,
+		{ headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "public, max-age=300" } },
+	);
+};

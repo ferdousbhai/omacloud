@@ -1,7 +1,7 @@
 # Omacloud storage
 
 The service behind Sign In with Google: a Cloudflare Worker at
-omacloud.computer (sign-in, and the home, privacy and terms pages) and
+omacloud.computer (sign-in, the home, privacy and terms pages, and `/llms.txt`) and
 storage.omacloud.computer (an S3 gateway to one Hetzner bucket, a folder per
 account). It never sees anything decryptable: computers encrypt before they
 upload. `docs/design.md` has the model; `src/gateway.ts` says what gets
