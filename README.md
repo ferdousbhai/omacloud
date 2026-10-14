@@ -245,8 +245,7 @@ omacloud skill remove
 ```
 
 A new release refreshes the installed copy automatically; only a copy omacloud
-wrote (marked `.managed-by-omacloud`) is ever changed. Before omacloud is
-installed: `npx skills add ferdousbhai/omacloud -g`.
+wrote (marked `.managed-by-omacloud`) is ever changed.
 
 ## Configuration
 

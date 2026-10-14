@@ -222,6 +222,7 @@ const SKILL: agent_skill::Skill = agent_skill::Skill {
     body: include_str!("../../../skills/omacloud/SKILL.md"),
     cli: "omacloud",
     version: env!("CARGO_PKG_VERSION"),
+    adopts_legacy: false,
 };
 
 #[derive(Subcommand)]
