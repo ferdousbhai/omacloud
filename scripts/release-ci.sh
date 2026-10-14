@@ -4,17 +4,29 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 repository=ferdousbhai/omacloud
-version=${1:?Usage: scripts/release-ci.sh <version> [successful-master-run-id]}
+version=${1:?Usage: scripts/release-ci.sh <version> [successful-ci-run-id]}
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid version." >&2; exit 1; }
 for command in gh gpg repo-add bsdtar python3; do
   command -v "$command" >/dev/null || { echo "$command is required." >&2; exit 1; }
 done
 source_commit=$(gh api "repos/$repository/commits/master" --jq .sha)
-run=${2:-$(gh run list --repo "$repository" --workflow ci.yml --branch master --event push --commit "$source_commit" --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')}
-[[ $run =~ ^[0-9]+$ ]] || { echo "Wait for CI on master to pass, then run this command again." >&2; exit 1; }
+# CI runs only when a release starts it: build master's commit now unless a run is named.
+run=${2:-}
+if [[ -z $run ]]; then
+  gh workflow run ci.yml --repo "$repository" --ref master
+  for _ in $(seq 1 30); do
+    run=$(gh run list --repo "$repository" --workflow ci.yml --event workflow_dispatch --commit "$source_commit" \
+      --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+    [[ -n $run ]] && break
+    sleep 5
+  done
+fi
+[[ $run =~ ^[0-9]+$ ]] || { echo "No CI run started for master; run this command again." >&2; exit 1; }
+echo "Waiting for CI run $run"
+gh run watch "$run" --repo "$repository" --exit-status >/dev/null || true
 run_info=$(gh run view "$run" --repo "$repository" --json event,headBranch,headSha,status,conclusion --jq '[.event,.headBranch,.headSha,.status,.conclusion] | @tsv')
-[[ $run_info == $'push\tmaster\t'"$source_commit"$'\tcompleted\tsuccess' ]] \
-  || { echo "The run must be a successful push build of the current master commit." >&2; exit 1; }
+[[ $run_info == $'workflow_dispatch\tmaster\t'"$source_commit"$'\tcompleted\tsuccess' ]] \
+  || { echo "The run must be a successful CI build of the current master commit." >&2; exit 1; }
 
 mkdir -p dist
 staging=$(mktemp -d "$PWD/dist/release-$version.XXXXXX")

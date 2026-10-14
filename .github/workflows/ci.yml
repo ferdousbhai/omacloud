@@ -1,9 +1,8 @@
 name: ci
 
+# Started by scripts/release-ci.sh for a release; changes are checked locally by bin/check.
 on:
-  push:
-    branches: [master]
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

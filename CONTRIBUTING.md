@@ -71,13 +71,14 @@ commands, including wrong runtime/package architectures and embedded builder
 paths. `python3 scripts/tests/omarchy-recipe.py` checks that the Omarchy
 recipe builds the same package as `pkgbuild/PKGBUILD`, and
 `python3 scripts/tests/omarchy-pkgs.py` how a release reaches omarchy-pkgs
-(below). CI runs these checks and builds/tests the application on a native
-ARM runner.
+(below). `bin/check` runs these checks locally before every push. GitHub CI runs
+only when a release starts it: it repeats them, tests on a native ARM runner, and
+builds the packages.
 
 ## Releases
 
 From a regular terminal with the existing signing key imported, publish
-packages from the latest successful CI push build of master:
+packages built by a CI run that the script starts on master's commit:
 
 ```sh
 scripts/release-ci.sh 0.0.14
@@ -90,7 +91,7 @@ and publishes the repository databases and installer at the tested commit.
 The signing key remains local. The Release verification workflow installs
 the signed release on native x86_64 and ARM runners; a confirmed defect after installation removes the release and tag.
 Infrastructure and installer failures retain them for investigation. Assets remain under dist for inspection.
-A specific successful master run can be selected with a second argument.
+An existing successful CI run of master's commit can be named with a second argument.
 `python3 scripts/tests/release-ci.py` checks provenance, signing failures,
 and master changing while the release is being prepared.
 

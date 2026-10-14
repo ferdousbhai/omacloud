@@ -30,7 +30,7 @@ cd server && npm ci && npm run check     # Worker types + unit tests (node --tes
 
 The app crate needs `libgtk-4-dev libadwaita-1-dev` (Arch: `gtk4 libadwaita`);
 `cargo build -p omacloud` builds the CLI alone. Packaging checks:
-`python3 scripts/tests/<name>.py` (see `.github/workflows/ci.yml`). End to end
+`python3 scripts/tests/<name>.py` (all run by `bin/check`; GitHub CI runs only for a release). End to end
 scripts need docker (SeaweedFS) and are described in CONTRIBUTING.md.
 
 ## Conventions

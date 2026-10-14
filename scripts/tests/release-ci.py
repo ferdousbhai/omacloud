@@ -49,10 +49,12 @@ if args[0] == 'api':
     else:
         path = args[1].split('/contents/')[1].split('?')[0]
         print(base64.b64encode((root / path).read_bytes()).decode())
+elif args[:2] == ['workflow', 'run']: pass
 elif args[:2] == ['run', 'list']: print('123')
+elif args[:2] == ['run', 'watch']: sys.exit(1 if os.environ['FAILURE'] == 'ci' else 0)
 elif args[:2] == ['run', 'view']:
     conclusion = 'failure' if os.environ['FAILURE'] == 'ci' else 'success'
-    print('push\\tmaster\\t' + 'a' * 40 + '\\tcompleted\\t' + conclusion)
+    print('workflow_dispatch\\tmaster\\t' + 'a' * 40 + '\\tcompleted\\t' + conclusion)
 elif args[:2] == ['run', 'download']:
     architecture = args[args.index('--name') + 1].removeprefix('omacloud-')
     shutil.copytree(root / architecture, args[args.index('--dir') + 1])
@@ -97,6 +99,7 @@ done
         else:
             assert result.returncode == 0, result.stderr
             assert 'gh release create v1.2.3' in calls
+            assert 'gh workflow run ci.yml' in calls, calls
             assert f'--target {SHA}' in calls
             assets = next((root / 'dist').glob('release-*/assets'))
             for architecture, database in (('x86_64', 'omacloud'), ('aarch64', 'omacloud-aarch64')):
