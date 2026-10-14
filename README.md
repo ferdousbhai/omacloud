@@ -234,6 +234,15 @@ trust, or split it among several: `omacloud recovery split --threshold 3
 --shares 5` makes five shares, any three of which rebuild it (`omacloud
 recovery combine`).
 
+## Agent skill
+
+[skills/omacloud/SKILL.md](skills/omacloud/SKILL.md) teaches AI agents to install,
+link, and use omacloud. Install it for your agents with:
+
+```sh
+npx skills add ferdousbhai/omacloud -g
+```
+
 ## Configuration
 
 ```toml
