@@ -134,6 +134,10 @@ fn tty(mut cmd: Command, stdin_there: bool, stderr_there: bool) -> (String, Stri
     let mut child = cmd.spawn().unwrap();
     // the parent's copies of the terminal side go, so reading ends with the child
     drop(cmd);
+    if stdin_there {
+        // An unexpected prompt ends at once (EOF) instead of hanging the test, as in the app.
+        std::io::Write::write_all(&mut master, b"\x04").unwrap();
+    }
     let mut errors = child.stderr.take();
     let errors = std::thread::spawn(move || {
         let mut buf = String::new();

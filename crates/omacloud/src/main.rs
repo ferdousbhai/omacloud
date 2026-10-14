@@ -2379,21 +2379,24 @@ fn relative(config: &Config, path: &Path) -> Result<PathBuf> {
 /// `p` made absolute, with symlinks resolved as far as it exists. It makes
 /// nothing: `init` creates the folder only once it knows it goes ahead.
 fn absolute(p: &Path) -> Result<PathBuf> {
-    let p = std::path::absolute(p)?;
-    let mut rest = Vec::new();
-    let mut at = p.as_path();
-    loop {
-        if let Ok(real) = fs::canonicalize(at) {
-            return Ok(rest.iter().rev().fold(real, |path, name| path.join(name)));
-        }
-        match (at.file_name(), at.parent()) {
-            (Some(name), Some(parent)) => {
-                rest.push(name.to_owned());
-                at = parent;
+    // Resolve what exists (symlinks included); a `..` in the part that does not
+    // exist yet is taken lexically, so `new/../B` stores `…/B`. Nothing is created.
+    let mut out = PathBuf::new();
+    for c in std::path::absolute(p)?.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
             }
-            _ => return Ok(p),
+            other => {
+                out.push(other);
+                if let Ok(real) = fs::canonicalize(&out) {
+                    out = real;
+                }
+            }
         }
     }
+    Ok(out)
 }
 
 fn leftover_text(r: &omacloud_core::Rotated) -> String {
@@ -3348,6 +3351,19 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Out {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absolute_resolves_dotdot_in_parts_that_do_not_exist_and_creates_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(tmp.path()).unwrap();
+        assert_eq!(absolute(&root.join("new/../B")).unwrap(), root.join("B"));
+        assert_eq!(absolute(&root.join("a/./b/../c")).unwrap(), root.join("a/c"));
+        assert!(!root.join("new").exists() && !root.join("B").exists() && !root.join("a").exists());
+        // What exists is resolved for real, symlinks included.
+        fs::create_dir(root.join("real")).unwrap();
+        std::os::unix::fs::symlink(root.join("real"), root.join("link")).unwrap();
+        assert_eq!(absolute(&root.join("link/x")).unwrap(), root.join("real/x"));
+    }
 
     #[test]
     fn an_upgrade_is_noticed() -> Result<()> {
