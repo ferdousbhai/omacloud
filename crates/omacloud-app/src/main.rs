@@ -12,8 +12,8 @@
 
 use std::{
     fs::File,
-    io::Read,
-    os::fd::{FromRawFd, OwnedFd},
+    io::{Read, Write},
+    os::fd::{AsRawFd, FromRawFd, OwnedFd},
     process::{Command, Stdio},
     rc::Rc,
 };
@@ -39,10 +39,11 @@ fn main() -> glib::ExitCode {
 }
 
 /// A command that failed: the CLI's error code (empty for other programs and
-/// text-mode runs) and what to show.
+/// text-mode runs), what went wrong, and the CLI's advice on fixing it.
 struct Failure {
     code: String,
     message: String,
+    hint: String,
 }
 
 impl Failure {
@@ -50,6 +51,16 @@ impl Failure {
         Self {
             code: String::new(),
             message: message.into(),
+            hint: String::new(),
+        }
+    }
+
+    /// What to show: the message, and the fix when the CLI gave one.
+    fn shown(&self) -> String {
+        let mut hint = self.hint.chars();
+        match hint.next() {
+            Some(first) => format!("{}. {}{}", self.message, first.to_uppercase(), hint.as_str()),
+            None => self.message.clone(),
         }
     }
 }
@@ -75,16 +86,26 @@ fn command(argv: &[String], env: &[(String, String)]) -> Result<Command, Failure
 
 /// The last line of `stderr` that says something, without an `error: `.
 fn last_line(stderr: &[u8], fallback: &str) -> String {
+    text_failure(stderr, fallback).message
+}
+
+/// A failure from what a text-mode run left on stderr: its `error: ` line
+/// (or the last line that says something) and the `hint: ` after it.
+fn text_failure(stderr: &[u8], fallback: &str) -> Failure {
     let err = String::from_utf8_lossy(stderr);
     let lines: Vec<&str> = err.lines().filter(|l| !l.trim().is_empty()).collect();
-    // text mode's error: the `error:` line, not the `hint:` after it
-    lines
-        .iter()
-        .rev()
-        .find_map(|l| l.strip_prefix("error: "))
+    let error = lines.iter().rposition(|l| l.starts_with("error: "));
+    let message = error
+        .map(|i| &lines[i]["error: ".len()..])
         .or_else(|| lines.last().copied())
-        .unwrap_or(fallback)
-        .to_string()
+        .unwrap_or(fallback);
+    let hint = error
+        .and_then(|i| lines[i + 1..].iter().find_map(|l| l.strip_prefix("hint: ")))
+        .unwrap_or_default();
+    Failure {
+        hint: hint.to_string(),
+        ..Failure::new(message)
+    }
 }
 
 /// Run another program to completion: its stdout, or the last line of
@@ -114,41 +135,66 @@ fn cli(argv: &[String], env: &[(String, String)]) -> Result<Value, Failure> {
         Ok(v) if v["ok"] == Value::Bool(false) => Err(Failure {
             code: text(&v["error"]["code"]),
             message: text(&v["error"]["message"]),
+            hint: text(&v["error"]["hint"]),
         }),
         // no envelope: it crashed, or is an omacloud from before the contract
         _ => Err(Failure::new(last_line(&out.stderr, "omacloud failed"))),
     }
 }
 
-/// Run `omacloud ...` with its stdout on a pseudo-terminal of this app's
-/// own: the commands that print a secret print it only to a terminal, and
-/// this window is the owner's. What it printed there, or its error.
-fn cli_tty(argv: &[String], env: &[(String, String)]) -> Result<String, Failure> {
-    let (mut master, mut slave) = (0, 0);
-    // SAFETY: openpty fills in two new descriptors, owned from here on
-    let (mut master, slave) = unsafe {
-        if libc::openpty(
-            &raw mut master,
-            &raw mut slave,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
-        ) != 0
-        {
-            return Err(Failure::new(format!(
-                "no terminal: {}",
-                std::io::Error::last_os_error()
-            )));
+/// A new pseudo-terminal: its controlling side and its terminal side.
+/// Neither descriptor survives an exec (`O_CLOEXEC` from the start, so no
+/// process another thread starts meanwhile gets one either): only the
+/// child's stdin and stdout, dup2ed onto it, are the terminal. Otherwise
+/// the child, and a browser it opens, would keep the terminal side open
+/// (and the reading here would wait for the browser to quit), and the
+/// controlling side, which reads what the child prints.
+fn pty() -> std::io::Result<(File, OwnedFd)> {
+    let flags = libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC;
+    let fail = |r: libc::c_int| {
+        if r < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(r)
         }
-        (File::from_raw_fd(master), OwnedFd::from_raw_fd(slave))
     };
+    // SAFETY: each call gets a descriptor it owns from here on, or fails
+    unsafe {
+        let master = File::from_raw_fd(fail(libc::posix_openpt(flags))?);
+        let fd = master.as_raw_fd();
+        fail(libc::grantpt(fd))?;
+        fail(libc::unlockpt(fd))?;
+        let mut name = [0 as libc::c_char; 128];
+        let r = libc::ptsname_r(fd, name.as_mut_ptr(), name.len());
+        if r != 0 {
+            return Err(std::io::Error::from_raw_os_error(r));
+        }
+        let slave = OwnedFd::from_raw_fd(fail(libc::open(name.as_ptr(), flags))?);
+        Ok((master, slave))
+    }
+}
+
+/// Run `omacloud ...` with its stdin and stdout on a pseudo-terminal of
+/// this app's own: the commands that print a secret print it only to a
+/// person's terminal (both of them one), and this window is the owner's.
+/// What it printed there, or its error.
+fn cli_tty(argv: &[String], env: &[(String, String)]) -> Result<String, Failure> {
+    let (mut master, slave) = pty().map_err(|e| Failure::new(format!("no terminal: {e}")))?;
     let mut cmd = command(argv, env)?;
-    cmd.stdout(Stdio::from(slave)).stderr(Stdio::piped());
+    let stdin = slave
+        .try_clone()
+        .map_err(|e| Failure::new(format!("no terminal: {e}")))?;
+    cmd.stdin(Stdio::from(stdin))
+        .stdout(Stdio::from(slave))
+        .stderr(Stdio::piped());
     let mut child = cmd
         .spawn()
         .map_err(|e| Failure::new(format!("running omacloud: {e}")))?;
     // the terminal side closes with the child: reading then ends
     drop(cmd);
+    // nobody answers on this terminal: an end of input (^D) waits there,
+    // so a question the CLI would ask ends at once instead of hanging
+    _ = master.write_all(b"\x04");
     let mut stderr = child.stderr.take();
     let errors = std::thread::spawn(move || {
         let mut buf = Vec::new();
@@ -168,7 +214,7 @@ fn cli_tty(argv: &[String], env: &[(String, String)]) -> Result<String, Failure>
     if status.success() {
         return Ok(String::from_utf8_lossy(&out).replace('\r', ""));
     }
-    Err(Failure::new(last_line(&errors, "it failed")))
+    Err(text_failure(&errors, "it failed"))
 }
 
 /// Run `job` in the background, then hand its result to `then` on the main
@@ -233,7 +279,7 @@ impl Ui {
     fn act_env(self: &Rc<Self>, argv: &[&str], env: Vec<(String, String)>, done: &str) {
         let (ui, done) = (self.clone(), done.to_string());
         let then = move |r: Result<(), Failure>| {
-            ui.toast(&r.map_or_else(|e| e.message, |()| done));
+            ui.toast(&r.map_or_else(|e| e.shown(), |()| done));
             ui.refresh();
         };
         if argv.first() == Some(&"omacloud") {
@@ -263,9 +309,9 @@ impl Ui {
                 }
                 Err(e) => {
                     let why = match e.code.as_str() {
-                        "unavailable" => format!("Can't reach your storage: {}", e.message),
-                        "keyring_unavailable" => format!("Unlock your keyring: {}", e.message),
-                        _ => e.message,
+                        "unavailable" => format!("Can't reach your storage: {}", e.shown()),
+                        "keyring_unavailable" => format!("Unlock your keyring: {}", e.shown()),
+                        _ => e.shown(),
                     };
                     for bin in [&ui.overview, &ui.devices, &ui.settings, &ui.secrets, &ui.recovery] {
                         bin.set_child(Some(&not_set_up(&why)));
@@ -450,7 +496,7 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
     ui.toast("Setting up…");
     // creating an account prints its recovery code: only to a terminal
     tty_then(&argv_ref, env, move |r| match r {
-        Err(e) => ui2.toast(&e.message),
+        Err(e) => ui2.toast(&e.shown()),
         Ok(out) => {
             // set up: keep it syncing from now on, not from the next login
             run_then(&["systemctl", "--user", "start", "omacloud"], |_| {});
@@ -1428,7 +1474,7 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
                             &["omacloud", "devices", "revoke", &fp2, "--yes"],
                             Vec::new(),
                             move |r| match r {
-                                Err(e) => ui4.toast(&e.message),
+                                Err(e) => ui4.toast(&e.shown()),
                                 Ok(_) => {
                                     ui4.refresh();
                                     change_bucket_key(&ui4, hosted, dropbox_id.clone());
@@ -1487,7 +1533,7 @@ fn show_join_code(ui: &Rc<Ui>) {
     let ui2 = ui.clone();
     // it holds the bucket's keys: printed only to a terminal
     tty_then(&["omacloud", "join-code"], Vec::new(), move |r| match r {
-        Err(e) => ui2.toast(&e.message),
+        Err(e) => ui2.toast(&e.shown()),
         Ok(out) => show_text(
             &ui2,
             "Join code",
@@ -1905,7 +1951,7 @@ fn restore_secrets(ui: &Rc<Ui>, device: &str) {
             &["omacloud", "secrets", "restore", "--from", &device],
             env,
             move |r| match r {
-                Err(e) => ui3.toast(&e.message),
+                Err(e) => ui3.toast(&e.shown()),
                 Ok(data) => {
                     let empty = Vec::new();
                     let changes: Vec<String> = data["changes"]
@@ -1931,7 +1977,7 @@ fn restore_secrets(ui: &Rc<Ui>, device: &str) {
                                 env,
                                 move |r| {
                                     ui5.toast(&r.map_or_else(
-                                        |e| e.message,
+                                        |e| e.shown(),
                                         |data| format!("Wrote {} files", data["written"].as_u64().unwrap_or(0)),
                                     ));
                                 },
@@ -1980,7 +2026,7 @@ fn recovery(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
             let ui2 = ui.clone();
             // the card prints only to a terminal
             tty_then(&["omacloud", "recovery", "contact"], env, move |r| match r {
-                Err(e) => ui2.toast(&e.message),
+                Err(e) => ui2.toast(&e.shown()),
                 Ok(out) => show_card(&ui2, card_in(&out)),
             });
         });
@@ -1996,7 +2042,7 @@ fn recovery(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
                 move |_| {
                     let ui3 = ui2.clone();
                     cli_then(&["omacloud", "recovery", "contact", "--remove"], Vec::new(), move |r| {
-                        ui3.toast(&r.map_or_else(|e| e.message, |_| "Contact removed".into()))
+                        ui3.toast(&r.map_or_else(|e| e.shown(), |_| "Contact removed".into()))
                     });
                 },
             );
@@ -2143,6 +2189,48 @@ fn show_text(ui: &Rc<Ui>, heading: &str, body: &str, content: &str) {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    /// `cli_tty` against a stand-in CLI that starts a child holding none of
+    /// its stdio (as `xdg-open` starting a browser does), checks it has a
+    /// terminal, and asks a question nobody answers. It must come back as
+    /// soon as the CLI is done, not when that child is.
+    #[test]
+    fn cli_tty_returns_with_the_cli_not_with_what_it_started() {
+        let dir = std::env::temp_dir().join(format!("omacloud-app-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("omacloud");
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\n\
+             sleep 5 </dev/null >/dev/null 2>&1 &\n\
+             [ -t 0 ] && [ -t 1 ] && echo 'on a terminal'\n\
+             read answer\n\
+             echo \"answer: [$answer]\"\n\
+             case \"$1\" in fail) echo 'error: it broke' >&2; echo 'hint: do this' >&2; exit 3;; esac\n\
+             echo the-card\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // SAFETY: the only test here that reads the environment or spawns
+        unsafe {
+            std::env::set_var("OMACLOUD_BIN", &bin);
+            std::env::remove_var("OMACLOUD_CONFIG");
+        }
+
+        let start = Instant::now();
+        let out =
+            super::cli_tty(&super::owned(&["omacloud", "recovery"]), &[]).unwrap_or_else(|e| panic!("{}", e.shown()));
+        assert!(start.elapsed() < Duration::from_secs(3), "waited {:?}", start.elapsed());
+        assert_eq!(out, "on a terminal\nanswer: []\nthe-card\n");
+
+        let e = super::cli_tty(&super::owned(&["omacloud", "fail"]), &[]).err().unwrap();
+        assert_eq!(e.shown(), "it broke. Do this");
+        assert!(start.elapsed() < Duration::from_secs(3));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn only_chromium_waits_for_chromium() {
         assert_eq!(
