@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.16 (2026-10-14)
 
 - The `omacloud` command line follows the output contract the other
   Omarchy tools share (cloudmail, cloud-calendar, cloud-contacts,
@@ -24,6 +24,10 @@
 - Commands ask (a secret, a confirmation) only on a terminal. `devices
   revoke` and `rotate` ask first, and need `--yes` where nobody can be
   asked; so does `restore` over an existing file.
+- The Omacloud app shows what to do with each error (the command line's
+  hint) beside the message, and runs the commands that show a secret on a
+  terminal of its own, so a sign-in browser it opens can no longer hold the
+  window up.
 
 ## 0.0.15 (2026-10-09)
 
