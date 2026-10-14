@@ -175,7 +175,8 @@ somewhere of your own first.
 
 ## A lost computer
 
-Remove it under Devices (or `omacloud devices revoke <fingerprint>`). It
+Remove it under Devices (or `omacloud devices revoke <fingerprint>`, which
+asks first; `--yes` where nobody can be asked). It
 can't sync anymore, but it still holds a key to your storage, so the app
 goes on to change that key.
 
@@ -205,7 +206,7 @@ then you delete the old key at your provider.
 A computer that was away through the whole change catches up with
 `omacloud bucket set-key --access-key-id <id> --here-only`, or, with
 Omacloud storage, `omacloud bucket set-key --here-only`, which signs in
-again. `omacloud rotate` also moves everything to a new encryption key.
+again. `omacloud rotate --yes` also moves everything to a new encryption key.
 
 With your own bucket and delete protection on it (object lock), sync works
 as usual and old data is removed once its retention ends. Keep the bucket
@@ -246,6 +247,47 @@ omacloud skill remove
 
 A new release refreshes the installed copy automatically; only a copy omacloud
 wrote (marked `.managed-by-omacloud`) is ever changed.
+
+## Scripting
+
+Every command prints text on a terminal and a JSON envelope when piped:
+`{"ok":true,"data":...,"summary":"..."}`, or
+`{"ok":false,"error":{"code":"...","message":"...","hint":"..."}}` on stdout
+when it fails (text mode: `error:` and `hint:` lines on stderr). `--json`
+forces the envelope, `--styled` text, `--quiet` prints only `data`,
+`--ids-only` one id per line (device fingerprints, version numbers, folder,
+package and secrets device names) and `--count` the number of results; given
+together, ids-only wins over count, count over quiet, quiet over json, json
+over styled.
+
+```sh
+omacloud status --quiet | jq .synced_head
+omacloud devices --ids-only
+```
+
+| exit | meaning |
+|---|---|
+| 0 | done |
+| 1 | anything else failed |
+| 2 | invalid usage or request: a destructive command (`devices revoke`, `rotate`, `restore` over a file) without `--yes` where nobody can be asked, a secret asked for where no terminal shows it, an ambiguous fingerprint, already set up |
+| 3 | not set up, not approved, settings sync off, or a key, recovery code, join code or card refused |
+| 4 | not found: a device, a version, a package list, a secrets bundle |
+| 5 | out of reach: the storage, the network, Omacloud's sign-in, the keyring, or (for `restore-machine`, alongside its result) systemd |
+
+Commands only ask (a secret, a confirmation) in text mode with stdin and
+stdout on a terminal; elsewhere secrets come from the `OMACLOUD_*`
+environment variables and confirmations from `--yes`.
+
+What prints a secret prints it only to your terminal, in text mode, and
+refuses (exit 2) as JSON or into a pipe: `init` when it creates an account or
+recovers with a card (the recovery code), `join-code`, `export`, and
+`recovery contact`, `split` and `combine`. Joining with a join code or the
+recovery code prints no secret and works anywhere.
+
+`omacloud watch`, which the systemd unit runs, keeps its own exit codes: 2
+when this computer was removed or the account can't be verified (the unit
+doesn't restart into that), 75 after an upgrade (it restarts into the new
+binary), 1 for anything else.
 
 ## Configuration
 

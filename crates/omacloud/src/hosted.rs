@@ -15,6 +15,8 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+use crate::fail::{self, CliError};
+
 /// Where to sign in, unless `OMACLOUD_SERVICE_URL` says otherwise.
 pub const SERVICE: &str = "https://omacloud.computer";
 
@@ -97,12 +99,13 @@ pub fn set_contact(service: &str, account: &str, pad: Option<&str>) -> Result<St
     let email = answer["email"].as_str().unwrap_or_default().to_string();
     match response.status().as_u16() {
         200 => Ok(email),
-        409 => bail!(
-            "{email} isn't the Google account this computer's storage belongs to: \
-             sign in with that one"
-        ),
-        429 => bail!("{}", refusal(429)),
-        status => bail!("that didn't work ({status}): try again"),
+        409 => Err(fail::setup(
+            "wrong_account",
+            format!("{email} isn't the Google account this computer's storage belongs to"),
+        )
+        .hint("sign in with that one")
+        .into()),
+        status => Err(answered(status, refusal(status)).into()),
     }
 }
 
@@ -113,6 +116,16 @@ fn post(service: &str, path: &str, body: &serde_json::Value) -> Result<ureq::htt
         .post(&format!("{service}{path}"))
         .send_json(body)
         .with_context(|| format!("reaching {service}"))
+}
+
+/// A failure Omacloud answered with `status`: busy or down is out of reach
+/// (exit 5), anything else a sign-in it didn't take (exit 3).
+fn answered(status: u16, message: String) -> CliError {
+    if status == 429 || status >= 500 {
+        fail::unavailable(message).hint("try again in a minute")
+    } else {
+        fail::setup("not_signed_in", message).hint("sign in again")
+    }
 }
 
 /// Why Omacloud didn't take a sign-in it answered with `status`.
@@ -131,7 +144,8 @@ fn credentials(service: &str, grant: &Grant, contact: bool) -> Result<Storage> {
         &serde_json::json!({ "code": grant.code, "verifier": grant.verifier, "contact": contact }),
     )?;
     if !response.status().is_success() {
-        bail!("{}", refusal(response.status().as_u16()));
+        let status = response.status().as_u16();
+        return Err(answered(status, refusal(status)).into());
     }
     response.body_mut().read_json().context("reading the key from Omacloud")
 }
@@ -158,7 +172,9 @@ fn browser(service: &str) -> Result<Grant> {
             Ok((s, _)) => s,
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 if Instant::now() > deadline {
-                    bail!("no sign-in after ten minutes: try again");
+                    return Err(fail::setup("not_signed_in", "no sign-in after ten minutes")
+                        .hint("try again, and finish signing in in the browser")
+                        .into());
                 }
                 std::thread::sleep(Duration::from_millis(200));
                 continue;
@@ -206,7 +222,12 @@ fn browser(service: &str) -> Result<Grant> {
             _ => "sign-in didn't work: try again",
         };
         reply(&stream, "200 OK", "Not signed in", &format!("{}.", capitalize(why)));
-        bail!("{why}");
+        return Err(if param(query, "error") == Some("busy") {
+            fail::unavailable(why)
+        } else {
+            fail::setup("not_signed_in", why)
+        }
+        .into());
     };
     Ok(Grant { code, verifier })
 }
@@ -234,7 +255,14 @@ fn ask(service: &str, path: &str, region: &str, key: (&str, &str)) -> Result<Ask
             serde_json::from_str(&text).context("reading Omacloud's answer")?,
         )),
         403 => Ok(Asked::Refused),
-        _ => bail!("Omacloud storage answered {status}: {}", text.trim()),
+        _ => {
+            let message = format!("Omacloud storage answered {status}: {}", text.trim());
+            if status == 429 || status >= 500 {
+                Err(fail::unavailable(message).hint("try again in a minute").into())
+            } else {
+                bail!("{message}")
+            }
+        }
     }
 }
 

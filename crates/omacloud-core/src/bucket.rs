@@ -60,6 +60,16 @@ pub fn key_refused(err: &anyhow::Error) -> bool {
     })
 }
 
+/// Whether `err` is the storage out of reach or busy: no connection, a
+/// timeout, or an answer that says to try again later.
+#[must_use]
+pub fn unreachable(err: &anyhow::Error) -> bool {
+    err.chain().any(|e| {
+        e.downcast_ref::<opendal::Error>()
+            .is_some_and(|e| e.is_temporary() || e.kind() == ErrorKind::RateLimited)
+    })
+}
+
 pub struct BucketCoordinator {
     op: Operator,
     dropbox: Option<DropboxCreate>,
@@ -490,4 +500,21 @@ pub fn signed_request(
     let status = response.status().as_u16();
     let text = response.body_mut().read_to_string().unwrap_or_default();
     Ok((status, text))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refused_and_unreachable_by_kind() {
+        let err = |e: opendal::Error| anyhow::Error::new(e).context("reading the anchor");
+        let denied = err(opendal::Error::new(ErrorKind::PermissionDenied, "403"));
+        assert!(key_refused(&denied) && !unreachable(&denied));
+        let busy = err(opendal::Error::new(ErrorKind::RateLimited, "429"));
+        assert!(unreachable(&busy) && !key_refused(&busy));
+        let down = err(opendal::Error::new(ErrorKind::Unexpected, "503").set_temporary());
+        assert!(unreachable(&down));
+        assert!(!unreachable(&err(opendal::Error::new(ErrorKind::NotFound, "404"))));
+    }
 }

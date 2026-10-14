@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- The `omacloud` command line follows the output contract the other
+  Omarchy tools share (cloudmail, cloud-calendar, cloud-contacts,
+  cloud-tasks, the iCloud tools): text on a terminal, and a JSON envelope
+  `{"ok":true,"data":...,"summary":"..."}` when piped, from every command.
+  `--json`, `--styled`, `--quiet` (only `data`), `--ids-only` and `--count`
+  choose. A failure is `{"ok":false,"error":{"code","message","hint"}}` on
+  stdout (text mode: `error:` and `hint:` on stderr), and the exit code says
+  what kind: 2 invalid usage, 3 not set up or a key or code refused, 4 not
+  found, 5 storage or network out of reach. `status --json` still works
+  (`--json` is now global), and its data is in the envelope's `data`; a
+  script reading text output passes `--styled`. `omacloud watch` keeps its
+  exit codes, which the systemd unit relies on.
+- What prints a secret prints it only to your terminal, and refuses as JSON
+  or into a pipe: `init` creating an account or recovering with a card,
+  `join-code`, `export`, and `recovery contact`, `split` and `combine`.
+- Commands ask (a secret, a confirmation) only on a terminal. `devices
+  revoke` and `rotate` ask first, and need `--yes` where nobody can be
+  asked; so does `restore` over an existing file.
+
 ## 0.0.15 (2026-10-09)
 
 - Once Omarchy's own `[omarchy]` package repository carries Omacloud, the

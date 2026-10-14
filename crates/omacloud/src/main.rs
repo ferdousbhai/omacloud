@@ -1,4 +1,9 @@
 //! `omacloud`: set up a synced folder, sync it once, or keep it synced.
+//!
+//! Output follows the shared product contract (`output.rs`): text on a
+//! terminal, a JSON envelope when piped; errors and exit codes in `fail.rs`.
+//! Commands that print a secret print it only to a terminal. `watch`, which
+//! systemd runs, keeps its own exit codes (see [`UPGRADED`]).
 
 use std::{
     collections::BTreeMap,
@@ -6,18 +11,20 @@ use std::{
     io::Write,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
-    sync::{Arc, mpsc},
+    sync::{Arc, OnceLock, mpsc},
     time::{Duration, Instant},
 };
 
 mod agent_skill;
 mod alerts;
 mod dropbox;
+mod fail;
 mod hosted;
 mod keyring;
+mod output;
 mod power;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use log::{info, warn};
 use notify::{RecursiveMode, Watcher};
@@ -30,13 +37,61 @@ use omacloud_core::{
     settings::Manifest,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::fail::{CliError, KEY_REFUSED_HINT};
+use crate::output::{Mode, OutputFlags, Response};
+
+/// Appends a line to a command's text output.
+macro_rules! say {
+    ($out:expr) => {
+        $out.push('\n')
+    };
+    ($out:expr, $($arg:tt)*) => {{
+        use std::fmt::Write as _;
+        _ = writeln!($out, $($arg)*);
+    }};
+}
+
+/// What a command returns: its result, or a failure `fail::classify` maps.
+type Out = Result<Response>;
+
+/// The output mode, set once the arguments are parsed.
+static MODE: OnceLock<Mode> = OnceLock::new();
+
+fn mode() -> Mode {
+    MODE.get().copied().unwrap_or(Mode::Human)
+}
+
+const AFTER_HELP: &str = "\
+Output: text on a terminal, a JSON envelope {\"ok\":true,\"data\",\"summary\"} when
+piped. --json forces the envelope, --styled text, --quiet prints only the data,
+--ids-only one id per line (devices, versions, folders, packages, secrets),
+--count the number of results; ids-only > count > quiet > json > styled. A
+failure is {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, or
+error:/hint: lines on stderr in text mode.
+
+Commands that print a secret (init when it creates an account or recovers with
+a card, join-code, export, recovery contact, split and combine) print only to a
+terminal, in text mode.
+
+Exit codes: 0 ok; 1 other failure; 2 invalid usage or request (a destructive
+command without --yes where nobody can be asked, a secret asked for where no
+terminal shows it, ambiguous, already set up); 3 not set up, not approved, or a
+key, code or card refused; 4 not found; 5 storage, network, sign-in service or
+keyring out of reach. `watch` (the daemon) exits 2 when this computer was
+removed and 75 after an upgrade.";
 
 #[derive(Parser)]
 #[command(
+    name = "omacloud",
     version,
-    about = "Omacloud: your files and settings on every computer, end to end encrypted"
+    about = "Omacloud: your files and settings on every computer, end to end encrypted",
+    after_help = AFTER_HELP
 )]
 struct Cli {
+    #[command(flatten)]
+    out: OutputFlags,
     /// Config file [default: $XDG_CONFIG_HOME/omacloud/config.toml]
     #[arg(long, global = true, env = "OMACLOUD_CONFIG")]
     config: Option<PathBuf>,
@@ -113,12 +168,9 @@ enum Cmd {
         #[arg(long, default_value_t = 10)]
         poll: u64,
     },
-    /// Show this device's sync state
-    Status {
-        /// Everything as JSON, for the Omacloud app
-        #[arg(long)]
-        json: bool,
-    },
+    /// Show this device's sync state (everything the Omacloud app shows, as
+    /// JSON with --json or when piped)
+    Status,
     /// Print this device's public key and fingerprint
     DeviceKey,
     /// List, approve or remove the account's devices
@@ -141,10 +193,17 @@ enum Cmd {
         /// Where to write it [default: <name>.v<at> in the current directory]
         #[arg(long)]
         to: Option<PathBuf>,
+        /// Replace the file there if there is one
+        #[arg(long)]
+        yes: bool,
     },
     /// Move to a new repository key, locking out removed devices. Uploads
-    /// everything again
-    Rotate,
+    /// everything again and deletes the old repository
+    Rotate {
+        /// Don't ask; needed where nobody can be asked
+        #[arg(long)]
+        yes: bool,
+    },
     /// Package lists: what each device has installed, to restore elsewhere
     Packages {
         #[command(subcommand)]
@@ -360,6 +419,9 @@ enum DevicesCmd {
         /// Also rotate the repository key, so the device can't read new data
         #[arg(long)]
         rotate: bool,
+        /// Don't ask; needed where nobody can be asked
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -566,9 +628,7 @@ impl Paths {
 }
 
 fn load(paths: &Paths) -> Result<Config> {
-    let text = fs::read_to_string(&paths.config)
-        .with_context(|| format!("reading {} (run `omacloud init` first)", paths.config.display()))?;
-    let mut config: Config = toml::from_str(&text)?;
+    let mut config = load_without_key(paths)?;
     if config.coordinator == SELF_HOSTED
         && let Some(c) = config.coordination.as_mut()
         && !has_key(c)
@@ -581,7 +641,10 @@ fn load(paths: &Paths) -> Result<Config> {
 /// The config without its bucket key, for `bucket set-key --here-only`: the
 /// way back when the keyring lost it.
 fn load_without_key(paths: &Paths) -> Result<Config> {
-    let text = fs::read_to_string(&paths.config).with_context(|| format!("reading {}", paths.config.display()))?;
+    let text = match fs::read_to_string(&paths.config) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(fail::not_set_up().into()),
+        other => other.with_context(|| format!("reading {}", paths.config.display()))?,
+    };
     Ok(toml::from_str(&text)?)
 }
 
@@ -706,9 +769,25 @@ enum Recovery {
     Card,
 }
 
-fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>) -> Result<()> {
+fn already_set_up(paths: &Paths) -> CliError {
+    CliError::new(
+        "already_set_up",
+        output::EXIT_USAGE,
+        format!("{} exists; this device is already set up", paths.config.display()),
+    )
+    .hint("give another --config to set up a second account here")
+}
+
+/// What `init` did before setting up the account: signed in, made a bucket.
+#[derive(Default)]
+struct InitNotes {
+    signed_in_as: Option<String>,
+    created_bucket: Option<String>,
+}
+
+fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>, notes: InitNotes) -> Out {
     if paths.config.exists() {
-        bail!("{} exists; this device is already set up", paths.config.display());
+        return Err(already_set_up(paths).into());
     }
     fs::create_dir_all(&config.folder)?;
     fs::create_dir_all(&paths.data)?;
@@ -717,25 +796,52 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>)
     let coord = coordinator(&config)?;
     let anchor = coord.anchor()?;
     let creating = anchor.is_none();
-    if let (Some(anchor), Some((code, Recovery::Card))) = (&anchor, &recovery)
-        && public_hex(&omacloud_core::devices::root_key(code)?) != anchor.root
-    {
-        bail!(
-            "that card doesn't go with this account: it may be an earlier card, replaced by \
-             a newer one, or another account's"
-        );
-    }
     if creating && matches!(recovery, Some((_, Recovery::Card))) {
-        bail!("there's no account here to recover: sign in with the Google account you used");
+        return Err(fail::not_found("there's no account here to recover")
+            .hint("sign in with the Google account you used")
+            .into());
+    }
+    if let (Some(anchor), Some((code, how))) = (&anchor, &recovery) {
+        let root = omacloud_core::devices::root_key(code).ok().map(|k| public_hex(&k));
+        if root.as_deref() != Some(anchor.root.as_str()) {
+            return Err(match how {
+                Recovery::Card => fail::setup(
+                    "card_rejected",
+                    "that card doesn't go with this account: it may be an earlier card, replaced by \
+                     a newer one, or another account's",
+                )
+                .hint("ask your trusted contact for their latest card"),
+                Recovery::Code => fail::recovery_code_rejected("that recovery code doesn't belong to this account"),
+            }
+            .into());
+        }
+    }
+    // creating an account shows its recovery code and password once, and
+    // recovering with a card shows the code again: only to a terminal
+    if creating && config.repo.repository.is_empty() {
+        return Err(fail::usage("creating an account needs --repo")
+            .hint("run `omacloud init --help`")
+            .into());
+    }
+    if creating && !output::to_terminal(mode()) {
+        return Err(fail::terminal_required("the new account's recovery code").into());
+    }
+    if matches!(recovery, Some((_, Recovery::Card))) && !output::to_terminal(mode()) {
+        return Err(fail::terminal_required("your recovery code").into());
     }
 
-    let message = if creating {
-        if config.repo.repository.is_empty() {
-            bail!("creating an account needs --repo");
-        }
+    let mut out = String::new();
+    if let Some(email) = &notes.signed_in_as {
+        say!(out, "signed in as {email}");
+    }
+    if let Some(bucket) = &notes.created_bucket {
+        say!(out, "created bucket {bucket}");
+    }
+    let how = if creating {
         let created = account::create(coord.as_ref(), &config.repo, &signing, &config.device)?;
         config.root = created.root;
-        format!(
+        say!(
+            out,
             "created repository and account {}\n\n\
              account id: {}\n\n\
              recovery code: {}\n\n\
@@ -744,41 +850,64 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>)
              it and without a device, the data is gone.\n\n\
              repository password (for leaving omacloud, also in `omacloud export`): {}\n\n\
              Other computers join with a code from `omacloud join-code`.",
-            config.repo.repository, config.root, created.recovery_code, created.password
-        )
+            config.repo.repository,
+            config.root,
+            created.recovery_code,
+            created.password
+        );
+        "created"
     } else if let Some((code, how)) = recovery {
         config.root = account::join_with_recovery(coord.as_ref(), &code, &signing, &config.device)?;
         if how == Recovery::Card {
-            format!(
+            say!(
+                out,
                 "joined the account with your trusted contact's card\n\n\
                  recovery code: {code}\n\n\
                  Write it down again and keep it offline. Your contact's card keeps working."
-            )
+            );
+            "recovered_with_card"
         } else {
-            "joined the account with the recovery code".to_string()
+            say!(out, "joined the account with the recovery code");
+            "joined_with_recovery_code"
         }
     } else {
         config.root = account::request(coord.as_ref(), &signing, &config.device)?;
-        format!(
+        say!(
+            out,
             "asked to join {}\n\n\
              this device's fingerprint: {me}\n\n\
              On a device that already syncs, run `omacloud devices` and check that it\n\
              shows the same fingerprint, then `omacloud devices approve {me}`.",
             config.repo.repository
-        )
+        );
+        "asked_to_join"
     };
     // bucket credentials live sealed in the account's key records, not in
     // the config file
     config.repo = config.repo.without_credentials();
     save(paths, &config)?;
-    println!("{message}");
-    println!("\naccount root: {}", fingerprint(&config.root));
+    say!(out, "\naccount root: {}", fingerprint(&config.root));
     if paths.is_default() {
         // the packaged unit starts at login for users with a config; start
         // it now for this session
-        println!("\nstart syncing now: systemctl --user start omacloud");
+        say!(out, "\nstart syncing now: systemctl --user start omacloud");
     }
-    Ok(())
+    let summary = match how {
+        "created" => "created the account".to_string(),
+        "asked_to_join" => format!("asked to join; approve fingerprint {me} on a computer that syncs"),
+        _ => "joined the account".to_string(),
+    };
+    let data = json!({
+        "result": how,
+        "device": config.device,
+        "fingerprint": me,
+        "account": config.root,
+        "account_fingerprint": fingerprint(&config.root),
+        "approved": how != "asked_to_join",
+        "signed_in_as": notes.signed_in_as,
+        "created_bucket": notes.created_bucket,
+    });
+    Ok(Response::new(data, summary).human(out.trim_end()))
 }
 
 /// Why the daemon stopped.
@@ -1107,13 +1236,13 @@ fn run_sync(engine: &mut Engine, waiting: &mut bool, alerts: Option<&alerts::Ale
             }
             return Synced::Stop;
         }
-        Err(e) if key_refused(&e) => warn!("{KEY_REFUSED}: {e:#}"),
+        Err(e) if key_refused(&e) => warn!("the storage refused this computer's key: {e:#}. {KEY_REFUSED_HINT}"),
         Err(e) => warn!("sync failed, will retry: {e:#}"),
     }
     Synced::Failed
 }
 
-fn main() -> Result<()> {
+fn main() -> std::process::ExitCode {
     // printing into a closed pipe (`omacloud devices | head`) ends quietly.
     // Not through SIGPIPE: a network connection the provider closed is a
     // broken pipe too, and the default disposition would kill the daemon on
@@ -1131,31 +1260,96 @@ fn main() -> Result<()> {
         }
         default_hook(info);
     }));
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,rustic_core=warn")).init();
-    let cli = Cli::parse();
+    let cli = match output::parse::<Cli>() {
+        Ok(cli) => cli,
+        Err(code) => return code.into(),
+    };
+    let daemon = matches!(cli.cmd, Cmd::Watch { .. });
+    // the daemon's stdout and stderr are its journal: text, unless asked
+    let mode = if daemon { cli.out.asked_mode() } else { cli.out.mode() };
+    _ = MODE.set(mode);
+    // a program reading the output gets warnings, not progress; the
+    // daemon's journal gets both
+    let filter = if mode.is_machine() && !daemon {
+        "warn"
+    } else {
+        "info,rustic_core=warn"
+    };
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(filter)).init();
     if let Some(home) = agent_skill::home() {
         agent_skill::refresh(&home, &SKILL);
     }
-    if let Cmd::Skill { action } = &cli.cmd {
-        let Some(action) = action else {
-            print!("{}", SKILL.body);
-            return Ok(());
-        };
-        let home = agent_skill::home().context("no home directory to install the skill into")?;
-        let (out, done) = match action {
-            SkillCmd::Install => (agent_skill::install(&home, &SKILL)?, "Installed"),
-            SkillCmd::Remove => (agent_skill::remove(&home, &SKILL)?, "Removed"),
-        };
-        for p in &out.paths {
-            println!("{done} {}", p.display());
+    if let Cmd::Watch { poll } = cli.cmd {
+        // the daemon: systemd acts on these exit codes (contrib/omacloud.service)
+        let ended = Paths::new(cli.config).and_then(|paths| watch(&paths, &load(&paths)?, Duration::from_secs(poll)));
+        match ended {
+            Ok(Ended::Upgraded) => std::process::exit(UPGRADED),
+            // the account stopped (this device was removed): a human looks
+            Ok(Ended::Stopped) => std::process::exit(2),
+            Err(e) => {
+                fail::classify(&e).report(mode);
+                std::process::exit(1)
+            }
         }
-        for n in &out.notices {
-            println!("{n}");
-        }
-        if out.paths.is_empty() && out.notices.is_empty() {
-            println!("Nothing to do.");
-        }
+    }
+    let code = match run(cli) {
+        Ok(response) => response.print(mode),
+        Err(e) => fail::classify(&e).report(mode),
+    };
+    code.into()
+}
+
+/// Asks before something that can't be undone, where someone can answer;
+/// elsewhere `--yes` is needed.
+fn confirm(yes: bool, what: &str, question: &str) -> Result<()> {
+    if yes {
         return Ok(());
+    }
+    if !output::interactive(mode()) {
+        return Err(fail::confirmation_required(what).into());
+    }
+    eprint!("{question} [y/N] ");
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    if matches!(line.trim(), "y" | "Y" | "yes") {
+        Ok(())
+    } else {
+        Err(CliError::new("cancelled", output::EXIT_ERROR, "cancelled").into())
+    }
+}
+
+fn skill(action: Option<SkillCmd>) -> Out {
+    let Some(action) = action else {
+        return Ok(Response::new(
+            json!({ "name": SKILL.name, "body": SKILL.body }),
+            "the omacloud agent skill",
+        )
+        .human(SKILL.body.trim_end()));
+    };
+    let home = agent_skill::home().context("no home directory to install the skill into")?;
+    let (out, done) = match action {
+        SkillCmd::Install => (agent_skill::install(&home, &SKILL)?, "Installed"),
+        SkillCmd::Remove => (agent_skill::remove(&home, &SKILL)?, "Removed"),
+    };
+    let mut text = String::new();
+    for p in &out.paths {
+        say!(text, "{done} {}", p.display());
+    }
+    for n in &out.notices {
+        say!(text, "{n}");
+    }
+    let summary = if out.paths.is_empty() && out.notices.is_empty() {
+        "Nothing to do.".to_string()
+    } else {
+        format!("{done} {} paths", out.paths.len())
+    };
+    let data = json!({ "paths": out.paths, "notices": out.notices });
+    Ok(Response::new(data, summary.clone()).human(if text.is_empty() { summary } else { text }))
+}
+
+fn run(cli: Cli) -> Out {
+    if let Cmd::Skill { action } = cli.cmd {
+        return skill(action);
     }
     let paths = Paths::new(cli.config)?;
     match cli.cmd {
@@ -1173,6 +1367,14 @@ fn main() -> Result<()> {
             hosted,
             contact_card,
         } => {
+            let mut notes = InitNotes::default();
+            if paths.config.exists() {
+                return Err(already_set_up(&paths).into());
+            }
+            // a card gives back the recovery code, which is shown again
+            if contact_card && !output::to_terminal(mode()) {
+                return Err(fail::terminal_required("your recovery code").into());
+            }
             let mut recovery = recovery_code.map(|c| (c, Recovery::Code));
             // Omacloud storage: signing in gives the bucket and its key
             let service =
@@ -1181,18 +1383,25 @@ fn main() -> Result<()> {
                 let s = if contact_card {
                     // checked before the browser opens: a typo is caught here
                     let card = read_secret("OMACLOUD_CONTACT_CARD", "your contact's card")?;
-                    omacloud_core::contact::checked(&card)?;
+                    omacloud_core::contact::checked(&card).map_err(|e| {
+                        fail::setup("card_rejected", format!("{e:#}")).hint("check the card with your trusted contact")
+                    })?;
                     let s = hosted::sign_in_with_pad(service)?;
-                    let pad = s
-                        .contact_pad
-                        .as_deref()
-                        .with_context(|| format!("{} has no trusted contact: no card opens it", s.email))?;
-                    recovery = Some((omacloud_core::contact::open(&card, pad)?, Recovery::Card));
+                    let pad = s.contact_pad.as_deref().ok_or_else(|| {
+                        fail::setup(
+                            "card_rejected",
+                            format!("{} has no trusted contact: no card opens it", s.email),
+                        )
+                        .hint("sign in with the Google account that made the card")
+                    })?;
+                    let code = omacloud_core::contact::open(&card, pad)
+                        .map_err(|e| fail::setup("card_rejected", format!("{e:#}")))?;
+                    recovery = Some((code, Recovery::Card));
                     s
                 } else {
                     hosted::sign_in(service)?
                 };
-                println!("signed in as {}", s.email);
+                notes.signed_in_as = Some(s.email.clone());
                 let opts = [
                     ("endpoint", s.endpoint),
                     ("region", s.region),
@@ -1208,19 +1417,31 @@ fn main() -> Result<()> {
                 (repo, opts)
             };
             // a join code says where the account coordinates
-            let joined = join_code.as_deref().map(parse_join_code).transpose()?;
+            let joined = join_code
+                .as_deref()
+                .map(|code| {
+                    parse_join_code(code).map_err(|e| {
+                        fail::setup("join_code_rejected", format!("{e:#}"))
+                            .hint("copy the whole code from `omacloud join-code` (or Show Join Code in the app)")
+                    })
+                })
+                .transpose()?;
             // in the bucket, unless a shared directory is given
             let coordinator = match (coordinator, &joined, repo.as_deref()) {
                 (_, Some(_), _) => SELF_HOSTED.to_string(),
                 (Some(c), _, _) => c,
                 (None, None, Some(r)) if r.starts_with("opendal:") => SELF_HOSTED.to_string(),
-                (None, None, _) => bail!(
-                    "sign in to Omacloud storage with `--hosted`, or give a bucket of your own with \
-                     `--repo opendal:s3 --opt endpoint=... --opt bucket=... --opt access_key_id=...` \
-                     (the secret key is asked for, or comes from OMACLOUD_SECRET_ACCESS_KEY), or join an account with `--join-code` \
-                     (from `omacloud join-code` on one of its computers). The Omacloud app \
-                     (omacloud-app) walks through the same."
-                ),
+                (None, None, _) => {
+                    return Err(fail::usage("say where the files live")
+                        .hint(
+                            "sign in to Omacloud storage with `--hosted`, or give a bucket of your own with \
+                         `--repo opendal:s3 --opt endpoint=... --opt bucket=... --opt access_key_id=...` \
+                         (the secret key is asked for, or comes from OMACLOUD_SECRET_ACCESS_KEY), or join an \
+                         account with `--join-code` (from `omacloud join-code` on one of its computers). The \
+                         Omacloud app (omacloud-app) walks through the same.",
+                        )
+                        .into());
+                }
             };
             let coordinator = if coordinator == SELF_HOSTED {
                 coordinator
@@ -1255,7 +1476,9 @@ fn main() -> Result<()> {
                             };
                             o.insert("client_secret".into(), secret.clone());
                             if !o.contains_key("refresh_token") {
-                                eprintln!("Open this Dropbox authorization URL and paste its code:\n\n  {url}\n");
+                                if std::env::var_os("OMACLOUD_DROPBOX_AUTH_CODE").is_none() {
+                                    eprintln!("Open this Dropbox authorization URL and paste its code:\n\n  {url}\n");
+                                }
                                 let code = read_secret("OMACLOUD_DROPBOX_AUTH_CODE", "Dropbox authorization code")?;
                                 let refresh = dropbox::exchange(&id, &secret, &code)?;
                                 o.insert("refresh_token".into(), refresh);
@@ -1265,12 +1488,18 @@ fn main() -> Result<()> {
                     },
                 },
             };
-            // no bucket given: make a private one with a random name
+            // no bucket given: make a private one with a random name, which
+            // creates an account and shows its recovery code
             let mut repo = repo;
             if repo.repository == "opendal:s3" && !repo.options.contains_key("bucket") {
+                if !output::to_terminal(mode()) {
+                    return Err(fail::terminal_required("the new account's recovery code").into());
+                }
                 let opt = |k: &str| repo.options.get(k).cloned().unwrap_or_default();
                 let (endpoint, region) = (opt("endpoint"), opt("region"));
-                anyhow::ensure!(!endpoint.is_empty(), "give the storage's endpoint: --opt endpoint=...");
+                if endpoint.is_empty() {
+                    return Err(fail::usage("give the storage's endpoint: --opt endpoint=...").into());
+                }
                 let region = if region.is_empty() { "auto".to_string() } else { region };
                 let mut made = None;
                 for _ in 0..3 {
@@ -1288,7 +1517,7 @@ fn main() -> Result<()> {
                     }
                 }
                 let name = made.context("couldn't find a free bucket name; try again")?;
-                println!("created bucket {name}");
+                notes.created_bucket = Some(name.clone());
                 repo.options.insert("bucket".into(), name);
                 repo.options.entry("region".into()).or_insert(region);
             }
@@ -1346,7 +1575,7 @@ fn main() -> Result<()> {
                     None => coordination_beside(&config.repo, coordination_bucket.as_deref())?,
                 });
             }
-            init(&paths, config, recovery)
+            init(&paths, config, recovery, notes)
         }
         Cmd::Sync => {
             let config = load(&paths)?;
@@ -1354,108 +1583,67 @@ fn main() -> Result<()> {
             record_packages(&config, &mut e);
             let st = match e.sync() {
                 Err(err) if err.downcast_ref::<Membership>() == Some(&Membership::NotApproved) => {
-                    bail!(
-                        "this device ({}) is not approved yet: run `omacloud devices approve {}` on a device that syncs",
-                        fingerprint(&e.device_key()),
-                        fingerprint(&e.device_key())
-                    )
+                    let me = fingerprint(&e.device_key());
+                    return Err(
+                        fail::setup("not_approved", format!("this device ({me}) is not approved yet"))
+                            .hint(format!("run `omacloud devices approve {me}` on a device that syncs"))
+                            .into(),
+                    );
                 }
                 Err(err) if config.coordinator == SELF_HOSTED && key_refused(&err) => {
-                    return Err(err.context(KEY_REFUSED));
+                    return Err(fail::setup(
+                        "key_refused",
+                        format!("the storage refused this computer's key: {err:#}"),
+                    )
+                    .hint(KEY_REFUSED_HINT)
+                    .into());
                 }
                 other => other?,
             };
-            println!("pushed {}, pulled {}, conflicts {}", st.pushed, st.pulled, st.conflicts);
-            if follow_bucket_key(&paths, &mut e)? {
-                println!("switched to the account's new bucket key");
+            let summary = format!("pushed {}, pulled {}, conflicts {}", st.pushed, st.pulled, st.conflicts);
+            let mut out = summary.clone();
+            let switched = follow_bucket_key(&paths, &mut e)?;
+            if switched {
+                say!(out);
+                out.push_str("switched to the account's new bucket key");
             }
-            Ok(())
+            let data = json!({
+                "pushed": st.pushed,
+                "pulled": st.pulled,
+                "conflicts": st.conflicts,
+                "switched_bucket_key": switched,
+            });
+            Ok(Response::new(data, summary).human(out))
         }
-        Cmd::Watch { poll } => {
-            match watch(&paths, &load(&paths)?, Duration::from_secs(poll))? {
-                Ended::Upgraded => std::process::exit(UPGRADED),
-                // the account stopped (this device was removed): a human looks
-                Ended::Stopped => std::process::exit(2),
-            }
-        }
-        Cmd::Status { json: true } => {
-            println!("{}", status_json(&paths)?);
-            Ok(())
-        }
-        Cmd::Status { json: false } => {
-            let config = load(&paths)?;
-            let mut e = engine(&paths, &config)?;
-            e.refresh_devices()?;
-            _ = e.load_folders();
-            let st = e.state();
-            println!("device   {}", config.device);
-            println!("account  {}", config.root);
-            if config.folders.is_some() {
-                let dirs: Vec<String> = e
-                    .synced_folders()
-                    .iter()
-                    .map(|d| format!("~/{}", d.file_name().unwrap_or_default().to_string_lossy()))
-                    .collect();
-                println!("folders  {}", dirs.join(", "));
-            } else {
-                println!("folder   {}", config.folder.display());
-            }
-            // an own bucket's location comes sealed with the key
-            let repo = e.repository().map_or_else(|_| config.repo.clone(), |r| r.0);
-            match repo.options.get("bucket") {
-                Some(bucket) if repo.is_bucket() => println!(
-                    "repo     {} bucket {bucket}{}",
-                    repo.repository,
-                    repo.options
-                        .get("endpoint")
-                        .map_or_else(String::new, |e| format!(" at {e}"))
-                ),
-                _ => println!("repo     {}", repo.repository),
-            }
-            match &st.base {
-                Some(b) => println!("synced   head {} (snapshot {})", b.seq, &b.snapshot[..8]),
-                None => println!("synced   nothing yet"),
-            }
-            if let Some((epoch, _)) = &st.secret {
-                println!("epoch    {epoch}");
-            }
-            let members = st.devices.members();
-            let me = e.device_key();
-            let role = if members.valid.contains_key(&me) {
-                "member"
-            } else if members.revoked.contains_key(&me) {
-                "removed"
-            } else {
-                "waiting for approval"
-            };
-            println!(
-                "device   {} ({role}, {} devices)",
-                fingerprint(&me),
-                members.valid.len()
-            );
-            let settings = e.settings_status();
-            match (settings.on, &settings.dormant) {
-                (false, _) => println!("settings off"),
-                (true, Some(why)) => println!("settings standing down: {why}"),
-                (true, None) => {
-                    println!("settings");
-                    print_groups(&settings.groups, "  ");
-                }
-            }
-            Ok(())
-        }
+        Cmd::Watch { .. } => unreachable!("handled before the other commands"),
+        Cmd::Skill { .. } => unreachable!("handled before loading the config"),
+        Cmd::Status => status(&paths),
         Cmd::DeviceKey => {
             let key = public_hex(&load_or_create_key(&paths.device_key())?);
-            println!("{key}\nfingerprint {}", fingerprint(&key));
-            Ok(())
+            let fp = fingerprint(&key);
+            Ok(Response::new(
+                json!({ "public_key": key, "fingerprint": fp }),
+                format!("fingerprint {fp}"),
+            )
+            .human(format!("{key}\nfingerprint {fp}"))
+            .ids(vec![fp]))
         }
         Cmd::Devices { action } => devices(&paths, action.unwrap_or(DevicesCmd::List)),
         Cmd::Versions { path } => {
             let config = load(&paths)?;
             let rel = relative(&config, &path)?;
-            for v in engine(&paths, &config)?.versions(&rel)? {
+            let versions = engine(&paths, &config)?.versions(&rel)?;
+            if versions.is_empty() {
+                return Err(fail::not_found(format!("no versions of {}", rel.display()))
+                    .hint("give a path inside the synced folder, as it was synced")
+                    .into());
+            }
+            let mut out = String::new();
+            let mut data = Vec::new();
+            for v in &versions {
                 let what = v.size.map_or_else(|| "deleted".to_string(), |s| format!("{s} bytes"));
-                println!(
+                say!(
+                    out,
                     "{:>6}  {}  {:<12}  {what}",
                     v.seq,
                     v.time
@@ -1463,39 +1651,73 @@ fn main() -> Result<()> {
                         .strftime("%Y-%m-%d %H:%M:%S"),
                     v.device
                 );
+                data.push(json!({
+                    "seq": v.seq,
+                    "time": v.time.to_string(),
+                    "device": v.device,
+                    "size": v.size,
+                    "deleted": v.size.is_none(),
+                }));
             }
-            Ok(())
+            let ids = versions.iter().map(|v| v.seq.to_string()).collect();
+            Ok(Response::new(
+                data,
+                format!("{} of {}", counted(versions.len(), "version"), rel.display()),
+            )
+            .human(out.trim_end())
+            .ids(ids))
         }
-        Cmd::Restore { path, at, to } => {
+        Cmd::Restore { path, at, to, yes } => {
             let config = load(&paths)?;
             let rel = relative(&config, &path)?;
             let dest = to.unwrap_or_else(|| {
                 let name = rel.file_name().map_or_else(Default::default, |n| n.to_string_lossy());
                 PathBuf::from(format!("{name}.v{at}"))
             });
-            engine(&paths, &config)?.restore_version(&rel, at, &dest)?;
-            println!("wrote {}", dest.display());
-            Ok(())
+            if dest.exists() && !yes {
+                if !output::interactive(mode()) {
+                    return Err(CliError::new(
+                        "exists",
+                        output::EXIT_USAGE,
+                        format!("{} already exists", dest.display()),
+                    )
+                    .hint("pass --yes to replace it, or --to another path")
+                    .into());
+                }
+                confirm(false, "replacing it", &format!("replace {}?", dest.display()))?;
+            }
+            engine(&paths, &config)?
+                .restore_version(&rel, at, &dest)
+                .map_err(|e| missing_version(e, &rel, at))?;
+            Ok(Response::new(
+                json!({ "path": rel, "at": at, "written": dest }),
+                format!("wrote {}", dest.display()),
+            ))
         }
         Cmd::Settings { action } => settings(&paths, action.unwrap_or(SettingsCmd::Status)),
         Cmd::Secrets { action } => secrets(&paths, action.unwrap_or(SecretsCmd::List)),
         Cmd::JoinCode => {
+            if !output::to_terminal(mode()) {
+                return Err(fail::terminal_required("a join code (it holds your bucket's keys)").into());
+            }
             let config = load(&paths)?;
             let coordination = config
                 .coordination
                 .as_ref()
                 .filter(|_| config.coordinator == SELF_HOSTED)
-                .context("this account uses a coordinator; other devices join with --account")?;
-            let blob = serde_json::to_vec(&serde_json::json!({
+                .ok_or_else(|| {
+                    fail::unsupported("this account keeps in step through a shared directory, not its bucket")
+                        .hint("other computers join with `omacloud init --coordinator <that directory>`")
+                })?;
+            let blob = serde_json::to_vec(&json!({
                 "coordination": coordination,
                 "account": config.root,
             }))?;
-            println!("omacloud-join-{}", hex::encode(blob));
             eprintln!(
                 "It holds your bucket's keys: pass it privately. The new device runs\n  \
                  omacloud init --join-code <code>\nand then needs your approval (or your recovery code)."
             );
-            Ok(())
+            Ok(Response::new(Value::Null, "join code").human(format!("omacloud-join-{}", hex::encode(blob))))
         }
         Cmd::Folders { action } => folders(&paths, action.unwrap_or(FoldersCmd::List)),
         Cmd::Bucket { action } => bucket(&paths, action.unwrap_or(BucketCmd::Status)),
@@ -1508,20 +1730,23 @@ fn main() -> Result<()> {
                 save(&paths, &config)?;
             }
             let mut e = engine(&paths, &config)?;
-            print_settings(&e.settings_status());
+            let mut out = settings_text(&e.settings_status());
             record_packages(&config, &mut e);
             let st = e.sync()?;
-            println!("files and settings: pulled {}", st.pulled);
-            packages(
+            say!(out, "files and settings: pulled {}", st.pulled);
+            let packages = packages(
                 &paths,
                 PackagesCmd::Restore {
                     from: from.clone(),
                     yes,
                 },
             )?;
+            say!(out, "{}", packages.text());
             // secrets only ever on request, with the recovery code
-            if e.secrets_devices().contains(&from) {
-                println!(
+            let has_secrets = e.secrets_devices().contains(&from);
+            if has_secrets {
+                say!(
+                    out,
                     "{from} saved a secrets bundle (ssh and gpg keys, tokens). To put it here: \
                      omacloud secrets restore --from {from}"
                 );
@@ -1529,28 +1754,52 @@ fn main() -> Result<()> {
             // the packaged unit runs for users with a config; start it now
             let started = std::process::Command::new("systemctl")
                 .args(["--user", "start", "omacloud"])
+                .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()
                 .is_ok_and(|s| s.success());
             if started {
-                println!("keeping in sync from now on (systemd user unit omacloud)");
+                say!(out, "keeping in sync from now on (systemd user unit omacloud)");
             } else {
-                println!("to keep in sync, run `omacloud watch` (or install the package for its unit)");
+                say!(
+                    out,
+                    "to keep in sync, run `omacloud watch` (or install the package for its unit)"
+                );
             }
-            Ok(())
+            let data = json!({
+                "from": from,
+                "pulled": st.pulled,
+                "packages": packages.data(),
+                "secrets_bundle": has_secrets,
+                "daemon_started": started,
+            });
+            let response = Response::new(data, format!("set up from {from}")).human(out.trim_end());
+            // everything but the daemon is done: say so, and exit 5
+            Ok(if started {
+                response
+            } else {
+                response.exit(output::EXIT_UNAVAILABLE)
+            })
         }
-        Cmd::Rotate => {
+        Cmd::Rotate { yes } => {
             let config = load(&paths)?;
+            confirm(
+                yes,
+                "rotating the repository key",
+                "move to a new repository key? This uploads everything again and deletes the old repository",
+            )?;
             let r = engine(&paths, &config)?.rotate()?;
-            println!(
+            let summary = format!(
                 "moved to repository epoch {} ({} snapshots copied)",
                 r.epoch, r.snapshots
             );
-            print_leftover(&r);
-            Ok(())
+            let data = json!({ "epoch": r.epoch, "snapshots": r.snapshots, "left": r.left });
+            Ok(Response::new(data, summary.clone()).human(format!("{summary}\n{}", leftover_text(&r))))
         }
-        Cmd::Skill { .. } => unreachable!("handled before loading the config"),
         Cmd::Export { to, to_opts } => {
+            if !output::to_terminal(mode()) {
+                return Err(fail::terminal_required("the repository password").into());
+            }
             let config = load(&paths)?;
             let mut e = engine(&paths, &config)?;
             e.sync()?; // pick up any key rotation first
@@ -1566,33 +1815,62 @@ fn main() -> Result<()> {
                 spec = dest;
             }
             let repo = &spec.repository;
-            println!("# restore without omacloud: restic or rustic, this repository and password");
-            println!("# (repository epoch {epoch})");
-            println!("repository: {repo}");
+            let mut out = String::new();
+            say!(
+                out,
+                "# restore without omacloud: restic or rustic, this repository and password"
+            );
+            say!(out, "# (repository epoch {epoch})");
+            say!(out, "repository: {repo}");
             for (k, v) in &spec.options {
-                println!("option:     {k}={v}");
+                say!(out, "option:     {k}={v}");
             }
-            println!("password:   {password}");
-            println!();
+            say!(out, "password:   {password}");
+            say!(out);
             if repo.starts_with("opendal:") {
                 // restic can't read opendal URLs; rustic can, from a profile
-                println!(
+                say!(
+                    out,
                     "# save as ~/.config/rustic/rustic.toml (the default profile), then: rustic restore latest <dir>"
                 );
-                println!("[repository]\nrepository = \"{repo}\"\npassword = \"{password}\"");
-                println!("\n[repository.options]");
+                say!(out, "[repository]\nrepository = \"{repo}\"\npassword = \"{password}\"");
+                say!(out, "\n[repository.options]");
                 for (k, v) in &spec.options {
-                    println!("{k} = \"{v}\"");
+                    say!(out, "{k} = \"{v}\"");
                 }
             } else {
-                println!("RESTIC_PASSWORD='{password}' restic -r {repo} restore latest --target <dir>");
+                say!(
+                    out,
+                    "RESTIC_PASSWORD='{password}' restic -r {repo} restore latest --target <dir>"
+                );
             }
-            Ok(())
+            Ok(Response::new(Value::Null, "export").human(out.trim_end()))
         }
     }
 }
 
-fn devices(paths: &Paths, action: DevicesCmd) -> Result<()> {
+/// `n` things, as "1 device" or "2 devices".
+fn counted(n: usize, thing: &str) -> String {
+    if n == 1 {
+        format!("1 {thing}")
+    } else {
+        format!("{n} {thing}s")
+    }
+}
+
+/// A restore of a version or path that isn't in the history: not found.
+fn missing_version(e: anyhow::Error, rel: &Path, at: u64) -> anyhow::Error {
+    // the engine says so in its own words, with no underlying error
+    let message = e.to_string();
+    if e.chain().count() == 1 && (message == format!("no head {at}") || message.contains(" is not a file at head ")) {
+        return fail::not_found(format!("{} has no version {at}", rel.display()))
+            .hint(format!("list them with `omacloud versions {}`", rel.display()))
+            .into();
+    }
+    e
+}
+
+fn devices(paths: &Paths, action: DevicesCmd) -> Out {
     let config = load(paths)?;
     let mut e = engine(paths, &config)?;
     let me = e.device_key();
@@ -1607,31 +1885,59 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Result<()> {
             .collect();
         match hits.len() {
             1 => Ok(hits.remove(0)),
-            0 => bail!("no device with fingerprint {fp}"),
-            _ => bail!("{fp} matches several devices; give more of it"),
+            0 => Err(fail::not_found(format!("no device with fingerprint {fp}"))
+                .hint("run `omacloud devices list`")
+                .into()),
+            _ => Err(
+                CliError::new("ambiguous", output::EXIT_USAGE, format!("{fp} matches several devices"))
+                    .hint("give more of the fingerprint")
+                    .into(),
+            ),
         }
     };
     match action {
         DevicesCmd::List => {
-            println!("account root {}", fingerprint(&chain.root));
-            println!("\ndevices:");
+            let requests = e.requests()?;
+            let mut out = String::new();
+            say!(out, "account root {}", fingerprint(&chain.root));
+            say!(out, "\ndevices:");
             for (k, name) in &members.valid {
                 let this = if *k == me { "  (this device)" } else { "" };
-                println!("  {}  {name}{this}", fingerprint(k));
+                say!(out, "  {}  {name}{this}", fingerprint(k));
             }
             if !members.revoked.is_empty() {
-                println!("\nremoved:");
+                say!(out, "\nremoved:");
                 for (k, name) in &members.revoked {
-                    println!("  {}  {name}", fingerprint(k));
+                    say!(out, "  {}  {name}", fingerprint(k));
                 }
             }
-            let requests = e.requests()?;
             if !requests.is_empty() {
-                println!("\nasking to join (compare with the fingerprint the device shows):");
+                say!(out, "\nasking to join (compare with the fingerprint the device shows):");
                 for r in &requests {
-                    println!("  {}  {}", fingerprint(&r.device), r.name);
+                    say!(out, "  {}  {}", fingerprint(&r.device), r.name);
                 }
             }
+            let list = |m: &BTreeMap<String, String>| -> Vec<Value> {
+                m.iter()
+                    .map(|(k, name)| json!({ "fingerprint": fingerprint(k), "name": name, "this": *k == me }))
+                    .collect()
+            };
+            let data = json!({
+                "account_fingerprint": fingerprint(&chain.root),
+                "devices": list(&members.valid),
+                "removed": list(&members.revoked),
+                "requests": requests
+                    .iter()
+                    .map(|r| json!({ "fingerprint": fingerprint(&r.device), "name": r.name }))
+                    .collect::<Vec<_>>(),
+            });
+            let ids: Vec<String> = members.valid.keys().map(|k| fingerprint(k)).collect();
+            let summary = format!(
+                "{}, {} asking to join",
+                counted(members.valid.len(), "device"),
+                requests.len()
+            );
+            Ok(Response::new(data, summary).human(out.trim_end()).ids(ids))
         }
         DevicesCmd::Approve { fingerprint: fp } => {
             let requests = e.requests()?;
@@ -1642,34 +1948,57 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Result<()> {
                 .find(|r| r.device == key)
                 .context("request vanished")?;
             e.approve(&req)?;
-            println!("approved {name} ({})", fingerprint(&key));
+            let fp = fingerprint(&key);
+            Ok(Response::new(
+                json!({ "approved": { "fingerprint": fp, "name": name } }),
+                format!("approved {name} ({fp})"),
+            )
+            .ids(vec![fp]))
         }
         DevicesCmd::Revoke {
             fingerprint: fp,
             rotate,
+            yes,
         } => {
             let (key, name) = pick(&fp, members.valid.into_iter().collect())?;
             if key == me {
-                bail!("remove this device from another one");
+                return Err(fail::usage("this is the device being removed")
+                    .hint("remove this device from another one")
+                    .into());
             }
+            confirm(
+                yes,
+                "removing a device",
+                &format!("remove {name} ({}) from the account?", fingerprint(&key)),
+            )?;
             e.revoke(&key)?;
-            println!("removed {name} ({}). It can't push anymore.", fingerprint(&key));
+            let mut out = String::new();
+            say!(out, "removed {name} ({}). It can't push anymore.", fingerprint(&key));
+            let mut rotated = Value::Null;
             if rotate {
                 let r = e.rotate()?;
-                println!(
+                say!(
+                    out,
                     "moved to repository epoch {} ({} snapshots copied); {name} can't read it",
-                    r.epoch, r.snapshots
+                    r.epoch,
+                    r.snapshots
                 );
-                print_leftover(&r);
+                say!(out, "{}", leftover_text(&r));
+                rotated = json!({ "epoch": r.epoch, "snapshots": r.snapshots, "left": r.left });
             } else {
-                println!(
+                say!(
+                    out,
                     "It still holds the repository key it had. If the device is lost or not \
                      trusted, run `omacloud rotate`."
                 );
             }
+            let fp = fingerprint(&key);
+            let data = json!({ "removed": { "fingerprint": fp, "name": name }, "rotated": rotated });
+            Ok(Response::new(data, format!("removed {name} ({fp})"))
+                .human(out.trim_end())
+                .ids(vec![fp]))
         }
     }
-    Ok(())
 }
 
 /// This machine's explicitly installed packages, repository and foreign
@@ -1712,18 +2041,24 @@ fn record_packages(config: &Config, e: &mut Engine) {
     }
 }
 
-fn packages(paths: &Paths, action: PackagesCmd) -> Result<()> {
+fn packages(paths: &Paths, action: PackagesCmd) -> Out {
     let config = load(paths)?;
     if !config.settings {
-        bail!("package lists travel with settings sync: `omacloud settings on`");
+        return Err(fail::settings_off("package lists").into());
     }
     let mut e = engine(paths, &config)?;
     record_packages(&config, &mut e);
     e.sync()?;
     let dir = paths.data.join("packages");
     let read = |device: &str| -> Result<(Vec<String>, Vec<String>)> {
-        let text = fs::read_to_string(dir.join(format!("{device}.txt")))
-            .with_context(|| format!("no package list from {device}"))?;
+        let text = match fs::read_to_string(dir.join(format!("{device}.txt"))) {
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Err(fail::not_found(format!("no package list from {device}"))
+                    .hint("run `omacloud packages list` for the devices that have one")
+                    .into());
+            }
+            other => other.with_context(|| format!("reading the package list from {device}"))?,
+        };
         let (mut repo, mut foreign, mut section) = (Vec::new(), Vec::new(), "");
         for line in text.lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
             match line {
@@ -1744,10 +2079,21 @@ fn packages(paths: &Paths, action: PackagesCmd) -> Result<()> {
                 })
                 .unwrap_or_default();
             devices.sort();
-            for d in devices {
-                let (repo, foreign) = read(&d)?;
-                println!("{d:<16} {} packages, {} from the AUR", repo.len(), foreign.len());
+            let (mut out, mut data) = (String::new(), Vec::new());
+            for d in &devices {
+                let (repo, foreign) = read(d)?;
+                say!(out, "{d:<16} {} packages, {} from the AUR", repo.len(), foreign.len());
+                data.push(json!({ "device": d, "packages": repo.len(), "aur": foreign.len() }));
             }
+            Ok(
+                Response::new(data, format!("{} with package lists", counted(devices.len(), "device")))
+                    .human(if out.is_empty() {
+                        "no package lists yet".to_string()
+                    } else {
+                        out.trim_end().to_string()
+                    })
+                    .ids(devices),
+            )
         }
         PackagesCmd::Restore { from, yes } => {
             let (repo, foreign) = read(&from)?;
@@ -1758,33 +2104,63 @@ fn packages(paths: &Paths, action: PackagesCmd) -> Result<()> {
                 .unwrap_or_default();
             let missing: Vec<&String> = repo.iter().filter(|p| !installed.contains(*p)).collect();
             let missing_aur: Vec<&String> = foreign.iter().filter(|p| !installed.contains(*p)).collect();
+            let mut data = json!({ "from": from, "missing": missing, "missing_aur": missing_aur, "installed": false });
             if missing.is_empty() && missing_aur.is_empty() {
-                println!("everything {from} has is installed here");
-                return Ok(());
+                return Ok(Response::new(data, format!("everything {from} has is installed here")));
             }
+            let mut out = String::new();
             let list = |v: &[&String]| v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
             if !missing.is_empty() {
-                println!("from the repositories ({}): {}", missing.len(), list(&missing));
+                say!(out, "from the repositories ({}): {}", missing.len(), list(&missing));
             }
             if !missing_aur.is_empty() {
-                println!(
+                say!(
+                    out,
                     "from the AUR ({}), install these yourself: {}",
                     missing_aur.len(),
                     list(&missing_aur)
                 );
             }
             if yes && !missing.is_empty() {
-                let status = std::process::Command::new("sudo")
-                    .args(["pacman", "-S", "--needed"])
-                    .args(missing.iter().map(|s| s.as_str()))
-                    .status()?;
-                anyhow::ensure!(status.success(), "pacman did not finish");
+                let mut pacman = std::process::Command::new("sudo");
+                pacman.args(["pacman", "-S", "--needed"]);
+                // --yes said it already where nobody can answer pacman
+                if !output::interactive(mode()) {
+                    pacman.arg("--noconfirm");
+                }
+                // stdout is the result's; pacman talks on stderr
+                if mode().is_machine() {
+                    pacman.stdout(std::io::stderr());
+                } else {
+                    // what it found goes out before pacman asks
+                    eprint!("{out}");
+                    out.clear();
+                }
+                let status = pacman.args(missing.iter().map(|s| s.as_str())).status().map_err(|e| {
+                    CliError::new(
+                        "unavailable",
+                        output::EXIT_UNAVAILABLE,
+                        format!("running sudo pacman: {e}"),
+                    )
+                })?;
+                if !status.success() {
+                    return Err(CliError::new("command_failed", output::EXIT_ERROR, "pacman did not finish").into());
+                }
+                data["installed"] = json!(true);
+                say!(out, "installed {} packages from the repositories", missing.len());
             } else if !missing.is_empty() {
-                println!("install with: omacloud packages restore --from {from} --yes");
+                say!(out, "install with: omacloud packages restore --from {from} --yes");
             }
+            let summary = format!(
+                "{} packages and {} from the AUR missing here",
+                missing.len(),
+                missing_aur.len()
+            );
+            Ok(Response::new(data, summary)
+                .human(out.trim_end())
+                .count(missing.len() + missing_aur.len()))
         }
     }
-    Ok(())
 }
 
 fn hostname() -> String {
@@ -1799,21 +2175,37 @@ fn home_dir() -> Result<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from).context("HOME not set")
 }
 
-fn settings(paths: &Paths, action: SettingsCmd) -> Result<()> {
+fn settings(paths: &Paths, action: SettingsCmd) -> Out {
     let mut config = load(paths)?;
     match action {
         SettingsCmd::On | SettingsCmd::Off => {
             config.settings = matches!(action, SettingsCmd::On);
             save(paths, &config)?;
             let e = engine(paths, &config)?;
-            print_settings(&e.settings_status());
+            let st = e.settings_status();
+            let mut out = settings_text(&st);
             if config.settings {
-                println!(
+                say!(
+                    out,
                     "they sync at the next `omacloud sync`, or right away if the daemon runs (restart it: systemctl --user restart omacloud)"
                 );
             }
+            let summary = if config.settings {
+                "settings sync is on"
+            } else {
+                "settings sync is off"
+            };
+            Ok(Response::new(settings_json(&st), summary).human(out.trim_end()))
         }
-        SettingsCmd::Status => print_settings(&engine(paths, &config)?.settings_status()),
+        SettingsCmd::Status => {
+            let st = engine(paths, &config)?.settings_status();
+            let summary = match (st.on, &st.dormant) {
+                (false, _) => "settings sync is off".to_string(),
+                (true, Some(_)) => "settings sync stands down".to_string(),
+                (true, None) => format!("settings sync is on, {} waiting to be resolved", st.held.len()),
+            };
+            Ok(Response::new(settings_json(&st), summary).human(settings_text(&st).trim_end()))
+        }
         SettingsCmd::Resolve { path, keep } => {
             let home = home_dir()?;
             let abs = if path.is_absolute() {
@@ -1821,20 +2213,46 @@ fn settings(paths: &Paths, action: SettingsCmd) -> Result<()> {
             } else {
                 std::env::current_dir()?.join(path)
             };
-            let rel = abs
-                .strip_prefix(&home)
-                .with_context(|| format!("{} is not under your home", abs.display()))?;
+            let rel = abs.strip_prefix(&home).map_err(|_| {
+                fail::usage(format!("{} is not under your home", abs.display()))
+                    .hint("give a setting like ~/.config/hypr/bindings.lua")
+            })?;
             let mut e = engine(paths, &config)?;
+            if !e.settings_status().held.iter().any(|p| p.as_path() == rel) {
+                return Err(
+                    fail::not_found(format!("~/{} is not waiting to be resolved", rel.display()))
+                        .hint("`omacloud settings status` lists what is")
+                        .into(),
+                );
+            }
             e.resolve_setting(rel, matches!(keep, Keep::Remote))?;
             e.sync()?;
-            println!("resolved {}", rel.display());
+            let keep = if matches!(keep, Keep::Remote) {
+                "remote"
+            } else {
+                "local"
+            };
+            Ok(Response::new(
+                json!({ "resolved": format!("~/{}", rel.display()), "kept": keep }),
+                format!("resolved {}", rel.display()),
+            ))
         }
     }
-    Ok(())
 }
 
-fn print_settings(st: &omacloud_core::SettingsStatus) {
-    let source = if std::env::var_os("OMARCHY_PATH")
+fn settings_json(st: &omacloud_core::SettingsStatus) -> Value {
+    json!({
+        "on": st.on,
+        "dormant": st.dormant,
+        "held": st.held,
+        "groups": st.groups,
+        "source": settings_source(),
+    })
+}
+
+/// Where the list of settings to sync comes from.
+fn settings_source() -> &'static str {
+    if std::env::var_os("OMARCHY_PATH")
         .map_or_else(|| PathBuf::from("/usr/share/omarchy"), PathBuf::from)
         .join("default/dots/manifest")
         .is_file()
@@ -1842,24 +2260,31 @@ fn print_settings(st: &omacloud_core::SettingsStatus) {
         "Omarchy's dots manifest"
     } else {
         "the dots manifest bundled with omacloud"
-    };
-    match (st.on, &st.dormant) {
-        (false, _) => println!("settings sync is off (`omacloud settings on`)"),
-        (true, Some(why)) => println!("settings sync stands down: {why}"),
-        (true, None) => println!("settings sync is on, following {source}"),
     }
-    print_groups(&st.groups, "  ");
+}
+
+fn settings_text(st: &omacloud_core::SettingsStatus) -> String {
+    let mut out = String::new();
+    match (st.on, &st.dormant) {
+        (false, _) => say!(out, "settings sync is off (`omacloud settings on`)"),
+        (true, Some(why)) => say!(out, "settings sync stands down: {why}"),
+        (true, None) => say!(out, "settings sync is on, following {}", settings_source()),
+    }
+    out.push_str(&groups_text(&st.groups, "  "));
     for p in &st.held {
-        println!(
+        say!(
+            out,
             "  waiting: ~/{} changed here and on another device; `omacloud settings resolve ~/{} --keep local|remote`",
             p.display(),
             p.display()
         );
     }
+    out
 }
 
 /// Each settings group and how it stands, one line each, then what to do.
-fn print_groups(groups: &[omacloud_core::merged::Item], indent: &str) {
+fn groups_text(groups: &[omacloud_core::merged::Item], indent: &str) -> String {
+    let mut out = String::new();
     for g in groups {
         let state = match (g.group.as_str(), g.state.as_str()) {
             (_, "synced") => "in sync",
@@ -1873,14 +2298,15 @@ fn print_groups(groups: &[omacloud_core::merged::Item], indent: &str) {
             (_, "conflict") => "to resolve",
             (_, other) => other,
         };
-        println!("{indent}{:<22} {state}: {}", g.title, g.detail);
+        say!(out, "{indent}{:<22} {state}: {}", g.title, g.detail);
         for i in &g.install {
-            println!("{indent}  install {}: {}", i.name, i.command.join(" "));
+            say!(out, "{indent}  install {}: {}", i.name, i.command.join(" "));
         }
         for n in &g.not_synced {
-            println!("{indent}  not synced: {n}");
+            say!(out, "{indent}  not synced: {n}");
         }
     }
+    out
 }
 
 /// A path given on the command line, relative to the synced folder, or
@@ -1903,7 +2329,11 @@ fn relative(config: &Config, path: &Path) -> Result<PathBuf> {
     if path.is_relative() {
         return Ok(path.to_path_buf()); // taken as folder relative
     }
-    bail!("{} is not inside {}", path.display(), config.folder.display())
+    Err(
+        fail::usage(format!("{} is not inside {}", path.display(), config.folder.display()))
+            .hint("give a path inside the synced folder")
+            .into(),
+    )
 }
 
 fn absolute(p: &Path) -> Result<PathBuf> {
@@ -1911,23 +2341,23 @@ fn absolute(p: &Path) -> Result<PathBuf> {
     Ok(fs::canonicalize(p)?)
 }
 
-fn print_leftover(r: &omacloud_core::Rotated) {
+fn leftover_text(r: &omacloud_core::Rotated) -> String {
     if r.left == 0 {
-        println!("the old repository is deleted");
+        "the old repository is deleted".to_string()
     } else {
-        println!(
+        format!(
             "the bucket's delete protection keeps {} or more files of the old repository; \
              they are deleted once their retention ends",
             r.left
-        );
+        )
     }
 }
 
-fn secrets(paths: &Paths, action: SecretsCmd) -> Result<()> {
+fn secrets(paths: &Paths, action: SecretsCmd) -> Out {
     use omacloud_core::secrets;
     let config = load(paths)?;
     if !config.settings {
-        bail!("the secrets bundle travels with settings sync: `omacloud settings on`");
+        return Err(fail::settings_off("secrets bundles").into());
     }
     let mut e = engine(paths, &config)?;
     let home = home_dir()?;
@@ -1935,12 +2365,17 @@ fn secrets(paths: &Paths, action: SecretsCmd) -> Result<()> {
         SecretsCmd::List => {
             e.sync()?;
             let devices = e.secrets_devices();
-            if devices.is_empty() {
-                println!("no secrets bundles; save this device's with `omacloud secrets save`");
-            }
-            for d in devices {
-                println!("{d}");
-            }
+            let human = if devices.is_empty() {
+                "no secrets bundles; save this device's with `omacloud secrets save`".to_string()
+            } else {
+                devices.join("\n")
+            };
+            Ok(Response::new(
+                &devices,
+                format!("{} saved a secrets bundle", counted(devices.len(), "device")),
+            )
+            .human(human)
+            .ids(devices.clone()))
         }
         SecretsCmd::Save => {
             let list_file = paths.config.with_file_name("secrets");
@@ -1951,47 +2386,83 @@ fn secrets(paths: &Paths, action: SecretsCmd) -> Result<()> {
             };
             let entries = secrets::collect(&home, &secrets::paths(list.as_deref())?)?;
             if entries.is_empty() {
-                bail!("none of the secrets paths exist here");
+                return Err(fail::not_found("none of the secrets paths exist here")
+                    .hint(format!("list the paths to save in {}", list_file.display()))
+                    .into());
             }
+            let mut out = String::new();
             for en in &entries {
-                println!("  ~/{}", en.path.display());
+                say!(out, "  ~/{}", en.path.display());
             }
             e.put_secrets(&secrets::seal(&config.root, &entries)?)?;
             e.sync()?;
-            println!(
+            let summary = format!(
                 "sealed {} files for {}; only the recovery code opens them",
                 entries.len(),
                 config.device
             );
+            say!(out, "{summary}");
+            let files: Vec<String> = entries.iter().map(|en| format!("~/{}", en.path.display())).collect();
+            Ok(
+                Response::new(json!({ "device": config.device, "files": files }), summary)
+                    .human(out.trim_end())
+                    .count(entries.len()),
+            )
         }
         SecretsCmd::Restore { from, yes } => {
             e.sync()?;
-            let sealed = e.secrets_of(&from)?;
-            let root = omacloud_core::devices::root_key(&read_recovery_code()?)?;
-            let entries = secrets::open(&root, &sealed)?;
-            let changes = secrets::changes(&home, &entries);
-            if changes.is_empty() {
-                println!("this device already has {from}'s secrets");
-                return Ok(());
+            if !e.secrets_devices().contains(&from) {
+                return Err(fail::not_found(format!("no secrets bundle from {from}"))
+                    .hint("`omacloud secrets list` shows the devices that saved one")
+                    .into());
             }
-            for en in &changes {
-                let what = if home.join(&en.path).exists() { "replace" } else { "new" };
-                println!("  {what:<8} ~/{}", en.path.display());
+            let sealed = e.secrets_of(&from)?;
+            let code = read_recovery_code()?;
+            let root =
+                omacloud_core::devices::root_key(&code).map_err(|e| fail::recovery_code_rejected(format!("{e:#}")))?;
+            let entries = secrets::open(&root, &sealed).map_err(|e| fail::recovery_code_rejected(format!("{e:#}")))?;
+            let changes = secrets::changes(&home, &entries);
+            let list: Vec<Value> = changes
+                .iter()
+                .map(|en| {
+                    let action = if home.join(&en.path).exists() { "replace" } else { "new" };
+                    json!({ "path": format!("~/{}", en.path.display()), "action": action })
+                })
+                .collect();
+            let mut data = json!({ "from": from, "changes": list, "written": 0, "backups": null });
+            if changes.is_empty() {
+                return Ok(Response::new(data, format!("this device already has {from}'s secrets")).count(0));
+            }
+            let mut out = String::new();
+            for c in &list {
+                say!(
+                    out,
+                    "  {:<8} {}",
+                    c["action"].as_str().unwrap_or_default(),
+                    c["path"].as_str().unwrap_or_default()
+                );
             }
             if !yes {
-                println!("write these with: omacloud secrets restore --from {from} --yes");
-                return Ok(());
+                say!(out, "write these with: omacloud secrets restore --from {from} --yes");
+                return Ok(
+                    Response::new(data, format!("{} would change", counted(changes.len(), "file")))
+                        .human(out.trim_end())
+                        .count(changes.len()),
+                );
             }
             let stamp = omacloud_core::jiff::Zoned::now().strftime("%Y%m%d-%H%M%S");
             let backups = paths.data.join(format!("secrets-backup/{stamp}"));
             let written = secrets::restore(&home, &entries, &backups)?;
-            println!("wrote {} files", written.len());
+            let summary = format!("wrote {} files", written.len());
+            say!(out, "{summary}");
+            data["written"] = json!(written.len());
             if backups.exists() {
-                println!("the files they replaced are in {}", backups.display());
+                say!(out, "the files they replaced are in {}", backups.display());
+                data["backups"] = json!(backups);
             }
+            Ok(Response::new(data, summary).human(out.trim_end()).count(written.len()))
         }
     }
-    Ok(())
 }
 
 /// The recovery code from `OMACLOUD_RECOVERY_CODE`, or asked for on stdin.
@@ -2005,6 +2476,12 @@ fn read_recovery_code() -> Result<String> {
 fn read_secret(var: &str, what: &str) -> Result<String> {
     if let Ok(s) = std::env::var(var) {
         return Ok(s);
+    }
+    // asked only where someone can answer
+    if !output::interactive(mode()) {
+        return Err(fail::usage(format!("the {what} is needed"))
+            .hint(format!("set {var} in the environment, or run this in a terminal"))
+            .into());
     }
     eprint!("{what}: ");
     // SAFETY: termios calls on stdin with a zeroed, then filled, struct
@@ -2026,7 +2503,9 @@ fn read_secret(var: &str, what: &str) -> Result<String> {
     }
     read?;
     let secret = line.trim().to_string();
-    anyhow::ensure!(!secret.is_empty(), "no {what} given");
+    if secret.is_empty() {
+        return Err(fail::usage(format!("no {what} given")).into());
+    }
     Ok(secret)
 }
 
@@ -2037,56 +2516,74 @@ fn hosted_account(config: &Config) -> Option<(String, String)> {
     Some((service, config.repo.options.get("bucket")?.clone()))
 }
 
-fn recovery(paths: &Paths, action: RecoveryCmd) -> Result<()> {
+fn recovery(paths: &Paths, action: RecoveryCmd) -> Out {
     use omacloud_core::{contact, shamir};
+    // all but removing the contact print the recovery code or a part of it
+    if !matches!(action, RecoveryCmd::Contact { remove: true }) && !output::to_terminal(mode()) {
+        let what = match action {
+            RecoveryCmd::Contact { .. } => "a trusted contact's card",
+            RecoveryCmd::Split { .. } => "shares of your recovery code",
+            RecoveryCmd::Combine => "your recovery code",
+        };
+        return Err(fail::terminal_required(what).into());
+    }
     match action {
         RecoveryCmd::Contact { remove } => {
             let config = load_without_key(paths)?;
-            let (service, account) = hosted_account(&config).context(
-                "a trusted contact needs Omacloud storage. With storage of your own, give \
-                 someone you trust a copy of your recovery code, or split it among several \
-                 (`omacloud recovery split`)",
-            )?;
+            let (service, account) = hosted_account(&config).ok_or_else(|| {
+                fail::unsupported("a trusted contact needs Omacloud storage").hint(
+                    "with storage of your own, give someone you trust a copy of your recovery code, or split \
+                     it among several (`omacloud recovery split`)",
+                )
+            })?;
             if remove {
                 let email = hosted::set_contact(&service, &account, None)?;
-                println!("{email} has no trusted contact now: their card opens nothing");
-                return Ok(());
+                return Ok(Response::new(
+                    json!({ "account": email, "contact": false }),
+                    format!("{email} has no trusted contact now: their card opens nothing"),
+                ));
             }
             let code = read_recovery_code()?;
-            if public_hex(&omacloud_core::devices::root_key(&code)?) != config.root {
-                bail!("that recovery code belongs to another account");
+            let root =
+                omacloud_core::devices::root_key(&code).map_err(|e| fail::recovery_code_rejected(format!("{e:#}")))?;
+            if public_hex(&root) != config.root {
+                return Err(fail::recovery_code_rejected("that recovery code belongs to another account").into());
             }
             let pad = contact::new_pad();
             let card = contact::card(&code, &pad)?;
             let email = hosted::set_contact(&service, &account, Some(&pad))?;
-            println!("{card}");
             eprintln!(
                 "Give this card to the person you trust. If you lose your recovery code and \
                  every computer, they read it to you, and `omacloud init --hosted \
                  --contact-card` with a sign-in as {email} brings your account back. On its \
                  own the card opens nothing. Earlier cards stop working."
             );
+            Ok(Response::new(Value::Null, "trusted contact's card").human(card))
         }
         RecoveryCmd::Split { threshold, shares } => {
             let code = read_recovery_code()?;
-            let root = public_hex(&omacloud_core::devices::root_key(&code)?);
+            let root =
+                omacloud_core::devices::root_key(&code).map_err(|e| fail::recovery_code_rejected(format!("{e:#}")))?;
             // on a set up device, make sure it's this account's code
             if let Ok(config) = load(paths)
-                && config.root != root
+                && config.root != public_hex(&root)
             {
-                bail!("that recovery code belongs to another account");
+                return Err(fail::recovery_code_rejected("that recovery code belongs to another account").into());
             }
-            for share in shamir::split(&code, threshold, shares)? {
-                println!("{share}");
-            }
+            let parts = shamir::split(&code, threshold, shares).map_err(|e| fail::usage(format!("{e:#}")))?;
             eprintln!(
                 "any {threshold} of these {shares} shares rebuild the recovery code \
                  (`omacloud recovery combine`). Give each to a different person; keep none \
                  together with the others"
             );
+            Ok(Response::new(Value::Null, "recovery code shares").human(parts.join("\n")))
         }
         RecoveryCmd::Combine => {
-            eprintln!("paste shares, one per line:");
+            use std::io::IsTerminal;
+            let asking = std::io::stdin().is_terminal();
+            if asking {
+                eprintln!("paste shares, one per line:");
+            }
             let mut got: Vec<String> = Vec::new();
             for line in std::io::stdin().lines() {
                 let line = line?;
@@ -2105,20 +2602,22 @@ fn recovery(paths: &Paths, action: RecoveryCmd) -> Result<()> {
                 if got.len() >= usize::from(k) {
                     break;
                 }
-                eprintln!("{} of {k}", got.len());
+                if asking {
+                    eprintln!("{} of {k}", got.len());
+                }
             }
-            println!("{}", shamir::combine(&got)?);
+            let code = shamir::combine(&got).map_err(|e| fail::setup("shares_rejected", format!("{e:#}")))?;
+            Ok(Response::new(Value::Null, "recovery code").human(code))
         }
     }
-    Ok(())
 }
 
-/// `status --json`: what the Omacloud app shows. Reads only; no sync.
-fn status_json(paths: &Paths) -> Result<serde_json::Value> {
-    use serde_json::json;
-    // a computer to set up, not an error
+/// `status`: what the Omacloud app shows. Reads only; no sync. A computer
+/// not set up yet is a state to show (`set_up: false`), not a failure.
+fn status(paths: &Paths) -> Out {
     if !paths.config.exists() {
-        return Ok(json!({ "set_up": false }));
+        return Ok(Response::new(json!({ "set_up": false }), "this computer isn't set up")
+            .human("this computer isn't set up: run `omacloud init`, or set it up in the Omacloud app"));
     }
     let config = load(paths)?;
     let mut e = engine(paths, &config)?;
@@ -2140,6 +2639,7 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
         None
     };
     let st = e.state();
+    // an own bucket's location comes sealed with the key
     let repo = e.repository().map_or_else(|_| config.repo.clone(), |r| r.0);
     let kind = if repo.repository == "opendal:dropbox" || is_dropbox(&config) {
         "dropbox"
@@ -2155,7 +2655,7 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
     } else {
         "waiting"
     };
-    let list = |m: &std::collections::BTreeMap<String, String>| -> Vec<serde_json::Value> {
+    let list = |m: &BTreeMap<String, String>| -> Vec<Value> {
         m.iter()
             .map(|(k, name)| json!({ "fingerprint": fingerprint(k), "name": name, "this": *k == me }))
             .collect()
@@ -2169,15 +2669,79 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
     let settings = e.settings_status();
     let daemon = std::process::Command::new("systemctl")
         .args(["--user", "is-active", "--quiet", "omacloud"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .is_ok_and(|s| s.success());
-    Ok(json!({
+    let synced = e.folder_list();
+
+    let mut out = String::new();
+    say!(out, "device   {}", config.device);
+    say!(out, "account  {}", config.root);
+    if config.folders.is_some() {
+        let dirs: Vec<String> = synced
+            .iter()
+            .map(|(_, d)| format!("~/{}", d.file_name().unwrap_or_default().to_string_lossy()))
+            .collect();
+        say!(out, "folders  {}", dirs.join(", "));
+    } else {
+        say!(out, "folder   {}", config.folder.display());
+    }
+    match repo.options.get("bucket") {
+        Some(bucket) if repo.is_bucket() => say!(
+            out,
+            "repo     {} bucket {bucket}{}",
+            repo.repository,
+            repo.options
+                .get("endpoint")
+                .map_or_else(String::new, |e| format!(" at {e}"))
+        ),
+        _ => say!(out, "repo     {}", repo.repository),
+    }
+    match &st.base {
+        Some(b) => say!(out, "synced   head {} (snapshot {})", b.seq, &b.snapshot[..8]),
+        None => say!(out, "synced   nothing yet"),
+    }
+    if let Some((epoch, _)) = &st.secret {
+        say!(out, "epoch    {epoch}");
+    }
+    say!(
+        out,
+        "device   {} ({}, {} devices)",
+        fingerprint(&me),
+        if role == "waiting" {
+            "waiting for approval"
+        } else {
+            role
+        },
+        members.valid.len()
+    );
+    match (settings.on, &settings.dormant) {
+        (false, _) => say!(out, "settings off"),
+        (true, Some(why)) => say!(out, "settings standing down: {why}"),
+        (true, None) => {
+            say!(out, "settings");
+            out.push_str(&groups_text(&settings.groups, "  "));
+        }
+    }
+    say!(out, "daemon   {}", if daemon { "running" } else { "not running" });
+
+    let summary = format!(
+        "{} ({role}), {}, {}",
+        config.device,
+        counted(members.valid.len(), "device"),
+        st.base.as_ref().map_or_else(
+            || "nothing synced yet".to_string(),
+            |b| format!("synced head {}", b.seq)
+        )
+    );
+    let data = json!({
+        "set_up": true,
         "device": config.device,
         "account": config.root,
         "account_fingerprint": fingerprint(&config.root),
         "folder": config.folder,
         "folders": config.folders.as_ref().map(|f| {
-            let synced = e.folder_list();
             // the usual folders this computer doesn't sync, with where they'd be
             let local = xdg_names(&config.folder);
             let at_home = xdg_at_home(&config.folder);
@@ -2191,7 +2755,7 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
                 })
                 .collect();
             json!({
-                "synced": synced.into_iter()
+                "synced": synced.iter()
                     .map(|(name, path)| json!({ "name": name, "path": path }))
                     .collect::<Vec<_>>(),
                 "skipped": f.skip,
@@ -2200,6 +2764,7 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
         }),
         "repo": {
             "kind": kind,
+            "repository": repo.repository,
             "bucket": repo.options.get("bucket"),
             "endpoint": repo.options.get("endpoint"),
             "root": repo.options.get("root"),
@@ -2223,22 +2788,25 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
         },
         "secrets": e.secrets_devices(),
         "daemon": daemon,
-    }))
+    });
+    Ok(Response::new(data, summary).human(out.trim_end()))
 }
 
-fn folders(paths: &Paths, action: FoldersCmd) -> Result<()> {
+fn folders(paths: &Paths, action: FoldersCmd) -> Out {
     let mut config = load(paths)?;
     let Some(choice) = config.folders.as_mut() else {
-        bail!(
+        return Err(fail::unsupported(format!(
             "this device syncs all of {}; folders are for setups that sync folders of home",
             config.folder.display()
-        );
+        ))
+        .into());
     };
     let valid = |name: &str| -> Result<()> {
-        anyhow::ensure!(
-            !name.is_empty() && !name.contains('/') && !name.starts_with('.'),
-            "a folder here is one directly in home, like Music"
-        );
+        if name.is_empty() || name.contains('/') || name.starts_with('.') {
+            return Err(fail::usage(format!("{name:?} isn't a folder directly in home"))
+                .hint("give one like Music")
+                .into());
+        }
         Ok(())
     };
     let changed = match action {
@@ -2266,18 +2834,34 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Result<()> {
     // the account's folders are the ones in its history: sync to see them
     let mut e = engine(paths, &config)?;
     e.sync()?;
-    for dir in e.synced_folders() {
-        println!("{}", dir.display());
+    let synced = e.folder_list();
+    let mut out = String::new();
+    for (_, dir) in &synced {
+        say!(out, "{}", dir.display());
     }
     let skipped = &config.folders.as_ref().expect("checked above").skip;
     if !skipped.is_empty() {
         let list: Vec<&str> = skipped.iter().map(String::as_str).collect();
-        println!("skipped here: {}", list.join(", "));
+        say!(out, "skipped here: {}", list.join(", "));
     }
     if changed {
-        println!("(a running daemon picks this up when restarted: systemctl --user restart omacloud)");
+        say!(
+            out,
+            "(a running daemon picks this up when restarted: systemctl --user restart omacloud)"
+        );
     }
-    Ok(())
+    let data = json!({
+        "synced": synced.iter().map(|(name, path)| json!({ "name": name, "path": path })).collect::<Vec<_>>(),
+        "skipped": skipped,
+        "changed": changed,
+    });
+    let ids = synced.iter().map(|(name, _)| name.clone()).collect();
+    Ok(
+        Response::new(data, format!("{} sync here", counted(synced.len(), "folder")))
+            .human(out.trim_end())
+            .ids(ids)
+            .count(synced.len()),
+    )
 }
 
 /// Where coordination lives beside the data: the data's bucket (or
@@ -2324,13 +2908,6 @@ fn parse_join_code(code: &str) -> Result<(BTreeMap<String, String>, String)> {
         .to_string();
     Ok((opts, account))
 }
-
-/// Why a self-hosted computer can't reach its bucket, and the way back.
-const KEY_REFUSED: &str = "the storage refused this computer's key. If the account changed \
-     its key while this computer was away, get the new key from your provider and run \
-     `omacloud bucket set-key --access-key-id <id> --here-only` (with Omacloud storage, \
-     `omacloud bucket set-key --here-only` signs in again; with Dropbox, it \
-     asks you to authorize your app again)";
 
 /// Switch this device to a newer bucket key, if one was published. True
 /// when it did: the caller reconnects with the new key.
@@ -2412,11 +2989,14 @@ fn hosted_key(config: &Config, service: &str, here_only: bool) -> Result<omaclou
         hosted::Asked::Refused => {
             eprintln!("this computer's key isn't in use anymore: sign in again");
             let s = hosted::sign_in(service)?;
-            anyhow::ensure!(
-                config.coordination.as_ref().and_then(|c| c.get("bucket")) == Some(&s.bucket),
-                "{} is a different Omacloud account from this computer's",
-                s.email
-            );
+            if config.coordination.as_ref().and_then(|c| c.get("bucket")) != Some(&s.bucket) {
+                return Err(fail::setup(
+                    "wrong_account",
+                    format!("{} is a different Omacloud account from this computer's", s.email),
+                )
+                .hint("sign in with the Google account this computer was set up with")
+                .into());
+            }
             (s.access_key_id, s.secret_access_key)
         }
     };
@@ -2486,62 +3066,66 @@ fn retire_old_keys(paths: &Paths, e: &mut Engine) -> Result<bool> {
             save(paths, &config)?;
             Ok(true)
         }
-        hosted::Asked::Refused => anyhow::bail!("{KEY_REFUSED}"),
+        hosted::Asked::Refused => Err(fail::setup("key_refused", "the storage refused this computer's key")
+            .hint(KEY_REFUSED_HINT)
+            .into()),
     }
 }
 
-fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
+fn bucket(paths: &Paths, action: BucketCmd) -> Out {
     let mut config = if matches!(action, BucketCmd::SetKey { here_only: true, .. }) {
         load_without_key(paths)?
     } else {
         load(paths)?
     };
-    anyhow::ensure!(
-        config.coordinator == SELF_HOSTED,
-        "only self-hosted accounts keep their own bucket key"
-    );
+    if config.coordinator != SELF_HOSTED {
+        return Err(fail::unsupported("only accounts that keep in step through their bucket have a bucket key").into());
+    }
     match action {
         BucketCmd::Status => {
             let mut e = engine(paths, &config)?;
             let members = e.refresh_devices()?.members();
-            match e.bucket_key_status()? {
-                None => println!("the bucket key was never changed through omacloud"),
-                Some((seq, acked)) => {
-                    println!("key change {seq}:");
-                    let mut waiting = 0;
-                    for (k, name) in &members.valid {
-                        let done = acked.contains(k);
-                        if !done {
-                            waiting += 1;
-                        }
-                        println!(
-                            "  {}  {name:<16} {}",
-                            fingerprint(k),
-                            if done { "switched" } else { "not yet" }
-                        );
-                    }
-                    if waiting == 0 && (hosted_service(&config).is_some() || is_dropbox(&config)) {
-                        let config_now = load(paths)?;
-                        if config_now.bucket_key_retired >= seq || retire_old_keys(paths, &mut e)? {
-                            println!(
-                                "every computer switched, and the old keys are retired: a removed or lost computer is cut off"
-                            );
-                        } else if is_dropbox(&config) {
-                            println!(
-                                "every computer switched; check the computer that changed the Dropbox token to confirm the old token was revoked"
-                            );
-                        } else {
-                            println!("every computer switched; the old keys are retired by a computer on the new key");
-                        }
-                    } else if waiting == 0 {
-                        println!(
-                            "every computer switched: delete the old key at your provider; a removed or lost computer is then cut off"
-                        );
-                    } else {
-                        println!("{waiting} computers still to switch; they do on their next sync");
-                    }
-                }
+            let Some((seq, acked)) = e.bucket_key_status()? else {
+                return Ok(Response::new(
+                    json!({ "seq": null, "computers": [], "waiting": 0, "retired": false }),
+                    "the bucket key was never changed through omacloud",
+                ));
+            };
+            let mut out = String::new();
+            say!(out, "key change {seq}:");
+            let mut computers = Vec::new();
+            for (k, name) in &members.valid {
+                let done = acked.contains(k);
+                say!(
+                    out,
+                    "  {}  {name:<16} {}",
+                    fingerprint(k),
+                    if done { "switched" } else { "not yet" }
+                );
+                computers.push(json!({ "fingerprint": fingerprint(k), "name": name, "switched": done }));
             }
+            let waiting = members.valid.keys().filter(|k| !acked.contains(*k)).count();
+            let mut retired = false;
+            let summary = if waiting == 0 && (hosted_service(&config).is_some() || is_dropbox(&config)) {
+                let config_now = load(paths)?;
+                retired = config_now.bucket_key_retired >= seq || retire_old_keys(paths, &mut e)?;
+                if retired {
+                    "every computer switched, and the old keys are retired: a removed or lost computer is cut off"
+                } else if is_dropbox(&config) {
+                    "every computer switched; check the computer that changed the Dropbox token to confirm the old token was revoked"
+                } else {
+                    "every computer switched; the old keys are retired by a computer on the new key"
+                }
+                .to_string()
+            } else if waiting == 0 {
+                "every computer switched: delete the old key at your provider; a removed or lost computer is then cut off"
+                    .to_string()
+            } else {
+                format!("{waiting} computers still to switch; they do on their next sync")
+            };
+            say!(out, "{summary}");
+            let data = json!({ "seq": seq, "computers": computers, "waiting": waiting, "retired": retired });
+            Ok(Response::new(data, summary).human(out.trim_end()))
         }
         BucketCmd::SetKey {
             access_key_id,
@@ -2550,12 +3134,17 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
             let key: omacloud_core::bucket_key::Credentials = match (access_key_id, hosted_service(&config)) {
                 (Some(access_key_id), _) => {
                     // the same key again would cut nobody off
-                    anyhow::ensure!(
-                        here_only
-                            || config.coordination.as_ref().and_then(|c| c.get("access_key_id"))
-                                != Some(&access_key_id),
-                        "{access_key_id} is the key in use: make a new one at your provider first"
-                    );
+                    if !here_only
+                        && config.coordination.as_ref().and_then(|c| c.get("access_key_id")) == Some(&access_key_id)
+                    {
+                        return Err(CliError::new(
+                            "same_key",
+                            output::EXIT_USAGE,
+                            format!("{access_key_id} is the key in use"),
+                        )
+                        .hint("make a new key at your provider first")
+                        .into());
+                    }
                     let secret = read_secret("OMACLOUD_SECRET_ACCESS_KEY", "secret access key")?;
                     [
                         ("access_key_id".to_string(), access_key_id),
@@ -2572,16 +3161,21 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
                     } else {
                         c["client_secret"].clone()
                     };
-                    eprintln!(
-                        "Open this Dropbox authorization URL and paste its code:\n\n  {}\n",
-                        dropbox::authorize_url(id)?
-                    );
+                    let url = dropbox::authorize_url(id)?;
+                    if std::env::var_os("OMACLOUD_DROPBOX_AUTH_CODE").is_none() {
+                        eprintln!("Open this Dropbox authorization URL and paste its code:\n\n  {url}\n");
+                    }
                     let code = read_secret("OMACLOUD_DROPBOX_AUTH_CODE", "Dropbox authorization code")?;
                     let refresh = dropbox::exchange(id, &secret, &code)?;
-                    anyhow::ensure!(
-                        here_only || c.get("refresh_token") != Some(&refresh),
-                        "Dropbox returned the token already in use; it would not lock out the removed computer"
-                    );
+                    if !here_only && c.get("refresh_token") == Some(&refresh) {
+                        return Err(CliError::new(
+                            "same_key",
+                            output::EXIT_USAGE,
+                            "Dropbox returned the token already in use; it would not lock out the removed computer",
+                        )
+                        .hint("authorize the app again for a new code")
+                        .into());
+                    }
                     [
                         ("client_secret".to_string(), secret.clone()),
                         ("refresh_token".to_string(), refresh),
@@ -2589,7 +3183,9 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
                     .into()
                 }
                 (None, None) => {
-                    anyhow::bail!("give the new key: make it at your provider, then `--access-key-id <id>`")
+                    return Err(fail::usage("give the new key")
+                        .hint("make it at your provider, then `--access-key-id <id>`")
+                        .into());
                 }
             };
             // does the new key reach the bucket?
@@ -2598,15 +3194,32 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
                 c.retain(|k, _| !omacloud_core::repo::CREDENTIAL_OPTIONS.contains(&k.as_str()));
                 c.extend(key.clone());
             }
-            coordinator(&trial)?
-                .anchor()
-                .context("the new key doesn't reach the bucket")?
-                .context("the new key reaches a bucket with no account in it")?;
+            match coordinator(&trial)?.anchor() {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    return Err(CliError::new(
+                        "no_account",
+                        output::EXIT_NOT_FOUND,
+                        "the new key reaches a bucket with no account in it",
+                    )
+                    .into());
+                }
+                Err(e) if key_refused(&e) => {
+                    return Err(
+                        fail::setup("key_refused", format!("the new key doesn't reach the bucket: {e:#}"))
+                            .hint("check the key's id and secret, and that it may read and write this bucket")
+                            .into(),
+                    );
+                }
+                Err(e) => return Err(e.context("the new key doesn't reach the bucket")),
+            }
             if here_only {
                 config = trial;
                 save(paths, &config)?;
-                println!("this computer uses the new key; it picks up the account's key change on the next sync");
-                return Ok(());
+                return Ok(Response::new(
+                    json!({ "seq": null, "here_only": true }),
+                    "this computer uses the new key; it picks up the account's key change on the next sync",
+                ));
             }
             // published with the old key, which still works
             let mut e = engine(paths, &config)?;
@@ -2626,7 +3239,11 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
                         fs::remove_file(&pending)?;
                     }
                 }
-                anyhow::ensure!(!pending.exists(), "an earlier Dropbox token still awaits revocation");
+                if pending.exists() {
+                    return Err(fail::usage("an earlier Dropbox token still awaits revocation")
+                        .hint("wait until every computer switched (`omacloud bucket status`), then try again")
+                        .into());
+                }
                 let old = config
                     .coordination
                     .as_ref()
@@ -2644,22 +3261,26 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
             config = trial;
             config.bucket_key_seq = seq;
             save(paths, &config)?;
-            if hosted_service(&config).is_some() || is_dropbox(&config) {
-                println!(
+            let text = if hosted_service(&config).is_some() || is_dropbox(&config) {
+                format!(
                     "key change {seq} published, sealed to this account's computers. Each switches on \
                      its next sync, and once all have, the old keys are retired: a removed computer is \
                      then cut off. `omacloud bucket status` shows which have."
-                );
+                )
             } else {
-                println!(
+                format!(
                     "key change {seq} published, sealed to this account's computers. Each switches on its \
                      next sync; `omacloud bucket status` shows which have. Keep the old key until all have, \
                      then delete it at your provider."
-                );
-            }
+                )
+            };
+            Ok(Response::new(
+                json!({ "seq": seq, "here_only": false }),
+                format!("key change {seq} published"),
+            )
+            .human(text))
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]

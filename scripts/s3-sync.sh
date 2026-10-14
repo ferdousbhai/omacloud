@@ -17,13 +17,17 @@ cleanup() {
   rm -rf "${work:?}"
 }
 trap cleanup EXIT
-oc() { local dev=$1; shift; "$OMACLOUD" --config "$work/$dev.toml" "$@"; }
+oc() { local dev=$1; shift; "$OMACLOUD" --config "$work/$dev.toml" --styled "$@"; }
+# what prints a secret (a new account's recovery code, a join code, export)
+# prints only to a terminal: give it one (stderr shows there too)
+on_tty() { SHELL=/bin/bash script -qefc "$(printf '%q ' "$@")" /dev/null </dev/null | tr -d '\r'; }
+oc_tty() { local dev=$1; shift; on_tty "$OMACLOUD" --config "$work/$dev.toml" "$@"; }
 s3=(--repo opendal:s3 --opt "endpoint=$S3_ENDPOINT" --opt "bucket=$S3_BUCKET"
     --opt "access_key_id=$S3_KEY"
     --opt "region=${S3_REGION:-us-east-1}")
 [ -n "${S3_ROOT:-}" ] && s3+=(--opt "root=$S3_ROOT")
 
-OMACLOUD_SECRET_ACCESS_KEY=$S3_SECRET oc a init --folder "$work/A" "${s3[@]}" --coordinator "$work/coord" --device a >/dev/null 2>&1
+OMACLOUD_SECRET_ACCESS_KEY=$S3_SECRET oc_tty a init --folder "$work/A" "${s3[@]}" --coordinator "$work/coord" --device a >/dev/null
 # b asks to join, knowing nothing of the bucket; a approves it by fingerprint
 oc b init --folder "$work/B" --coordinator "$work/coord" --device b >/dev/null 2>&1
 fp=$(oc b device-key 2>/dev/null | sed -n 's/^fingerprint //p')
@@ -47,12 +51,12 @@ if grep -q "$S3_SECRET" "$work/a.toml" "$work/b.toml"; then
 fi
 
 # key rotation moves the repository to a new prefix in the same bucket
-oc a rotate >/dev/null 2>&1
+oc a rotate --yes >/dev/null 2>&1
 echo "after rotation" >"$work/A/docs/rotated.txt"
 oc a sync >/dev/null 2>&1
 oc b sync >/dev/null 2>&1
 diff -r --no-dereference "$work/A" "$work/B"
-oc b export 2>/dev/null | grep -q "root = \"${S3_ROOT:-}/omacloud-e1\""
+oc_tty b export | grep -q "root = \"${S3_ROOT:-}/omacloud-e1\""
 echo "s3 sync: ok"
 
 # coordination in the bucket too, and a new
@@ -60,11 +64,12 @@ echo "s3 sync: ok"
 nw="$work/inbucket"
 mkdir -p "$nw/A"
 echo "mine alone" >"$nw/A/mine.txt"
-ns() { local dev=$1; shift; "$OMACLOUD" --config "$nw/$dev.toml" "$@"; }
+ns() { local dev=$1; shift; "$OMACLOUD" --config "$nw/$dev.toml" --styled "$@"; }
+ns_tty() { local dev=$1; shift; on_tty "$OMACLOUD" --config "$nw/$dev.toml" "$@"; }
 root_opt=${S3_ROOT:-}/inbucket
-OMACLOUD_SECRET_ACCESS_KEY=$S3_SECRET ns a init --folder "$nw/A" "${s3[@]}" --opt "root=$root_opt" --coordinator bucket --device a >/dev/null 2>&1
+OMACLOUD_SECRET_ACCESS_KEY=$S3_SECRET ns_tty a init --folder "$nw/A" "${s3[@]}" --opt "root=$root_opt" --coordinator bucket --device a >/dev/null
 ns a sync >/dev/null 2>&1
-code=$(ns a join-code 2>/dev/null)
+code=$(ns_tty a join-code | grep '^omacloud-join-')
 fp=$(ns b init --folder "$nw/B" --join-code "$code" --device b 2>&1 | sed -n "s/^this device's fingerprint: //p")
 ns a devices approve "$fp" >/dev/null 2>&1
 ns b sync >/dev/null 2>&1

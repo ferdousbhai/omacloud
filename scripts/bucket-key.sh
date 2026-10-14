@@ -37,18 +37,24 @@ for _ in $(seq 1 30); do
 done
 reaches new new-secret
 
-oc() { local dev=$1; shift; "$OMACLOUD" --config "$work/$dev.toml" "$@"; }
+oc() { local dev=$1; shift; "$OMACLOUD" --config "$work/$dev.toml" --styled "$@"; }
+# what prints a secret (a new account's recovery code, a join code) prints
+# only to a terminal: give it one (stderr shows there too)
+oc_tty() {
+  local dev=$1; shift
+  SHELL=/bin/bash script -qefc "$(printf '%q ' "$OMACLOUD" --config "$work/$dev.toml" "$@")" /dev/null </dev/null | tr -d '\r'
+}
 say() { echo "bucket key: $*"; }
 
 # a, b and c on one self-hosted account, all with the old key
 mkdir -p "$work/A"
 echo "from a" >"$work/A/a.txt"
-OMACLOUD_SECRET_ACCESS_KEY=old-secret oc a init --folder "$work/A" --repo opendal:s3 \
+OMACLOUD_SECRET_ACCESS_KEY=old-secret oc_tty a init --folder "$work/A" --repo opendal:s3 \
   --opt "endpoint=$S3_ENDPOINT" --opt bucket=omacloud --opt access_key_id=old --opt region=us-east-1 \
-  --coordinator bucket --device a >/dev/null 2>&1
+  --coordinator bucket --device a >/dev/null
 oc a sync >/dev/null 2>&1
 for d in b c; do
-  code=$(oc a join-code 2>/dev/null)
+  code=$(oc_tty a join-code | grep '^omacloud-join-')
   fp=$(OMACLOUD_JOIN_CODE=$code oc "$d" init --folder "$work/${d^^}" --device "$d" 2>&1 |
     sed -n "s/^this device's fingerprint: //p")
   [ -n "$fp" ] || { echo "$d didn't get a fingerprint"; exit 1; }

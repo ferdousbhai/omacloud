@@ -5,6 +5,8 @@ use std::time::Duration;
 pub const OLD_TOKEN_FILE: &str = "dropbox-old-token";
 
 use anyhow::{Context, Result, ensure};
+
+use crate::fail;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -22,10 +24,9 @@ fn agent() -> ureq::Agent {
 }
 
 pub fn authorize_url(client_id: &str) -> Result<String> {
-    ensure!(
-        !client_id.is_empty() && client_id.bytes().all(|b| b.is_ascii_alphanumeric()),
-        "give the Dropbox app key as --opt client_id=..."
-    );
+    if client_id.is_empty() || !client_id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(fail::usage("give the Dropbox app key as --opt client_id=...").into());
+    }
     Ok(format!(
         "https://www.dropbox.com/oauth2/authorize?client_id={client_id}&response_type=code&token_access_type=offline"
     ))
@@ -41,11 +42,20 @@ pub fn exchange(client_id: &str, client_secret: &str, code: &str) -> Result<Stri
             ("client_secret", client_secret),
         ])
         .context("exchanging the Dropbox authorization code")?;
-    ensure!(
-        response.status().is_success(),
-        "Dropbox refused the authorization code ({})",
-        response.status()
-    );
+    let status = response.status().as_u16();
+    if status == 429 || status >= 500 {
+        return Err(fail::unavailable(format!("Dropbox answered {status}"))
+            .hint("try again in a minute")
+            .into());
+    }
+    if !response.status().is_success() {
+        return Err(fail::setup(
+            "dropbox_code_rejected",
+            format!("Dropbox refused the authorization code ({status})"),
+        )
+        .hint("authorize the app again for a new code; check the app key and secret")
+        .into());
+    }
     let token: Token = response.body_mut().read_json().context("Dropbox token response")?;
     token.refresh_token.context("Dropbox returned no offline refresh token")
 }

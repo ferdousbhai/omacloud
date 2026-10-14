@@ -1,14 +1,19 @@
 //! The Omacloud app: account, devices, settings sync, secrets and a
 //! trusted contact for recovery. It works through the `omacloud` CLI
-//! (`status --json` to read, the usual subcommands to act), so it holds no
-//! keys or state of its own and never races the daemon over them.
+//! (`status` to read, the usual subcommands to act, all with `--json`: it
+//! reads the envelope's `data`, or its `error`), so it holds no keys or state
+//! of its own and never races the daemon over them. The commands that print a
+//! secret (`init`, `join-code`, `recovery contact`) print it only to a
+//! terminal: the app runs those on a pseudo-terminal of its own.
 //!
 //! `omacloud-app [overview|devices|settings|secrets|recovery]` opens on
 //! that page. `OMACLOUD_BIN` picks the CLI (default: `omacloud` on PATH) and
 //! `OMACLOUD_CONFIG` a config other than the default.
 
 use std::{
-    io::Write,
+    fs::File,
+    io::Read,
+    os::fd::{FromRawFd, OwnedFd},
     process::{Command, Stdio},
     rc::Rc,
 };
@@ -33,10 +38,25 @@ fn main() -> glib::ExitCode {
     app.run_with_args(&[argv0])
 }
 
-/// Run a command to completion: `omacloud ...` means the CLI with this
-/// app's config. Returns stdout, or the last line of stderr on failure.
-fn run(argv: &[String], env: &[(String, String)], stdin: Option<&str>) -> Result<String, String> {
-    let (program, args) = argv.split_first().ok_or("nothing to run")?;
+/// A command that failed: the CLI's error code (empty for other programs and
+/// text-mode runs) and what to show.
+struct Failure {
+    code: String,
+    message: String,
+}
+
+impl Failure {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            code: String::new(),
+            message: message.into(),
+        }
+    }
+}
+
+/// `argv` as a command: `omacloud ...` means the CLI with this app's config.
+fn command(argv: &[String], env: &[(String, String)]) -> Result<Command, Failure> {
+    let (program, args) = argv.split_first().ok_or_else(|| Failure::new("nothing to run"))?;
     let mut cmd = if program == "omacloud" {
         let mut c = Command::new(std::env::var("OMACLOUD_BIN").unwrap_or_else(|_| program.clone()));
         if let Ok(config) = std::env::var("OMACLOUD_CONFIG") {
@@ -49,41 +69,142 @@ fn run(argv: &[String], env: &[(String, String)], stdin: Option<&str>) -> Result
     cmd.args(args)
         .env("RUST_LOG", "warn")
         .envs(env.iter().map(|(k, v)| (k, v)))
-        .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdin(Stdio::null());
+    Ok(cmd)
+}
+
+/// The last line of `stderr` that says something, without an `error: `.
+fn last_line(stderr: &[u8], fallback: &str) -> String {
+    let err = String::from_utf8_lossy(stderr);
+    let lines: Vec<&str> = err.lines().filter(|l| !l.trim().is_empty()).collect();
+    // text mode's error: the `error:` line, not the `hint:` after it
+    lines
+        .iter()
+        .rev()
+        .find_map(|l| l.strip_prefix("error: "))
+        .or_else(|| lines.last().copied())
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+/// Run another program to completion: its stdout, or the last line of
+/// stderr on failure.
+fn run(argv: &[String]) -> Result<String, Failure> {
+    let out = command(argv, &[])?
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(|e| format!("running {program}: {e}"))?;
-    if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
-        _ = pipe.write_all(text.as_bytes());
-    }
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| Failure::new(format!("running {}: {e}", argv[0])))?;
     if out.status.success() {
         return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
     }
-    let err = String::from_utf8_lossy(&out.stderr);
-    Err(err
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("it failed")
-        .trim_start_matches("Error: ")
-        .to_string())
+    Err(Failure::new(last_line(&out.stderr, "it failed")))
 }
 
-/// Run in the background, then hand the result to `then` on the main loop.
-fn run_then(
-    argv: &[&str],
-    env: Vec<(String, String)>,
-    stdin: Option<String>,
-    then: impl FnOnce(Result<String, String>) + 'static,
+/// Run `omacloud ...` with `--json`: the result's `data`, or its error.
+fn cli(argv: &[String], env: &[(String, String)]) -> Result<Value, Failure> {
+    let out = command(argv, env)?
+        .arg("--json")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| Failure::new(format!("running omacloud: {e}")))?;
+    match serde_json::from_slice::<Value>(&out.stdout) {
+        Ok(v) if v["ok"] == Value::Bool(true) => Ok(v["data"].clone()),
+        Ok(v) if v["ok"] == Value::Bool(false) => Err(Failure {
+            code: text(&v["error"]["code"]),
+            message: text(&v["error"]["message"]),
+        }),
+        // no envelope: it crashed, or is an omacloud from before the contract
+        _ => Err(Failure::new(last_line(&out.stderr, "omacloud failed"))),
+    }
+}
+
+/// Run `omacloud ...` with its stdout on a pseudo-terminal of this app's
+/// own: the commands that print a secret print it only to a terminal, and
+/// this window is the owner's. What it printed there, or its error.
+fn cli_tty(argv: &[String], env: &[(String, String)]) -> Result<String, Failure> {
+    let (mut master, mut slave) = (0, 0);
+    // SAFETY: openpty fills in two new descriptors, owned from here on
+    let (mut master, slave) = unsafe {
+        if libc::openpty(
+            &raw mut master,
+            &raw mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+        ) != 0
+        {
+            return Err(Failure::new(format!(
+                "no terminal: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        (File::from_raw_fd(master), OwnedFd::from_raw_fd(slave))
+    };
+    let mut cmd = command(argv, env)?;
+    cmd.stdout(Stdio::from(slave)).stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| Failure::new(format!("running omacloud: {e}")))?;
+    // the terminal side closes with the child: reading then ends
+    drop(cmd);
+    let mut stderr = child.stderr.take();
+    let errors = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(e) = stderr.as_mut() {
+            _ = e.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let mut out = Vec::new();
+    let mut buf = [0u8; 4096];
+    // EIO once the child closed the terminal
+    while let Ok(n @ 1..) = master.read(&mut buf) {
+        out.extend_from_slice(&buf[..n]);
+    }
+    let status = child.wait().map_err(|e| Failure::new(e.to_string()))?;
+    let errors = errors.join().unwrap_or_default();
+    if status.success() {
+        return Ok(String::from_utf8_lossy(&out).replace('\r', ""));
+    }
+    Err(Failure::new(last_line(&errors, "it failed")))
+}
+
+/// Run `job` in the background, then hand its result to `then` on the main
+/// loop.
+fn in_background<T: Send + 'static>(
+    job: impl FnOnce() -> Result<T, Failure> + Send + 'static,
+    then: impl FnOnce(Result<T, Failure>) + 'static,
 ) {
-    let argv: Vec<String> = argv.iter().map(|s| (*s).to_string()).collect();
     glib::spawn_future_local(async move {
-        let result = gio::spawn_blocking(move || run(&argv, &env, stdin.as_deref()))
+        let result = gio::spawn_blocking(job)
             .await
-            .unwrap_or_else(|_| Err("it crashed".into()));
+            .unwrap_or_else(|_| Err(Failure::new("it crashed")));
         then(result);
     });
+}
+
+fn owned(argv: &[&str]) -> Vec<String> {
+    argv.iter().map(|s| (*s).to_string()).collect()
+}
+
+/// [`run`] in the background.
+fn run_then(argv: &[&str], then: impl FnOnce(Result<String, Failure>) + 'static) {
+    let argv = owned(argv);
+    in_background(move || run(&argv), then);
+}
+
+/// [`cli`] in the background.
+fn cli_then(argv: &[&str], env: Vec<(String, String)>, then: impl FnOnce(Result<Value, Failure>) + 'static) {
+    let argv = owned(argv);
+    in_background(move || cli(&argv, &env), then);
+}
+
+/// [`cli_tty`] in the background.
+fn tty_then(argv: &[&str], env: Vec<(String, String)>, then: impl FnOnce(Result<String, Failure>) + 'static) {
+    let argv = owned(argv);
+    in_background(move || cli_tty(&argv, &env), then);
 }
 
 struct Ui {
@@ -111,16 +232,20 @@ impl Ui {
     /// [`Ui::act`], with secrets passed through the environment.
     fn act_env(self: &Rc<Self>, argv: &[&str], env: Vec<(String, String)>, done: &str) {
         let (ui, done) = (self.clone(), done.to_string());
-        run_then(argv, env, None, move |r| {
-            ui.toast(&r.map_or_else(|e| e, |_| done));
+        let then = move |r: Result<(), Failure>| {
+            ui.toast(&r.map_or_else(|e| e.message, |()| done));
             ui.refresh();
-        });
+        };
+        if argv.first() == Some(&"omacloud") {
+            cli_then(argv, env, move |r| then(r.map(drop)));
+        } else {
+            run_then(argv, move |r| then(r.map(drop)));
+        }
     }
 
     fn refresh(self: &Rc<Self>) {
         let ui = self.clone();
-        run_then(&["omacloud", "status", "--json"], Vec::new(), None, move |r| {
-            let status = r.and_then(|out| serde_json::from_str::<Value>(&out).map_err(|e| e.to_string()));
+        cli_then(&["omacloud", "status"], Vec::new(), move |status| {
             match status {
                 // no config yet: this computer needs setting up
                 Ok(s) if s["set_up"] == Value::Bool(false) => {
@@ -137,8 +262,13 @@ impl Ui {
                     ui.recovery.set_child(Some(&recovery(&ui, &s)));
                 }
                 Err(e) => {
+                    let why = match e.code.as_str() {
+                        "unavailable" => format!("Can't reach your storage: {}", e.message),
+                        "keyring_unavailable" => format!("Unlock your keyring: {}", e.message),
+                        _ => e.message,
+                    };
                     for bin in [&ui.overview, &ui.devices, &ui.settings, &ui.secrets, &ui.recovery] {
-                        bin.set_child(Some(&not_set_up(&e)));
+                        bin.set_child(Some(&not_set_up(&why)));
                     }
                 }
             }
@@ -318,11 +448,12 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
     let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
     let ui2 = ui.clone();
     ui.toast("Setting up…");
-    run_then(&argv_ref, env, None, move |r| match r {
-        Err(e) => ui2.toast(&e),
+    // creating an account prints its recovery code: only to a terminal
+    tty_then(&argv_ref, env, move |r| match r {
+        Err(e) => ui2.toast(&e.message),
         Ok(out) => {
             // set up: keep it syncing from now on, not from the next login
-            run_then(&["systemctl", "--user", "start", "omacloud"], Vec::new(), None, |_| {});
+            run_then(&["systemctl", "--user", "start", "omacloud"], |_| {});
             let code = out
                 .lines()
                 .find_map(|l| l.strip_prefix("recovery code: "))
@@ -985,7 +1116,7 @@ fn subtitle_with_size(row: &adw::ActionRow, path: &str) {
         return;
     }
     let row = row.clone();
-    run_then(&["du", "-sb", path], Vec::new(), None, move |r| {
+    run_then(&["du", "-sb", path], move |r| {
         if let Some(bytes) = r
             .ok()
             .and_then(|out| out.split_whitespace().next()?.parse::<u64>().ok())
@@ -1293,12 +1424,11 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
                     move |_| {
                         let ui4 = ui3.clone();
                         let dropbox_id = dropbox_id.clone();
-                        run_then(
-                            &["omacloud", "devices", "revoke", &fp2],
+                        cli_then(
+                            &["omacloud", "devices", "revoke", &fp2, "--yes"],
                             Vec::new(),
-                            None,
                             move |r| match r {
-                                Err(e) => ui4.toast(&e),
+                                Err(e) => ui4.toast(&e.message),
                                 Ok(_) => {
                                     ui4.refresh();
                                     change_bucket_key(&ui4, hosted, dropbox_id.clone());
@@ -1324,7 +1454,7 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
                         ("rotate", "Remove and Change Key", adw::ResponseAppearance::Destructive),
                     ],
                     move |id| {
-                        let mut argv = vec!["omacloud", "devices", "revoke", fp2.as_str()];
+                        let mut argv = vec!["omacloud", "devices", "revoke", fp2.as_str(), "--yes"];
                         if id == "rotate" {
                             argv.push("--rotate");
                         }
@@ -1355,15 +1485,19 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
 /// A join code for adding another computer to this account.
 fn show_join_code(ui: &Rc<Ui>) {
     let ui2 = ui.clone();
-    run_then(&["omacloud", "join-code"], Vec::new(), None, move |r| match r {
-        Err(e) => ui2.toast(&e),
+    // it holds the bucket's keys: printed only to a terminal
+    tty_then(&["omacloud", "join-code"], Vec::new(), move |r| match r {
+        Err(e) => ui2.toast(&e.message),
         Ok(out) => show_text(
             &ui2,
             "Join code",
             "On the new computer, install Omacloud, open it, and paste this under Add this \
              computer to your account. Then approve it here. The code holds your bucket's key: \
              pass it only to your own computers, and not through chat or email.",
-            out.trim(),
+            out.lines()
+                .find(|l| l.starts_with("omacloud-join-"))
+                .unwrap_or_default()
+                .trim(),
         ),
     });
 }
@@ -1767,16 +1901,21 @@ fn restore_secrets(ui: &Rc<Ui>, device: &str) {
         let code = entry.text().to_string();
         let env = vec![("OMACLOUD_RECOVERY_CODE".to_string(), code.clone())];
         let (ui3, device2) = (ui2.clone(), device.clone());
-        run_then(
+        cli_then(
             &["omacloud", "secrets", "restore", "--from", &device],
             env,
-            None,
             move |r| match r {
-                Err(e) => ui3.toast(&e),
-                Ok(out) => {
-                    let changes: Vec<&str> = out.lines().filter(|l| l.starts_with("  ")).map(str::trim).collect();
+                Err(e) => ui3.toast(&e.message),
+                Ok(data) => {
+                    let empty = Vec::new();
+                    let changes: Vec<String> = data["changes"]
+                        .as_array()
+                        .unwrap_or(&empty)
+                        .iter()
+                        .map(|c| format!("{:<8} {}", text(&c["action"]), text(&c["path"])))
+                        .collect();
                     if changes.is_empty() {
-                        ui3.toast(out.trim());
+                        ui3.toast("This computer already has those keys");
                         return;
                     }
                     let ui4 = ui3.clone();
@@ -1787,20 +1926,13 @@ fn restore_secrets(ui: &Rc<Ui>, device: &str) {
                         move |_| {
                             let env = vec![("OMACLOUD_RECOVERY_CODE".to_string(), code.clone())];
                             let ui5 = ui4.clone();
-                            run_then(
+                            cli_then(
                                 &["omacloud", "secrets", "restore", "--from", &device2, "--yes"],
                                 env,
-                                None,
                                 move |r| {
                                     ui5.toast(&r.map_or_else(
-                                        |e| e,
-                                        |out| {
-                                            out.lines()
-                                                .rev()
-                                                .find(|l| l.starts_with("wrote"))
-                                                .unwrap_or("Restored")
-                                                .to_string()
-                                        },
+                                        |e| e.message,
+                                        |data| format!("Wrote {} files", data["written"].as_u64().unwrap_or(0)),
                                     ));
                                 },
                             );
@@ -1846,9 +1978,10 @@ fn recovery(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
             let env = vec![("OMACLOUD_RECOVERY_CODE".to_string(), code.text().to_string())];
             ui.toast("Sign in with Google in your browser to keep the card's other half");
             let ui2 = ui.clone();
-            run_then(&["omacloud", "recovery", "contact"], env, None, move |r| match r {
-                Err(e) => ui2.toast(&e),
-                Ok(out) => show_card(&ui2, out.trim()),
+            // the card prints only to a terminal
+            tty_then(&["omacloud", "recovery", "contact"], env, move |r| match r {
+                Err(e) => ui2.toast(&e.message),
+                Ok(out) => show_card(&ui2, card_in(&out)),
             });
         });
     }
@@ -1862,12 +1995,9 @@ fn recovery(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
                 &[("remove", "Remove", adw::ResponseAppearance::Destructive)],
                 move |_| {
                     let ui3 = ui2.clone();
-                    run_then(
-                        &["omacloud", "recovery", "contact", "--remove"],
-                        Vec::new(),
-                        None,
-                        move |r| ui3.toast(&r.map_or_else(|e| e, |_| "Contact removed".into())),
-                    );
+                    cli_then(&["omacloud", "recovery", "contact", "--remove"], Vec::new(), move |r| {
+                        ui3.toast(&r.map_or_else(|e| e.message, |_| "Contact removed".into()))
+                    });
                 },
             );
         });
@@ -1880,6 +2010,12 @@ fn recovery(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
          Making a new card replaces the last one.",
     ));
     page
+}
+
+/// The card in what `recovery contact` printed on its terminal (its notes
+/// go to stderr).
+fn card_in(out: &str) -> &str {
+    out.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default()
 }
 
 /// The contact's card, to print or copy: shown once.

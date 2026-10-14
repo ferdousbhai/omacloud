@@ -19,8 +19,11 @@ use std::{
     process::{Command, Stdio},
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD};
+
+use crate::fail::{self, CliError};
+use crate::output::EXIT_UNAVAILABLE;
 
 const LABEL: &str = "Omacloud bucket key";
 const BASE64: &str = "base64:";
@@ -85,21 +88,38 @@ pub fn store(config: &Path, key: &BTreeMap<String, String>) -> Result<bool> {
 
 /// The key kept for `config`.
 pub fn lookup(config: &Path) -> Result<BTreeMap<String, String>> {
-    ensure!(
-        enabled(),
-        "this computer's bucket key is in the keyring, and OMACLOUD_KEYRING=0 turns it off"
-    );
+    if !enabled() {
+        return Err(fail::setup(
+            "keyring_off",
+            "this computer's bucket key is in the keyring, and OMACLOUD_KEYRING=0 turns it off",
+        )
+        .hint("unset OMACLOUD_KEYRING")
+        .into());
+    }
     let out = Command::new("secret-tool")
         .arg("lookup")
         .args(attributes(config)?)
         .stderr(Stdio::null())
         .output()
-        .context("running secret-tool to read the bucket key from the keyring")?;
+        .map_err(|e| {
+            CliError::new(
+                "keyring_unavailable",
+                EXIT_UNAVAILABLE,
+                format!("running secret-tool to read the bucket key from the keyring: {e}"),
+            )
+            .hint("install libsecret and run a keyring (Secret Service)")
+        })?;
     if !out.status.success() || out.stdout.is_empty() {
-        bail!(
-            "the bucket key isn't in the keyring (is it unlocked?). If it's gone, run \
-             `omacloud bucket set-key --access-key-id <id> --here-only` with the account's key"
-        );
+        return Err(CliError::new(
+            "keyring_unavailable",
+            EXIT_UNAVAILABLE,
+            "the bucket key isn't in the keyring",
+        )
+        .hint(
+            "unlock the keyring and try again; if the key is gone, run \
+             `omacloud bucket set-key --access-key-id <id> --here-only` with the account's key",
+        )
+        .into());
     }
     decode(&out.stdout).context("the keyring's bucket key entry")
 }

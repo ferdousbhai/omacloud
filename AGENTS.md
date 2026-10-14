@@ -9,8 +9,8 @@ threat model: docs/design.md; build, test and release: CONTRIBUTING.md.
 | path | what |
 |---|---|
 | `crates/omacloud-core` | sync engine (`sync.rs`), settings sync (`settings.rs`, `agents.rs`, `merged.rs`, `chromium/`, `wifi.rs`), signed heads (`head.rs`), device chain (`devices.rs`, `account.rs`), repository keys and rotation (`epoch.rs`), coordination in the bucket (`bucket.rs`, `bucket_key.rs`), secrets bundle (`secrets.rs`), Shamir split (`shamir.rs`), Dropbox (`dropbox.rs`). Integration tests in `tests/` |
-| `crates/omacloud` | the `omacloud` CLI and `watch` daemon (`main.rs`: every subcommand; `hosted.rs`: Google sign-in and Omacloud storage; `keyring.rs`, `alerts.rs`, `power.rs`, `dropbox.rs`) |
-| `crates/omacloud-app` | GTK4/libadwaita app; it shells out to the CLI and reads `omacloud status --json`, so keep that output stable |
+| `crates/omacloud` | the `omacloud` CLI and `watch` daemon (`main.rs`: every subcommand; `output.rs`: the shared output contract, vendored from icloud-for-omarchy; `fail.rs`: error codes and exit codes; `hosted.rs`: Google sign-in and Omacloud storage; `keyring.rs`, `alerts.rs`, `power.rs`, `dropbox.rs`). CLI tests in `tests/cli.rs` |
+| `crates/omacloud-app` | GTK4/libadwaita app; it shells out to the CLI with `--json` and reads the envelope's `data` (`status` above all) or `error.code`, so keep that output stable; `init`, `join-code` and `recovery contact` it runs on a pseudo-terminal of its own |
 | `vendor/rustic_core` | patched rustic_core 0.13 (pack padding, `splice_tree`), wired in through `[patch.crates-io]`; see its `OMACLOUD.md` |
 | `server/` | Cloudflare Worker (TypeScript, `cf` CLI): omacloud.computer (home, privacy, terms, `/llms.txt`, Google sign-in, waitlist, `/api/*`) and storage.omacloud.computer (S3 gateway, chosen by Host). D1 schema in `server/migrations/`. See server/README.md |
 | `scripts/` | end to end checks (`s3-sync.sh`, `bucket-key.sh`, `restic-compat.sh`), release scripts, and `tests/*.py` for installer and release tooling |
@@ -38,11 +38,20 @@ scripts need docker (SeaweedFS) and are described in CONTRIBUTING.md.
 - Rust edition 2024, workspace dependencies in the root `Cargo.toml`; no
   new dependencies without need.
 - Comments and docs are plain, short prose saying why; match it.
+- Every command returns a `Response` (data, summary, text, ids/count) or
+  fails with a `CliError` (`fail.rs`: code, exit 1-5, remediation in the
+  hint); piped output is the JSON envelope, so scripts parsing text pass
+  `--styled`. Commands that print a secret (a recovery code, join code,
+  card, shares, export's password) check `output::to_terminal` first and
+  refuse otherwise; tests and scripts run them under a pty (`script`).
+  `watch` keeps its exit codes (2 stopped, 75 upgraded): the systemd unit's
+  `RestartPreventExitStatus=2` depends on them.
 - Secrets never go on a command line: they come from env vars
   (`OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE`,
   `OMACLOUD_SECRET_ACCESS_KEY`, `OMACLOUD_DROPBOX_CLIENT_SECRET`,
   `OMACLOUD_DROPBOX_AUTH_CODE`, `OMACLOUD_CONTACT_CARD`) or a no-echo prompt
-  (`read_secret` in `crates/omacloud/src/main.rs`).
+  (`read_secret` in `crates/omacloud/src/main.rs`), asked only in text mode
+  with stdin and stdout on a terminal.
 - Worker code is TypeScript with tabs, run directly by node
   (`--experimental-strip-types`), so imports use `.ts` extensions.
 

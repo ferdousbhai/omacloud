@@ -12,10 +12,16 @@ OMACLOUD=${1:-target/debug/omacloud}
 RESTIC=${RESTIC:-restic}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-oc() { local dev=$1; shift; "$OMACLOUD" --config "$work/$dev.toml" "$@"; }
+oc() { local dev=$1; shift; "$OMACLOUD" --config "$work/$dev.toml" --styled "$@"; }
+# what prints a secret (a new account's recovery code, export's password)
+# prints only to a terminal: give it one (stderr shows there too)
+oc_tty() {
+  local dev=$1; shift
+  SHELL=/bin/bash script -qefc "$(printf '%q ' "$OMACLOUD" --config "$work/$dev.toml" "$@")" /dev/null </dev/null | tr -d '\r'
+}
 
-oc a init --folder "$work/A" --repo "$work/repo" --coordinator "$work/coord" --device a >"$work/init.txt" 2>/dev/null
-password=$(oc a export 2>/dev/null | sed -n 's/^password: *//p')
+oc_tty a init --folder "$work/A" --repo "$work/repo" --coordinator "$work/coord" --device a >"$work/init.txt"
+password=$(oc_tty a export | sed -n 's/^password: *//p')
 recovery=$(sed -n 's/^recovery code: *//p' "$work/init.txt")
 [ -n "$recovery" ] || { echo "no recovery code in init output"; exit 1; }
 # b joins with the recovery code
@@ -44,14 +50,14 @@ restic_restore "$work/repo" "$password" "$work/restored"
 
 # after a key rotation: the export names the new repository and password,
 # and the old repository is gone
-oc a rotate >/dev/null 2>&1
+oc a rotate --yes >/dev/null 2>&1
 echo "after rotation" >"$work/A/docs/rotated.txt"
 oc a sync >/dev/null 2>&1
 oc b sync >/dev/null 2>&1
 diff -r --no-dereference "$work/A" "$work/B"
 [ ! -e "$work/repo" ] || { echo "old repository still there"; exit 1; }
-repo2=$(oc b export 2>/dev/null | sed -n 's/^repository: *//p')
-password2=$(oc b export 2>/dev/null | sed -n 's/^password: *//p')
+repo2=$(oc_tty b export | sed -n 's/^repository: *//p')
+password2=$(oc_tty b export | sed -n 's/^password: *//p')
 [ "$repo2" != "$work/repo" ] && [ "$password2" != "$password" ]
 restic_restore "$repo2" "$password2" "$work/restored2"
 echo "restic compatibility: ok"

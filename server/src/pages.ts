@@ -182,8 +182,8 @@ and the \`omacloud\` command line tool that drives it. Install with
 
 ## Command line
 
-- [omacloud CLI](${repo}/blob/master/README.md#set-up): \`omacloud --help\` lists every command; \`omacloud status --json\` reports state as JSON. Secrets come from environment variables (OMACLOUD_RECOVERY_CODE, OMACLOUD_JOIN_CODE, OMACLOUD_SECRET_ACCESS_KEY) or a prompt, never arguments
-- [Restoring without Omacloud](${repo}/blob/master/README.md#versions-and-leaving): \`omacloud export\` prints the restic repository location and password
+- [omacloud CLI](${repo}/blob/master/README.md#set-up): \`omacloud --help\` lists every command. Piped, every command prints a JSON envelope ({ok, data, summary} or {ok: false, error: {code, message, hint}}; \`--quiet\` for the data alone) and exits 0, 1, 2 usage, 3 not set up, 4 not found or 5 unreachable; \`omacloud status\` reports state. Commands that print a secret (\`join-code\`, \`export\`, a new account's recovery code) print only to a terminal. Secrets come from environment variables (OMACLOUD_RECOVERY_CODE, OMACLOUD_JOIN_CODE, OMACLOUD_SECRET_ACCESS_KEY) or a prompt, never arguments
+- [Restoring without Omacloud](${repo}/blob/master/README.md#versions-and-leaving): \`omacloud export\` prints the restic repository location and password, in your terminal
 
 ## Omacloud storage
 

@@ -2983,6 +2983,7 @@ version = "0.0.15"
 dependencies = [
  "gtk4",
  "libadwaita",
+ "libc",
  "serde_json",
 ]
 
