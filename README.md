@@ -237,11 +237,16 @@ recovery combine`).
 ## Agent skill
 
 [skills/omacloud/SKILL.md](skills/omacloud/SKILL.md) teaches AI agents to install,
-link, and use omacloud. Install it for your agents with:
+set up, and use omacloud. It is built into the CLI:
 
 ```sh
-npx skills add ferdousbhai/omacloud -g
+omacloud skill install   # ~/.agents/skills/omacloud, linked into ~/.claude/skills
+omacloud skill remove
 ```
+
+A new release refreshes the installed copy automatically; only a copy omacloud
+wrote (marked `.managed-by-omacloud`) is ever changed. Before omacloud is
+installed: `npx skills add ferdousbhai/omacloud -g`.
 
 ## Configuration
 

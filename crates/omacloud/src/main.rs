@@ -10,6 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod agent_skill;
 mod alerts;
 mod dropbox;
 mod hosted;
@@ -198,7 +199,30 @@ enum Cmd {
         #[arg(long = "to-opt", value_parser = parse_kv)]
         to_opts: Vec<(String, String)>,
     },
+    /// Print the agent skill (SKILL.md) built into omacloud, or install it
+    /// for your coding agents
+    Skill {
+        #[command(subcommand)]
+        action: Option<SkillCmd>,
+    },
 }
+
+#[derive(Subcommand)]
+enum SkillCmd {
+    /// Copy SKILL.md to ~/.agents/skills/omacloud/ and link it into
+    /// ~/.claude/skills/ when Claude Code is installed
+    Install,
+    /// Remove the skill and link that `skill install` created; anything
+    /// else is left alone
+    Remove,
+}
+
+const SKILL: agent_skill::Skill = agent_skill::Skill {
+    name: "omacloud",
+    body: include_str!("../../../skills/omacloud/SKILL.md"),
+    cli: "omacloud",
+    version: env!("CARGO_PKG_VERSION"),
+};
 
 #[derive(Subcommand)]
 enum PackagesCmd {
@@ -1143,6 +1167,30 @@ fn main() -> Result<()> {
     )
     .init();
     let cli = Cli::parse();
+    if let Some(home) = agent_skill::home() {
+        agent_skill::refresh(&home, &SKILL);
+    }
+    if let Cmd::Skill { action } = &cli.cmd {
+        let Some(action) = action else {
+            print!("{}", SKILL.body);
+            return Ok(());
+        };
+        let home = agent_skill::home().context("no home directory to install the skill into")?;
+        let (out, done) = match action {
+            SkillCmd::Install => (agent_skill::install(&home, &SKILL)?, "Installed"),
+            SkillCmd::Remove => (agent_skill::remove(&home, &SKILL)?, "Removed"),
+        };
+        for p in &out.paths {
+            println!("{done} {}", p.display());
+        }
+        for n in &out.notices {
+            println!("{n}");
+        }
+        if out.paths.is_empty() && out.notices.is_empty() {
+            println!("Nothing to do.");
+        }
+        return Ok(());
+    }
     let paths = Paths::new(cli.config)?;
     match cli.cmd {
         Cmd::Init {
@@ -1562,6 +1610,7 @@ fn main() -> Result<()> {
             print_leftover(&r);
             Ok(())
         }
+        Cmd::Skill { .. } => unreachable!("handled before loading the config"),
         Cmd::Export { to, to_opts } => {
             let config = load(&paths)?;
             let mut e = engine(&paths, &config)?;
