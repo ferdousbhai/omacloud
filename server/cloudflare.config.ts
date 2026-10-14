@@ -1,9 +1,6 @@
 import { bindings, defineConfig, triggers } from "cf/config";
 
-// `--mode test` (scripts/gateway-sync.sh) runs without the domains: the
-// local dev server would otherwise rewrite every request's Host to theirs,
-// and Host tells sign-in from storage.
-export default defineConfig(({ mode }) => ({
+export default defineConfig({
 	worker: {
 		name: "omacloud",
 		compatibilityDate: "2026-10-05",
@@ -14,7 +11,7 @@ export default defineConfig(({ mode }) => ({
 				enabled: true,
 			},
 		},
-		domains: mode === "test" ? [] : ["omacloud.computer", "storage.omacloud.computer"],
+		domains: ["omacloud.computer", "storage.omacloud.computer"],
 		triggers: [
 			// usage counts for accounts written to, invitation emails, the
 			// waitlist digest, restores and the trash's purge
@@ -67,4 +64,4 @@ export default defineConfig(({ mode }) => ({
 			}),
 		},
 	},
-}));
+});

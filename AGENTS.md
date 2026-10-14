@@ -13,7 +13,7 @@ threat model: docs/design.md; build, test and release: CONTRIBUTING.md.
 | `crates/omacloud-app` | GTK4/libadwaita app; it shells out to the CLI and reads `omacloud status --json`, so keep that output stable |
 | `vendor/rustic_core` | patched rustic_core 0.13 (pack padding, `splice_tree`), wired in through `[patch.crates-io]`; see its `OMACLOUD.md` |
 | `server/` | Cloudflare Worker (TypeScript, `cf` CLI): omacloud.computer (home, privacy, terms, `/llms.txt`, Google sign-in, waitlist, `/api/*`) and storage.omacloud.computer (S3 gateway, chosen by Host). D1 schema in `server/migrations/`. See server/README.md |
-| `scripts/` | end to end checks (`s3-sync.sh`, `bucket-key.sh`, `gateway-sync.sh`, `restic-compat.sh`), release scripts, and `tests/*.py` for installer and release tooling |
+| `scripts/` | end to end checks (`s3-sync.sh`, `bucket-key.sh`, `restic-compat.sh`), release scripts, and `tests/*.py` for installer and release tooling |
 | `pkgbuild/`, `packaging/omarchy-pkgs/` | Arch PKGBUILD and the Omarchy recipe: change them together |
 | `contrib/` | systemd user unit and desktop entry |
 
@@ -54,9 +54,8 @@ scripts need docker (SeaweedFS) and are described in CONTRIBUTING.md.
   `~/.config/omacloud` when testing.
 - Coordination needs create-only writes (`If-None-Match: *`); SeaweedFS has
   them, and some providers lack them on object-locked buckets.
-- The Worker tells sign-in from storage by Host, so local runs drop the
-  custom domains (`--mode test` in `cloudflare.config.ts`;
-  `scripts/gateway-sync.sh` writes its own wrangler config).
+- The Worker tells sign-in from storage by Host: `omacloud.computer` and
+  `storage.omacloud.computer`.
 - `server/deploy.sh` applies D1 migrations before deploying; code assumes
   they're applied. Don't deploy or release from an agent session.
 - Kill test processes with `pkill -x` or by PID, never `pkill -f`; guard

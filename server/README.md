@@ -18,9 +18,7 @@ through.
   `cloudflare.config.ts`; `--turnstile` asks for its secret. Secrets are typed
   at a hidden prompt and piped to Cloudflare; the master key, which account
   keys derive from, is made once by `--first` and never replaced.
-- `npm run check`: types and unit tests. `scripts/gateway-sync.sh` (from the
-  repository root) runs the whole thing locally: SeaweedFS as the bucket, a
-  stand-in for Google, computers signing in and syncing.
+- `npm run check`: types and unit tests.
 
 Storage is by invitation. Whoever signs in from the app without one is put
 on the waitlist (Google checked the address); an address typed on the home
