@@ -19,7 +19,8 @@ cleanup() {
 trap cleanup EXIT
 oc() { local dev=$1; shift; "$OMACLOUD" --config "$work/$dev.toml" --styled "$@"; }
 # what prints a secret (a new account's recovery code, a join code, export)
-# prints only to a terminal: give it one (stderr shows there too)
+# prints only to a terminal: give it one, as stdin and stdout (stderr shows
+# there too)
 on_tty() { SHELL=/bin/bash script -qefc "$(printf '%q ' "$@")" /dev/null </dev/null | tr -d '\r'; }
 oc_tty() { local dev=$1; shift; on_tty "$OMACLOUD" --config "$work/$dev.toml" "$@"; }
 s3=(--repo opendal:s3 --opt "endpoint=$S3_ENDPOINT" --opt "bucket=$S3_BUCKET"
@@ -70,7 +71,8 @@ root_opt=${S3_ROOT:-}/inbucket
 OMACLOUD_SECRET_ACCESS_KEY=$S3_SECRET ns_tty a init --folder "$nw/A" "${s3[@]}" --opt "root=$root_opt" --coordinator bucket --device a >/dev/null
 ns a sync >/dev/null 2>&1
 code=$(ns_tty a join-code | grep '^omacloud-join-')
-fp=$(ns b init --folder "$nw/B" --join-code "$code" --device b 2>&1 | sed -n "s/^this device's fingerprint: //p")
+# the code holds the bucket's keys: never on a command line
+fp=$(OMACLOUD_JOIN_CODE=$code ns b init --folder "$nw/B" --device b 2>&1 | sed -n "s/^this device's fingerprint: //p")
 ns a devices approve "$fp" >/dev/null 2>&1
 ns b sync >/dev/null 2>&1
 echo "from b" >"$nw/B/b.txt"
