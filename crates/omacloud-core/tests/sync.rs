@@ -11,8 +11,8 @@ use std::{
 use anyhow::Result;
 use ed25519_dalek::SigningKey;
 use omacloud_core::{
-    Anchor, Coordinator, DirCoordinator, Engine, Head, HeadError, JoinRequest, Membership,
-    RepoSpec, Setup, Stats, account,
+    Anchor, Coordinator, DirCoordinator, Engine, Head, HeadError, JoinRequest, Membership, RepoSpec, Setup, Stats,
+    account,
     devices::DeviceEntry,
     epoch::{EpochRecord, Grant},
     fingerprint,
@@ -299,10 +299,7 @@ fn outsiders_cannot_sync_or_forge_heads() -> Result<()> {
 
     // not a member: the engine refuses to sync at all
     let err = w.engine("outsider")?.sync().unwrap_err();
-    assert_eq!(
-        err.downcast_ref::<Membership>(),
-        Some(&Membership::NotApproved)
-    );
+    assert_eq!(err.downcast_ref::<Membership>(), Some(&Membership::NotApproved));
 
     // a head it signs and slips in through the coordinator is refused
     let known = w.coord.head()?.unwrap();
@@ -331,18 +328,12 @@ fn join_by_request_and_approval() -> Result<()> {
     // a sees the request with c's fingerprint and approves
     let reqs = a.requests()?;
     assert_eq!(reqs.len(), 1);
-    assert_eq!(
-        fingerprint(&reqs[0].device),
-        fingerprint(&w.public("outsider-c"))
-    );
+    assert_eq!(fingerprint(&reqs[0].device), fingerprint(&w.public("outsider-c")));
     a.approve(&reqs[0])?;
     assert!(a.requests()?.is_empty());
 
     c.sync()?;
-    assert_eq!(
-        fs::read_to_string(w.dir("outsider-c").join("hello.txt"))?,
-        "hi\n"
-    );
+    assert_eq!(fs::read_to_string(w.dir("outsider-c").join("hello.txt"))?, "hi\n");
     Ok(())
 }
 
@@ -383,10 +374,7 @@ fn revoked_devices_are_locked_out() -> Result<()> {
             .unwrap_err();
         let err = err.downcast_ref::<HeadError>().unwrap();
         assert!(
-            matches!(
-                err,
-                HeadError::StaleDevices { .. } | HeadError::UntrustedDevice { .. }
-            ),
+            matches!(err, HeadError::StaleDevices { .. } | HeadError::UntrustedDevice { .. }),
             "{err:?}"
         );
     }
@@ -402,11 +390,7 @@ fn approval_refuses_a_device_shown_another_account() -> Result<()> {
     let mut a = w.engine("a")?;
     a.sync()?;
     // the coordinator showed the joining device a root of its own making
-    let fake_root = hex::encode(
-        SigningKey::generate(&mut rand::rngs::OsRng)
-            .verifying_key()
-            .as_bytes(),
-    );
+    let fake_root = hex::encode(SigningKey::generate(&mut rand::rngs::OsRng).verifying_key().as_bytes());
     let req = JoinRequest::new(&w.keys["outsider"], "outsider", &fake_root);
     w.coord.request(&req)?;
     assert!(a.approve(&a.requests()?[0]).is_err());
@@ -416,15 +400,7 @@ fn approval_refuses_a_device_shown_another_account() -> Result<()> {
     assert!(a.approve(&tampered).is_err());
     // another account's recovery code gets nowhere
     let other = World::new(&["x"])?;
-    assert!(
-        account::join_with_recovery(
-            w.coord.as_ref(),
-            &other.recovery_code,
-            &w.keys["outsider"],
-            "o"
-        )
-        .is_err()
-    );
+    assert!(account::join_with_recovery(w.coord.as_ref(), &other.recovery_code, &w.keys["outsider"], "o").is_err());
     Ok(())
 }
 
@@ -469,10 +445,7 @@ fn rotation_leaves_protected_files_for_later() -> Result<()> {
     fs::write(&state, serde_json::to_vec(&json)?)?;
     let mut a = w.engine("a")?;
     a.sync()?;
-    assert!(
-        !Path::new(&w.repo.repository).exists(),
-        "old epoch left behind"
-    );
+    assert!(!Path::new(&w.repo.repository).exists(), "old epoch left behind");
     assert_eq!(a.repository()?.2, 1);
     Ok(())
 }
@@ -495,10 +468,7 @@ fn rotation_locks_out_removed_devices_and_keeps_history() -> Result<()> {
     a.revoke(&w.public("c"))?;
     let rotated = a.rotate()?;
     assert_eq!(rotated.epoch, 1);
-    assert!(
-        !Path::new(&w.repo.repository).exists(),
-        "old repository left behind"
-    );
+    assert!(!Path::new(&w.repo.repository).exists(), "old repository left behind");
     let record = w.coord.epochs()?.pop().unwrap();
     assert!(!record.keys.contains_key(&w.public("c")));
     assert!(record.keys.contains_key(&w.public("b")));
@@ -579,8 +549,7 @@ fn concurrent_devices_converge_without_losing_writes() -> Result<()> {
                         rng % m
                     };
                     let dir = e.folder().to_path_buf();
-                    let (mut written, mut on_disk, mut changed) =
-                        (Vec::new(), BTreeMap::new(), Vec::new());
+                    let (mut written, mut on_disk, mut changed) = (Vec::new(), BTreeMap::new(), Vec::new());
                     for round in 0..120 {
                         let n = next(6);
                         let rel = format!("d{}/f{}.txt", n % 2, n / 2);
@@ -720,14 +689,8 @@ fn versions_and_point_in_time_restore() -> Result<()> {
     a.sync()?;
 
     let v = a.versions(&f)?;
-    let summary: Vec<_> = v
-        .iter()
-        .map(|v| (v.seq, v.device.as_str(), v.size))
-        .collect();
-    assert_eq!(
-        summary,
-        [(1, "a", Some(8)), (3, "b", Some(15)), (4, "a", None)]
-    );
+    let summary: Vec<_> = v.iter().map(|v| (v.seq, v.device.as_str(), v.size)).collect();
+    assert_eq!(summary, [(1, "a", Some(8)), (3, "b", Some(15)), (4, "a", None)]);
 
     // the deleted file's first draft comes back from head 1
     let out = w.tmp.path().join("restored/essay.md");
@@ -875,12 +838,7 @@ fn empty_directories_sync() -> Result<()> {
     let st = b.sync()?;
     assert_eq!(st.conflicts, 0);
     a.sync()?;
-    assert!(fs::read_dir(&db)?.all(|e| {
-        !e.unwrap()
-            .file_name()
-            .to_string_lossy()
-            .contains("sync-conflict")
-    }));
+    assert!(fs::read_dir(&db)?.all(|e| { !e.unwrap().file_name().to_string_lossy().contains("sync-conflict") }));
 
     // nothing echoes back after a restart
     b.request_rescan();
@@ -897,11 +855,7 @@ impl World {
         fs::create_dir_all(&dir)?;
         let home = self.home(device);
         fs::create_dir_all(&home)?;
-        let mut setup = self.setup(
-            device,
-            dir,
-            Some(self.tmp.path().join(format!("{device}.state.json"))),
-        );
+        let mut setup = self.setup(device, dir, Some(self.tmp.path().join(format!("{device}.state.json"))));
         setup.settings = Some(omacloud_core::SettingsSetup {
             home,
             manifest: omacloud_core::settings::Manifest::bundled(),
@@ -958,16 +912,8 @@ fn settings_follow_the_dots_manifest_and_merge() -> Result<()> {
     assert!(fs::read_dir(w.tmp.path().join("a-backups/history"))?.count() > 0);
 
     // overlapping edits: b keeps its version and holds a's until resolved
-    write(
-        &ha,
-        bindings,
-        "bind 1 (a again)\nbind 2\nbind 3\nbind 4 (b)\n",
-    );
-    write(
-        &hb,
-        bindings,
-        "bind 1 (b too)\nbind 2\nbind 3\nbind 4 (b)\n",
-    );
+    write(&ha, bindings, "bind 1 (a again)\nbind 2\nbind 3\nbind 4 (b)\n");
+    write(&hb, bindings, "bind 1 (b too)\nbind 2\nbind 3\nbind 4 (b)\n");
     a.notice([ha.join(bindings)]);
     b.notice([hb.join(bindings)]);
     a.sync()?;
@@ -1002,11 +948,7 @@ fn settings_follow_the_dots_manifest_and_merge() -> Result<()> {
     assert!(!hb.join(bindings).exists());
 
     // history covers settings too
-    assert!(
-        a.versions(&Path::new(".omacloud/settings").join(bindings))?
-            .len()
-            >= 3
-    );
+    assert!(a.versions(&Path::new(".omacloud/settings").join(bindings))?.len() >= 3);
     Ok(())
 }
 
@@ -1024,11 +966,7 @@ fn settings_stand_down_next_to_a_dotfile_manager() -> Result<()> {
     b.sync()?;
     assert!(b.settings_status().dormant.is_some());
     assert_eq!(fs::read_to_string(hb.join(".bashrc"))?, "b's own\n");
-    assert!(
-        fs::symlink_metadata(hb.join(".bashrc"))?
-            .file_type()
-            .is_symlink()
-    );
+    assert!(fs::symlink_metadata(hb.join(".bashrc"))?.file_type().is_symlink());
     Ok(())
 }
 
@@ -1103,10 +1041,7 @@ fn own_bucket_location_and_credentials_travel_with_the_key() -> Result<()> {
     let bucket = |tmp: &Path| RepoSpec {
         repository: "opendal:fs".into(),
         options: [
-            (
-                "root".to_string(),
-                tmp.join("bucket").to_string_lossy().into_owned(),
-            ),
+            ("root".to_string(), tmp.join("bucket").to_string_lossy().into_owned()),
             ("access_key_id".to_string(), "not-needed-by-fs".to_string()),
         ]
         .into(),
@@ -1144,10 +1079,7 @@ fn own_bucket_location_and_credentials_travel_with_the_key() -> Result<()> {
         spec.options.get("access_key_id").map(String::as_str),
         Some("not-needed-by-fs")
     );
-    assert_eq!(
-        spec.options.get("connections").map(String::as_str),
-        Some("2")
-    );
+    assert_eq!(spec.options.get("connections").map(String::as_str), Some("2"));
     assert!(!w.tmp.path().join("nowhere").exists());
     // the location isn't this device's limit to share
     assert!(!secret.storage.unwrap().options.contains_key("connections"));
@@ -1167,19 +1099,14 @@ fn bandwidth_cap_holds() -> Result<()> {
     let dir = w.dir("a");
     fs::create_dir_all(&dir)?;
     let mut setup = w.setup("a", dir.clone(), None);
-    _ = setup
-        .repo
-        .options
-        .insert("bandwidth".into(), "200KB".into());
+    _ = setup.repo.options.insert("bandwidth".into(), "200KB".into());
     let mut a = Engine::new(setup, w.coord.clone())?;
     // incompressible, so the upload is really about this size
     let mut seed = 1u64;
     for i in 0..60 {
         let data: Vec<u8> = (0..10_000)
             .map(|_| {
-                seed = seed
-                    .wrapping_mul(6364136223846793005)
-                    .wrapping_add(1442695040888963407);
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                 (seed >> 56) as u8
             })
             .collect();
@@ -1188,14 +1115,10 @@ fn bandwidth_cap_holds() -> Result<()> {
     let t = std::time::Instant::now();
     a.sync()?;
     let took = t.elapsed();
-    let moved =
-        omacloud_core::throttle::THROTTLED_READ_WRITE.load(std::sync::atomic::Ordering::Relaxed);
+    let moved = omacloud_core::throttle::THROTTLED_READ_WRITE.load(std::sync::atomic::Ordering::Relaxed);
     assert!(moved >= 600_000, "only {moved} bytes went through the cap");
     // 600 KB at 200 KB/s, less a second of credit
-    assert!(
-        took >= std::time::Duration::from_millis(1800),
-        "took {took:?}"
-    );
+    assert!(took >= std::time::Duration::from_millis(1800), "took {took:?}");
     Ok(())
 }
 
@@ -1205,20 +1128,10 @@ impl World {
         self.engine_home_named(device, add, skip, &[])
     }
 
-    fn engine_home_named(
-        &self,
-        device: &str,
-        add: &[&str],
-        skip: &[&str],
-        names: &[(&str, &str)],
-    ) -> Result<Engine> {
+    fn engine_home_named(&self, device: &str, add: &[&str], skip: &[&str], names: &[(&str, &str)]) -> Result<Engine> {
         let home = self.home(device);
         fs::create_dir_all(&home)?;
-        let mut setup = self.setup(
-            device,
-            home,
-            Some(self.tmp.path().join(format!("{device}.state.json"))),
-        );
+        let mut setup = self.setup(device, home, Some(self.tmp.path().join(format!("{device}.state.json"))));
         setup.folders = Some(omacloud_core::Folders {
             add: add.iter().map(|s| (*s).to_string()).collect(),
             skip: skip.iter().map(|s| (*s).to_string()).collect(),
@@ -1293,10 +1206,7 @@ fn folders_match_across_languages() -> Result<()> {
     de.sync()?;
     let mut en = w.engine_home("en", &["Documents"], &[])?;
     en.sync()?;
-    assert_eq!(
-        fs::read_to_string(hen.join("Documents/brief.md"))?,
-        "hallo\n"
-    );
+    assert_eq!(fs::read_to_string(hen.join("Documents/brief.md"))?, "hallo\n");
     assert!(!hen.join("Dokumente").exists());
 
     // an edit on the English side lands in Dokumente, and a watcher's
@@ -1305,10 +1215,7 @@ fn folders_match_across_languages() -> Result<()> {
     en.notice([hen.join("Documents/brief.md")]);
     en.sync()?;
     de.sync()?;
-    assert_eq!(
-        fs::read_to_string(hde.join("Dokumente/brief.md"))?,
-        "hello\n"
-    );
+    assert_eq!(fs::read_to_string(hde.join("Dokumente/brief.md"))?, "hello\n");
     write(&hde, "Dokumente/neu.md", "neu\n");
     de.notice([hde.join("Dokumente/neu.md")]);
     de.sync()?;
@@ -1339,12 +1246,7 @@ fn interrupted_first_pull_resumes() -> Result<()> {
     let st = b.sync()?;
     assert_eq!(st.conflicts, 0);
     assert_eq!(digest(&da), digest(&db));
-    assert!(!fs::read_dir(&db)?.any(|e| {
-        e.unwrap()
-            .file_name()
-            .to_string_lossy()
-            .contains("sync-conflict")
-    }));
+    assert!(!fs::read_dir(&db)?.any(|e| { e.unwrap().file_name().to_string_lossy().contains("sync-conflict") }));
     Ok(())
 }
 
@@ -1460,10 +1362,7 @@ fn a_setting_saved_during_a_pull_is_kept() -> Result<()> {
     write(&hb, bindings, "bind 1 (b, unseen)\n");
     let st = b.sync()?;
     assert_eq!(st.conflicts, 1);
-    assert_eq!(
-        fs::read_to_string(hb.join(bindings))?,
-        "bind 1 (b, unseen)\n"
-    );
+    assert_eq!(fs::read_to_string(hb.join(bindings))?, "bind 1 (b, unseen)\n");
     assert_eq!(b.settings_status().held, [PathBuf::from(bindings)]);
     // held versions and backups are this user's alone
     use std::os::unix::fs::PermissionsExt;
@@ -1506,9 +1405,7 @@ struct FakeNm {
 
 impl FakeNm {
     fn turn_down(&self) -> Result<()> {
-        _ = self
-            .changes
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        _ = self.changes.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if self.refuse.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(omacloud_core::merged::Refused("refused".into()).into());
         }
@@ -1531,9 +1428,7 @@ impl omacloud_core::wifi::Manager for FakeNm {
         Ok(())
     }
     fn saved(&self) -> Result<Vec<omacloud_core::wifi::Saved>> {
-        _ = self
-            .asked
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        _ = self.asked.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(self.saved.lock().unwrap().clone())
     }
     fn active(&self) -> Vec<String> {
@@ -1575,13 +1470,7 @@ impl omacloud_core::wifi::Manager for FakeNm {
 
 impl FakeNm {
     fn ssids(&self) -> Vec<String> {
-        let mut v: Vec<String> = self
-            .saved
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|s| s.name.clone())
-            .collect();
+        let mut v: Vec<String> = self.saved.lock().unwrap().iter().map(|s| s.name.clone()).collect();
         v.sort();
         v
     }
@@ -1628,15 +1517,9 @@ impl World {
                 .into_iter()
                 .map(|c| Arc::new(c) as Arc<dyn omacloud_core::merged::Group>)
                 .collect();
-        groups.push(Arc::new(omacloud_core::wifi::Wifi::new(Box::new(
-            nm.clone(),
-        ))));
+        groups.push(Arc::new(omacloud_core::wifi::Wifi::new(Box::new(nm.clone()))));
         groups.push(Arc::new(omacloud_core::agents::Agents::new(&home)));
-        let mut setup = self.setup(
-            device,
-            dir,
-            Some(self.tmp.path().join(format!("{device}.state.json"))),
-        );
+        let mut setup = self.setup(device, dir, Some(self.tmp.path().join(format!("{device}.state.json"))));
         setup.settings = Some(omacloud_core::SettingsSetup {
             home,
             manifest: omacloud_core::settings::Manifest::bundled(),
@@ -1860,18 +1743,12 @@ fn new_dotfiles_sync_and_a_missing_one_is_no_delete() -> Result<()> {
     a.sync()?;
     b.sync()?;
     a.sync()?;
-    assert_eq!(
-        fs::read_to_string(hb.join(".gitconfig"))?,
-        "[user]\n\tname = A\n"
-    );
+    assert_eq!(fs::read_to_string(hb.join(".gitconfig"))?, "[user]\n\tname = A\n");
     assert!(hb.join(".config/nvim/lua/plugins/theme.lua").is_file());
     assert!(!hb.join(".config/fish/fish_variables").exists());
     assert!(!hb.join(".npmrc").exists());
     // b never had .gitconfig's history before; a lacked .inputrc: both arrive
-    assert_eq!(
-        fs::read_to_string(ha.join(".inputrc"))?,
-        "set bell-style none\n"
-    );
+    assert_eq!(fs::read_to_string(ha.join(".inputrc"))?, "set bell-style none\n");
     let shell = b
         .settings_status()
         .groups
@@ -2027,13 +1904,8 @@ fn an_engine_added_while_chromium_writes_its_database_is_kept() -> Result<()> {
     b.sync()?;
     let keywords = |dir: &Path| -> Vec<String> {
         let db = rusqlite::Connection::open(dir.join("Default/Web Data")).unwrap();
-        let mut st = db
-            .prepare("SELECT keyword FROM keywords ORDER BY keyword")
-            .unwrap();
-        st.query_map([], |r| r.get(0))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect()
+        let mut st = db.prepare("SELECT keyword FROM keywords ORDER BY keyword").unwrap();
+        st.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect()
     };
     assert!(keywords(&cb).contains(&"fromB".to_string()));
     // written once readable, with both (reading it above may have
@@ -2155,10 +2027,7 @@ fn agent_settings_and_skills_travel_but_never_their_sign_ins() -> Result<()> {
     assert!(!hb.join(".claude/.credentials.json").exists());
     assert!(!hb.join(".codex/auth.json").exists());
     // nothing written through b's link
-    assert_eq!(
-        fs::read_to_string(hb.join("repo/skills/mine/SKILL.md"))?,
-        "b's own\n"
-    );
+    assert_eq!(fs::read_to_string(hb.join("repo/skills/mine/SKILL.md"))?, "b's own\n");
     assert!(b.settings_status().dormant.is_none());
     // a binary or a sign-in noticed by the watcher still isn't pushed
     fs::write(ha.join(".claude/skills/review/icon.png"), b"\x89PNG\0\0")?;
@@ -2186,10 +2055,7 @@ fn a_browsers_busy_files_cost_nothing_and_its_look_leaves_wifi_alone() -> Result
     let mut a = w.engine_with_apps("a", &nm)?;
     a.sync()?;
     // the journals a browser writes every second: nothing to do
-    assert!(!a.notice([
-        ca.join("Default/Cookies-journal"),
-        ca.join("Default/History")
-    ]));
+    assert!(!a.notice([ca.join("Default/Cookies-journal"), ca.join("Default/History")]));
     assert!(!a.has_pending());
     // its bookmarks: a look at Chromium, not at Wi-Fi
     let asked = nm.asked.load(std::sync::atomic::Ordering::Relaxed);
@@ -2206,22 +2072,12 @@ fn codex_trust_stays_put_while_its_settings_travel() -> Result<()> {
     let config = |model: &str, projects: &[&str]| {
         let mut c = format!("model = \"{model}\"\n");
         for p in projects {
-            c.push_str(&format!(
-                "\n[projects.\"{p}\"]\ntrust_level = \"trusted\"\n"
-            ));
+            c.push_str(&format!("\n[projects.\"{p}\"]\ntrust_level = \"trusted\"\n"));
         }
         c
     };
-    write(
-        &ha,
-        ".codex/config.toml",
-        &config("gpt-5", &["/home/a/work"]),
-    );
-    write(
-        &hb,
-        ".codex/config.toml",
-        &config("gpt-5", &["/home/b/play"]),
-    );
+    write(&ha, ".codex/config.toml", &config("gpt-5", &["/home/a/work"]));
+    write(&hb, ".codex/config.toml", &config("gpt-5", &["/home/b/play"]));
     let nm = FakeNm::default();
     let (mut a, mut b) = (w.engine_with_apps("a", &nm)?, w.engine_with_apps("b", &nm)?);
     a.sync()?;
@@ -2309,11 +2165,7 @@ fn the_default_engine_kept_here_isnt_written_again_and_again() -> Result<()> {
     assert_ne!(item.state, "waiting");
     // b's default is still there
     let db = rusqlite::Connection::open(cb.join("Default/Web Data"))?;
-    let n: i64 = db.query_row(
-        "SELECT COUNT(*) FROM keywords WHERE keyword = 'm'",
-        [],
-        |r| r.get(0),
-    )?;
+    let n: i64 = db.query_row("SELECT COUNT(*) FROM keywords WHERE keyword = 'm'", [], |r| r.get(0))?;
     assert_eq!(n, 1);
     Ok(())
 }
@@ -2396,10 +2248,7 @@ fn a_change_networkmanager_turns_down_is_tried_once_and_said() -> Result<()> {
     for _ in 0..4 {
         b.sync()?;
     }
-    assert_eq!(
-        nb.changes.load(std::sync::atomic::Ordering::Relaxed),
-        tried + 1
-    );
+    assert_eq!(nb.changes.load(std::sync::atomic::Ordering::Relaxed), tried + 1);
     let copies = fs::read_dir(w.tmp.path().join("b-merged/backups/history"))?
         .flatten()
         .filter(|d| d.path().join("wifi").is_dir())
@@ -2433,11 +2282,7 @@ impl omacloud_core::merged::Group for FlakyApp {
     fn docs(&self) -> Vec<String> {
         vec!["doc.json".into()]
     }
-    fn capture(
-        &self,
-        _doc: &str,
-        _applied: Option<&serde_json::Value>,
-    ) -> Result<Option<serde_json::Value>> {
+    fn capture(&self, _doc: &str, _applied: Option<&serde_json::Value>) -> Result<Option<serde_json::Value>> {
         Ok(Some(self.state.lock().unwrap().clone()))
     }
     fn busy(&self, _doc: &str) -> Option<String> {
@@ -2475,11 +2320,7 @@ impl omacloud_core::merged::Group for FlakyApp {
             conflicts: Vec::new(),
         }
     }
-    fn status(
-        &self,
-        _mirror: &Path,
-        _waiting: &[(String, String)],
-    ) -> Vec<omacloud_core::merged::Item> {
+    fn status(&self, _mirror: &Path, _waiting: &[(String, String)]) -> Vec<omacloud_core::merged::Item> {
         vec![omacloud_core::merged::Item {
             group: "flaky".into(),
             title: "Flaky".into(),
@@ -2499,20 +2340,12 @@ impl omacloud_core::merged::Group for FlakyApp {
 }
 
 impl World {
-    fn engine_with_group(
-        &self,
-        device: &str,
-        group: Arc<dyn omacloud_core::merged::Group>,
-    ) -> Result<Engine> {
+    fn engine_with_group(&self, device: &str, group: Arc<dyn omacloud_core::merged::Group>) -> Result<Engine> {
         let dir = self.dir(device);
         fs::create_dir_all(&dir)?;
         let home = self.home(device);
         fs::create_dir_all(&home)?;
-        let mut setup = self.setup(
-            device,
-            dir,
-            Some(self.tmp.path().join(format!("{device}.state.json"))),
-        );
+        let mut setup = self.setup(device, dir, Some(self.tmp.path().join(format!("{device}.state.json"))));
         setup.settings = Some(omacloud_core::SettingsSetup {
             home,
             manifest: omacloud_core::settings::Manifest::bundled(),
@@ -2681,8 +2514,7 @@ fn nmcli_not_answering_isnt_a_refusal() -> Result<()> {
     omacloud_core::wifi::Manager::change(&na, &na.uuid("Home"), &network("Home", "new"))?;
     let mut a = w.engine_with_apps("a", &na)?;
     a.sync()?;
-    nb.export_fails
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    nb.export_fails.store(true, std::sync::atomic::Ordering::Relaxed);
     let mut b = w.engine_with_apps("b", &nb)?;
     b.sync()?;
     assert_eq!(nb.psk("Home").as_deref(), Some("old"));
@@ -2694,8 +2526,7 @@ fn nmcli_not_answering_isnt_a_refusal() -> Result<()> {
         .unwrap();
     assert_ne!(wifi.state, "refused");
     // it answers again: the next sync takes the change
-    nb.export_fails
-        .store(false, std::sync::atomic::Ordering::Relaxed);
+    nb.export_fails.store(false, std::sync::atomic::Ordering::Relaxed);
     b.sync()?;
     assert_eq!(nb.psk("Home").as_deref(), Some("new"));
     Ok(())

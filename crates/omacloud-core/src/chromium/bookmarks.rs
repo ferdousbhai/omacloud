@@ -80,22 +80,14 @@ pub fn capture(file: &Value) -> Doc {
             kind: kind.to_string(),
             name: str_of(v, "name"),
             url: (kind == "url").then(|| str_of(v, "url")),
-            date_added: v
-                .get("date_added")
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            date_added: v.get("date_added").and_then(Value::as_str).map(str::to_string),
             children: Vec::new(),
         };
         children.push(guid.clone());
         let mut mine = Vec::new();
         _ = doc.insert(guid.clone(), Node::default());
         if kind == "folder" {
-            for c in v
-                .get("children")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
+            for c in v.get("children").and_then(Value::as_array).into_iter().flatten() {
                 walk(c, &guid, doc, &mut mine);
             }
         }
@@ -106,12 +98,7 @@ pub fn capture(file: &Value) -> Doc {
     for root in ROOTS {
         let mut children = Vec::new();
         if let Some(r) = file.pointer(&format!("/roots/{root}")) {
-            for c in r
-                .get("children")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
+            for c in r.get("children").and_then(Value::as_array).into_iter().flatten() {
                 walk(c, root, &mut doc, &mut children);
             }
         }
@@ -128,10 +115,7 @@ pub fn capture(file: &Value) -> Doc {
 }
 
 fn str_of(v: &Value, key: &str) -> String {
-    v.get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+    v.get(key).and_then(Value::as_str).unwrap_or_default().to_string()
 }
 
 /// Three way merge of bookmark documents, node by node (keyed by guid).
@@ -166,11 +150,7 @@ pub fn merge(base: Option<&Doc>, ours: &Doc, theirs: &Doc) -> (Doc, Vec<String>)
     };
 
     // each node: kept or not, and its fields
-    let ids: BTreeSet<&String> = ours
-        .keys()
-        .chain(theirs.keys())
-        .chain(base.keys())
-        .collect();
+    let ids: BTreeSet<&String> = ours.keys().chain(theirs.keys()).chain(base.keys()).collect();
     let mut out = Doc::new();
     for id in &ids {
         let (b, o, t) = (base.get(*id), ours.get(*id), theirs.get(*id));
@@ -206,14 +186,10 @@ pub fn merge(base: Option<&Doc>, ours: &Doc, theirs: &Doc) -> (Doc, Vec<String>)
     }
     for root in ROOTS {
         if !out.contains_key(root) {
-            let n = ours
-                .get(root)
-                .or(theirs.get(root))
-                .cloned()
-                .unwrap_or(Node {
-                    kind: "folder".into(),
-                    ..Node::default()
-                });
+            let n = ours.get(root).or(theirs.get(root)).cloned().unwrap_or(Node {
+                kind: "folder".into(),
+                ..Node::default()
+            });
             _ = out.insert(root.to_string(), n);
         }
     }
@@ -257,10 +233,7 @@ pub fn merge(base: Option<&Doc>, ours: &Doc, theirs: &Doc) -> (Doc, Vec<String>)
                 n.parent = Some(back);
             }
         }
-        conflicts.push(
-            "bookmarks moved into each other on {ME} and another computer; kept {ME}'s moves"
-                .into(),
-        );
+        conflicts.push("bookmarks moved into each other on {ME} and another computer; kept {ME}'s moves".into());
     }
     // can't happen (ours has no cycles), but never loop: park under other
     while let Some(cycle) = find_cycle(&out) {
@@ -347,12 +320,7 @@ fn merge_node(
 /// A folder's children: the side that reordered (this computer's when both
 /// did) gives the order, and the other side's additions go after the
 /// sibling they followed there.
-fn merge_order(
-    base: &[String],
-    ours: &[String],
-    theirs: &[String],
-    members: &BTreeSet<String>,
-) -> Vec<String> {
+fn merge_order(base: &[String], ours: &[String], theirs: &[String], members: &BTreeSet<String>) -> Vec<String> {
     let reordered = |side: &[String]| {
         let common: Vec<&String> = side.iter().filter(|x| base.contains(x)).collect();
         let was: Vec<&String> = base.iter().filter(|x| side.contains(x)).collect();
@@ -372,9 +340,7 @@ fn merge_order(
     let mut prev: Option<&String> = None;
     for x in other {
         if members.contains(x) && !out.contains(x) {
-            let at = prev
-                .and_then(|p| out.iter().position(|y| y == p))
-                .map_or(0, |i| i + 1);
+            let at = prev.and_then(|p| out.iter().position(|y| y == p)).map_or(0, |i| i + 1);
             out.insert(at, x.clone());
         }
         if out.contains(x) {
@@ -421,17 +387,13 @@ fn alias_same(ours: &Doc, theirs: &Doc) -> Doc {
                 continue;
             }
             let Some(t) = theirs.get(c) else { continue };
-            let same = ours
-                .get(&op)
-                .into_iter()
-                .flat_map(|n| &n.children)
-                .find(|oc| {
-                    !theirs.contains_key(*oc)
-                        && !taken.contains(*oc)
-                        && ours
-                            .get(*oc)
-                            .is_some_and(|o| o.kind == t.kind && o.name == t.name && o.url == t.url)
-                });
+            let same = ours.get(&op).into_iter().flat_map(|n| &n.children).find(|oc| {
+                !theirs.contains_key(*oc)
+                    && !taken.contains(*oc)
+                    && ours
+                        .get(*oc)
+                        .is_some_and(|o| o.kind == t.kind && o.name == t.name && o.url == t.url)
+            });
             if let Some(oc) = same {
                 _ = taken.insert(oc.clone());
                 _ = map.insert(c.clone(), oc.clone());
@@ -458,24 +420,13 @@ pub fn write(file: Option<&Value>, doc: &Doc) -> Value {
     let mut old: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
     let mut max_id: u64 = 0;
     fn index(v: &Value, old: &mut BTreeMap<String, Map<String, Value>>, max_id: &mut u64) {
-        if let Some(id) = v
-            .get("id")
-            .and_then(Value::as_str)
-            .and_then(|s| s.parse().ok())
-        {
+        if let Some(id) = v.get("id").and_then(Value::as_str).and_then(|s| s.parse().ok()) {
             *max_id = (*max_id).max(id);
         }
         if let (Some(g), Some(m)) = (v.get("guid").and_then(Value::as_str), v.as_object()) {
-            _ = old
-                .entry(g.to_ascii_lowercase())
-                .or_insert_with(|| m.clone());
+            _ = old.entry(g.to_ascii_lowercase()).or_insert_with(|| m.clone());
         }
-        for c in v
-            .get("children")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
+        for c in v.get("children").and_then(Value::as_array).into_iter().flatten() {
             index(c, old, max_id);
         }
     }
@@ -497,12 +448,7 @@ pub fn write(file: Option<&Value>, doc: &Doc) -> Value {
         doc: &'a Doc,
         old: &'a BTreeMap<String, Map<String, Value>>,
     }
-    fn build(
-        ctx: &Ctx,
-        guid: &str,
-        used: &mut BTreeSet<u64>,
-        next_id: &mut dyn FnMut() -> u64,
-    ) -> Option<Value> {
+    fn build(ctx: &Ctx, guid: &str, used: &mut BTreeSet<u64>, next_id: &mut dyn FnMut() -> u64) -> Option<Value> {
         let n = ctx.doc.get(guid)?;
         let mut m = ctx.old.get(guid).cloned().unwrap_or_default();
         let id = m
@@ -525,11 +471,7 @@ pub fn write(file: Option<&Value>, doc: &Doc) -> Value {
         if n.kind == "folder" {
             _ = m.remove("url");
             _ = m.entry("date_modified").or_insert_with(|| json!("0"));
-            let children: Vec<Value> = n
-                .children
-                .iter()
-                .filter_map(|c| build(ctx, c, used, next_id))
-                .collect();
+            let children: Vec<Value> = n.children.iter().filter_map(|c| build(ctx, c, used, next_id)).collect();
             _ = m.insert("children".into(), Value::Array(children));
         } else {
             _ = m.remove("children");
@@ -600,22 +542,14 @@ pub fn checksums(file: &Value) -> (String, String) {
         };
         put(str_of(v, "id").as_bytes());
         // the title as UTF-16, in memory order (little endian here)
-        let title: Vec<u8> = str_of(v, "name")
-            .encode_utf16()
-            .flat_map(u16::to_le_bytes)
-            .collect();
+        let title: Vec<u8> = str_of(v, "name").encode_utf16().flat_map(u16::to_le_bytes).collect();
         put(&title);
         if v.get("type").and_then(Value::as_str) == Some("url") {
             put(b"url");
             put(str_of(v, "url").as_bytes());
         } else {
             put(b"folder");
-            for c in v
-                .get("children")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-            {
+            for c in v.get("children").and_then(Value::as_array).into_iter().flatten() {
                 walk(c, md5, sha);
             }
         }
@@ -626,10 +560,7 @@ pub fn checksums(file: &Value) -> (String, String) {
             walk(v, &mut md5, &mut sha);
         }
     }
-    (
-        hex::encode(md5.finalize()),
-        hex::encode(sha2::Digest::finalize(sha)),
-    )
+    (hex::encode(md5.finalize()), hex::encode(sha2::Digest::finalize(sha)))
 }
 
 /// [`merge`] over JSON documents.

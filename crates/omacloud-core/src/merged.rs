@@ -137,13 +137,7 @@ pub trait Group: Send + Sync {
     /// # Errors
     ///
     /// When writing fails; nothing is half written.
-    fn apply(
-        &self,
-        doc: &str,
-        value: &Value,
-        applied: Option<&Value>,
-        backups: &Path,
-    ) -> Result<()>;
+    fn apply(&self, doc: &str, value: &Value, applied: Option<&Value>, backups: &Path) -> Result<()>;
 
     /// What the last [`Group::apply`] of `doc` held back for now, and why
     /// (a Wi-Fi network in use isn't forgotten under the user): it's tried
@@ -286,11 +280,7 @@ pub fn newest(backups: &Path, rel: &Path) -> Option<PathBuf> {
         .map(|e| e.path())
         .collect();
     stamps.sort();
-    stamps
-        .iter()
-        .rev()
-        .map(|d| d.join(rel))
-        .find(|p| p.is_file())
+    stamps.iter().rev().map(|d| d.join(rel)).find(|p| p.is_file())
 }
 
 /// Whether two files hold the same bytes.

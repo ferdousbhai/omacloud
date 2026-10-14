@@ -106,16 +106,9 @@ pub fn set_contact(service: &str, account: &str, pad: Option<&str>) -> Result<St
     }
 }
 
-fn post(
-    service: &str,
-    path: &str,
-    body: &serde_json::Value,
-) -> Result<ureq::http::Response<ureq::Body>> {
+fn post(service: &str, path: &str, body: &serde_json::Value) -> Result<ureq::http::Response<ureq::Body>> {
     let service = service.trim_end_matches('/');
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .http_status_as_error(false)
-        .build()
-        .into();
+    let agent: ureq::Agent = ureq::Agent::config_builder().http_status_as_error(false).build().into();
     agent
         .post(&format!("{service}{path}"))
         .send_json(body)
@@ -140,10 +133,7 @@ fn credentials(service: &str, grant: &Grant, contact: bool) -> Result<Storage> {
     if !response.status().is_success() {
         bail!("{}", refusal(response.status().as_u16()));
     }
-    response
-        .body_mut()
-        .read_json()
-        .context("reading the key from Omacloud")
+    response.body_mut().read_json().context("reading the key from Omacloud")
 }
 
 /// Sign in with Google in the browser.
@@ -209,20 +199,13 @@ fn browser(service: &str) -> Result<Grant> {
                  you'll get an email when there's room. You can use your own storage \
                  bucket in the meantime"
             }
-            Some("invite") => {
-                "Omacloud storage is by invitation for now: this Google account isn't invited yet"
-            }
+            Some("invite") => "Omacloud storage is by invitation for now: this Google account isn't invited yet",
             Some("closed") => "this Omacloud account is closed",
             Some("busy") => "too many sign-ins from here: wait a minute and try again",
             Some("cancelled") => "sign-in was cancelled",
             _ => "sign-in didn't work: try again",
         };
-        reply(
-            &stream,
-            "200 OK",
-            "Not signed in",
-            &format!("{}.", capitalize(why)),
-        );
+        reply(&stream, "200 OK", "Not signed in", &format!("{}.", capitalize(why)));
         bail!("{why}");
     };
     Ok(Grant { code, verifier })
@@ -243,15 +226,9 @@ pub enum Asked<T> {
 }
 
 /// A request to the key API at `path`, signed with `key`.
-fn ask(
-    service: &str,
-    path: &str,
-    region: &str,
-    key: (&str, &str),
-) -> Result<Asked<serde_json::Value>> {
+fn ask(service: &str, path: &str, region: &str, key: (&str, &str)) -> Result<Asked<serde_json::Value>> {
     let url = format!("{}{path}", service.trim_end_matches('/'));
-    let (status, text) =
-        omacloud_core::bucket::signed_request("POST", &url, region, key.0, key.1, "")?;
+    let (status, text) = omacloud_core::bucket::signed_request("POST", &url, region, key.0, key.1, "")?;
     match status {
         200 => Ok(Asked::Done(
             serde_json::from_str(&text).context("reading Omacloud's answer")?,

@@ -274,9 +274,7 @@ impl Chromium {
             "bookmarks.json" => json("Bookmarks")?
                 .map(|f| serde_json::to_value(bookmarks::capture(&f)))
                 .transpose()?,
-            "search-engines.json" => {
-                search::capture(&profile.join("Web Data"), &self.scratch.join(dir))?
-            }
+            "search-engines.json" => search::capture(&profile.join("Web Data"), &self.scratch.join(dir))?,
             "preferences.json" => json("Preferences")?.map(|p| capture_preferences(&p)),
             _ => json("Preferences")?.map(|p| capture_extensions(&p)),
         })
@@ -307,12 +305,7 @@ impl Chromium {
             .as_ref()
             .and_then(|p| p.pointer("/extensions/external_uninstalls"))
             .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
+            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
             .unwrap_or_default();
         Self::ids(Some(mirror))
             .into_iter()
@@ -326,9 +319,7 @@ impl Chromium {
     /// loaded on Linux in Chromium builds by external_provider_impl.cc). It
     /// reaches every profile of this user data dir.
     fn external(&self, id: &str) -> PathBuf {
-        self.data
-            .join("External Extensions")
-            .join(format!("{id}.json"))
+        self.data.join("External Extensions").join(format!("{id}.json"))
     }
 }
 
@@ -407,9 +398,7 @@ pub fn write_preferences(prefs: &Value, doc: &Value) -> Value {
 #[must_use]
 pub fn capture_extensions(prefs: &Value) -> Value {
     let mut out = Map::new();
-    let settings = prefs
-        .pointer("/extensions/settings")
-        .and_then(Value::as_object);
+    let settings = prefs.pointer("/extensions/settings").and_then(Value::as_object);
     for (id, e) in settings.into_iter().flatten() {
         let location = e.get("location").and_then(Value::as_i64);
         let webstore = e.get("from_webstore").and_then(Value::as_bool) == Some(true);
@@ -446,10 +435,7 @@ impl Group for Chromium {
         let mut out = Vec::new();
         for (name, dir) in self.profiles() {
             let p = self.data.join(&dir);
-            for (doc, file) in
-                DOCS.iter()
-                    .zip(["Bookmarks", "Web Data", "Preferences", "Preferences"])
-            {
+            for (doc, file) in DOCS.iter().zip(["Bookmarks", "Web Data", "Preferences", "Preferences"]) {
                 if p.join(file).is_file() {
                     out.push(format!("{name}/{doc}"));
                 }
@@ -513,13 +499,7 @@ impl Group for Chromium {
         }
     }
 
-    fn apply(
-        &self,
-        doc: &str,
-        value: &Value,
-        _applied: Option<&Value>,
-        backups: &Path,
-    ) -> Result<()> {
+    fn apply(&self, doc: &str, value: &Value, _applied: Option<&Value>, backups: &Path) -> Result<()> {
         let (profile, dir, kind) = self
             .locate(doc)
             .ok_or_else(|| anyhow!("no Chromium profile for {doc}"))?;
@@ -532,9 +512,7 @@ impl Group for Chromium {
             "bookmarks.json" => {
                 let doc: bookmarks::Doc = serde_json::from_value(value.clone())?;
                 let path = profile.join("Bookmarks");
-                let old: Option<Value> = fs::read(&path)
-                    .ok()
-                    .and_then(|b| serde_json::from_slice(&b).ok());
+                let old: Option<Value> = fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok());
                 let new = bookmarks::write(old.as_ref(), &doc);
                 if old.as_ref() == Some(&new) {
                     return Ok(()); // nothing to change: nothing written
@@ -558,8 +536,7 @@ impl Group for Chromium {
                 let mut target = value.clone();
                 if let (Some(k), Some(e), Some(t)) = (
                     keep.as_ref(),
-                    now.as_ref()
-                        .and_then(|n| keep.as_ref().and_then(|k| n.get(k))),
+                    now.as_ref().and_then(|n| keep.as_ref().and_then(|k| n.get(k))),
                     target.as_object_mut(),
                 ) {
                     _ = t.entry(k.clone()).or_insert_with(|| e.clone());
@@ -568,13 +545,11 @@ impl Group for Chromium {
                     return Ok(());
                 }
                 merged::back_up(backups, &rel("Web Data"), &path)?;
-                search::write(&path, value, keep.as_deref())
-                    .with_context(|| format!("writing {}", path.display()))?;
+                search::write(&path, value, keep.as_deref()).with_context(|| format!("writing {}", path.display()))?;
             }
             "preferences.json" => {
                 let path = profile.join("Preferences");
-                let old = Self::preferences(&profile)
-                    .ok_or_else(|| anyhow!("{} isn't readable", path.display()))?;
+                let old = Self::preferences(&profile).ok_or_else(|| anyhow!("{} isn't readable", path.display()))?;
                 let new = write_preferences(&old, value);
                 if new != old {
                     merged::back_up(backups, &rel("Preferences"), &path)?;
@@ -672,10 +647,7 @@ impl Group for Chromium {
                 .collect();
             let ext = merged::read(&mirror.join(&name).join("extensions.json"));
             let names = ext.as_ref().and_then(Value::as_object);
-            let missing = ext
-                .as_ref()
-                .map(|m| self.missing(&profile, m))
-                .unwrap_or_default();
+            let missing = ext.as_ref().map(|m| self.missing(&profile, m)).unwrap_or_default();
             let (queued, by_hand): (Vec<String>, Vec<String>) = missing
                 .into_iter()
                 .partition(|id| dir == "Default" && self.external(id).exists());
@@ -694,11 +666,7 @@ impl Group for Chromium {
                                 .and_then(Value::as_str)
                                 .unwrap_or(id)
                                 .to_string(),
-                            command: vec![
-                                self.command.clone(),
-                                format!("--profile-directory={dir}"),
-                                url.clone(),
-                            ],
+                            command: vec![self.command.clone(), format!("--profile-directory={dir}"), url.clone()],
                             url,
                         }
                     })
@@ -809,10 +777,7 @@ mod tests {
             ]
         );
         // the checksum Chromium wrote, computed the same way
-        assert_eq!(
-            bookmarks::checksums(&file).0,
-            file["checksum"].as_str().unwrap()
-        );
+        assert_eq!(bookmarks::checksums(&file).0, file["checksum"].as_str().unwrap());
         // written back unchanged: the same file
         assert_eq!(bookmarks::write(Some(&file), &doc), file);
 
@@ -837,10 +802,7 @@ mod tests {
         assert_eq!(added["guid"], json!(g));
         assert_eq!(added["date_last_used"], "0");
         assert_ne!(out["checksum"], file["checksum"]);
-        assert_eq!(
-            bookmarks::checksums(&out).0,
-            out["checksum"].as_str().unwrap()
-        );
+        assert_eq!(bookmarks::checksums(&out).0, out["checksum"].as_str().unwrap());
         // what the document doesn't model stays
         let first = &out["roots"]["bookmark_bar"]["children"][0];
         assert_eq!(first["meta_info"], json!({"power_bookmark_meta": ""}));
@@ -916,10 +878,7 @@ mod tests {
         // ours deletes a; theirs renames it
         let (mut o, mut t) = (b.clone(), b.clone());
         _ = o.remove("a");
-        o.get_mut("bookmark_bar")
-            .unwrap()
-            .children
-            .retain(|c| c != "a");
+        o.get_mut("bookmark_bar").unwrap().children.retain(|c| c != "a");
         t.get_mut("a").unwrap().name = "a renamed".into();
         let (m, c) = bookmarks::merge(Some(&b), &o, &t);
         assert_eq!(m["a"].name, "a renamed");
@@ -938,10 +897,7 @@ mod tests {
         for id in ["f", "x", "y"] {
             _ = t.remove(id);
         }
-        t.get_mut("bookmark_bar")
-            .unwrap()
-            .children
-            .retain(|c| c != "f");
+        t.get_mut("bookmark_bar").unwrap().children.retain(|c| c != "f");
         let (m, c) = bookmarks::merge(Some(&b), &o, &t);
         assert!(m.contains_key("f") && m.contains_key("n"));
         // x and y were deleted with f there, and unchanged here: deleted
@@ -982,8 +938,7 @@ mod tests {
         let (mut o, mut t) = (b.clone(), b.clone());
         t.get_mut("bookmark_bar").unwrap().children = vec!["b".into(), "f".into(), "a".into()];
         _ = o.insert("o1".into(), url("bookmark_bar", "o1"));
-        o.get_mut("bookmark_bar").unwrap().children =
-            vec!["a".into(), "o1".into(), "f".into(), "b".into()];
+        o.get_mut("bookmark_bar").unwrap().children = vec!["a".into(), "o1".into(), "f".into(), "b".into()];
         let (m, _) = bookmarks::merge(Some(&b), &o, &t);
         assert_eq!(kids(&m, "bookmark_bar"), ["b", "f", "a", "o1"]);
     }
@@ -1062,7 +1017,8 @@ mod tests {
         // theirs edits w and adds q; ours deletes m
         let mut theirs = doc.clone();
         theirs["aaaaaaaa-0000-4000-8000-000000000004"]["short_name"] = json!("Wiki (edited)");
-        theirs["new-guid"] = json!({"keyword": "q", "short_name": "Q", "url": "https://q.example.com/?q={searchTerms}"});
+        theirs["new-guid"] =
+            json!({"keyword": "q", "short_name": "Q", "url": "https://q.example.com/?q={searchTerms}"});
         let mut ours = doc.clone();
         _ = ours
             .as_object_mut()
@@ -1079,21 +1035,20 @@ mod tests {
         );
         // Chromium's own rows are untouched
         let db = rusqlite::Connection::open(&web)?;
-        let n: i64 = db.query_row("SELECT COUNT(*) FROM keywords WHERE prepopulate_id = 1 OR starter_pack_id = 1 OR safe_for_autoreplace = 1", [], |r| r.get(0))?;
+        let n: i64 = db.query_row(
+            "SELECT COUNT(*) FROM keywords WHERE prepopulate_id = 1 OR starter_pack_id = 1 OR safe_for_autoreplace = 1",
+            [],
+            |r| r.get(0),
+        )?;
         assert_eq!(n, 3);
         drop(db);
         // the default engine here is never deleted
-        search::write(
-            &web,
-            &json!({}),
-            Some("aaaaaaaa-0000-4000-8000-000000000004"),
-        )?;
+        search::write(&web, &json!({}), Some("aaaaaaaa-0000-4000-8000-000000000004"))?;
         assert_eq!(search::read(&web)?.as_object().unwrap().len(), 1);
 
         // first sync of two computers: the same keyword counts once
         let mine = json!({"g1": {"keyword": "w", "url": "https://w.example.com/?q={searchTerms}"}});
-        let there =
-            json!({"g2": {"keyword": "w", "url": "https://w.example.com/?q={searchTerms}"}});
+        let there = json!({"g2": {"keyword": "w", "url": "https://w.example.com/?q={searchTerms}"}});
         let m = c.merge("Default/search-engines.json", None, &mine, &there);
         assert_eq!(m.value, mine);
         Ok(())
@@ -1109,20 +1064,14 @@ mod tests {
         // the store's and an external one, not Chromium's own or unpacked
         assert_eq!(
             have.as_object().unwrap().keys().collect::<Vec<_>>(),
-            [
-                "cjpalhdlnbpafiamejdnhcphjbkeiagm",
-                "nngceckbapebfimnlniiiahkandclblb"
-            ]
+            ["cjpalhdlnbpafiamejdnhcphjbkeiagm", "nngceckbapebfimnlniiiahkandclblb"]
         );
         let mut want = have.clone();
         want["gighmmpiobklfepjocnamgkkbiglidom"] = json!({"name": "Example Tool"});
         assert!(c.pending("Default/extensions.json", &want, Some(&have)));
         c.apply("Default/extensions.json", &want, Some(&have), tmp.path())?;
         let file = data.join("External Extensions/gighmmpiobklfepjocnamgkkbiglidom.json");
-        assert_eq!(
-            read_json(&file),
-            json!({"external_update_url": WEBSTORE_UPDATE})
-        );
+        assert_eq!(read_json(&file), json!({"external_update_url": WEBSTORE_UPDATE}));
         // asked once; Chromium installs it at its next start
         assert!(!c.pending("Default/extensions.json", &want, Some(&have)));
         // the other profile lists it to add by hand, in that profile
@@ -1146,17 +1095,11 @@ mod tests {
         assert!(c.running());
         assert!(c.busy("Default/bookmarks.json").is_some());
         let before = fs::read(data.join("Default/Bookmarks"))?;
-        assert!(
-            c.apply("Default/bookmarks.json", &json!({}), None, tmp.path())
-                .is_err()
-        );
+        assert!(c.apply("Default/bookmarks.json", &json!({}), None, tmp.path()).is_err());
         assert_eq!(fs::read(data.join("Default/Bookmarks"))?, before);
         // a lock a crash left behind (its pid gone) doesn't count
         fs::remove_file(data.join("SingletonLock"))?;
-        symlink(
-            format!("{}-2147483646", hostname()),
-            data.join("SingletonLock"),
-        )?;
+        symlink(format!("{}-2147483646", hostname()), data.join("SingletonLock"))?;
         assert!(!c.running());
         // another computer's, on a shared home, does
         fs::remove_file(data.join("SingletonLock"))?;

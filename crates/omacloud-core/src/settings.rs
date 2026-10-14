@@ -78,9 +78,7 @@ impl Manifest {
                 n + 1
             );
             anyhow::ensure!(
-                Path::new(path)
-                    .components()
-                    .all(|c| matches!(c, Component::Normal(_))),
+                Path::new(path).components().all(|c| matches!(c, Component::Normal(_))),
                 "manifest line {}: `{path}` must be a plain relative path",
                 n + 1
             );
@@ -250,16 +248,9 @@ impl Manifest {
                 return Some(format!("{} is a symlink (a dotfile manager?)", p.display()));
             }
         }
-        for marker in [
-            ".local/share/chezmoi",
-            ".local/share/yadm",
-            ".config/yadm",
-            ".git",
-        ] {
+        for marker in [".local/share/chezmoi", ".local/share/yadm", ".config/yadm", ".git"] {
             if fs::symlink_metadata(home.join(marker)).is_ok() {
-                return Some(format!(
-                    "~/{marker} exists: another dotfile manager is in use"
-                ));
+                return Some(format!("~/{marker} exists: another dotfile manager is in use"));
             }
         }
         None
@@ -280,10 +271,7 @@ pub fn group_of(rel: &Path) -> &'static str {
     match (parts.next().as_deref(), parts.next().as_deref()) {
         (Some(".claude" | ".codex" | ".gemini" | ".cursor" | ".pi" | ".grok" | ".copilot"), _)
         | (Some(".config"), Some("opencode")) => "agents",
-        (
-            Some(".config"),
-            Some("fish" | "git" | "nvim" | "mise" | "starship.toml" | "tmux" | "herdr"),
-        ) => "shell",
+        (Some(".config"), Some("fish" | "git" | "nvim" | "mise" | "starship.toml" | "tmux" | "herdr")) => "shell",
         (Some(".config"), _) => "apps",
         _ => "shell",
     }
@@ -293,14 +281,7 @@ pub fn group_of(rel: &Path) -> &'static str {
 /// directories of installed packages, version control and caches.
 pub const DEEP: (u64, &[&str]) = (
     2 << 20,
-    &[
-        "node_modules",
-        ".git",
-        "__pycache__",
-        "cache",
-        ".cache",
-        "caches",
-    ],
+    &["node_modules", ".git", "__pycache__", "cache", ".cache", "caches"],
 );
 
 /// Whether the file at `path` is text and small enough for a `**` entry.
@@ -327,23 +308,14 @@ pub fn secret_name(rel: &Path) -> bool {
         .file_name()
         .map(|n| n.to_string_lossy().to_lowercase())
         .unwrap_or_default();
-    [
-        "credential",
-        "token",
-        "oauth",
-        "secret",
-        "password",
-        "cookie",
-    ]
-    .iter()
-    .any(|w| name.contains(w))
+    ["credential", "token", "oauth", "secret", "password", "cookie"]
+        .iter()
+        .any(|w| name.contains(w))
         || name == "auth.json"
         || name.starts_with("auth.") && name.ends_with(".lock")
         || name == ".env"
         || name.starts_with(".env.")
-        || [".pem", ".key", ".p12", ".pfx"]
-            .iter()
-            .any(|e| name.ends_with(e))
+        || [".pem", ".key", ".p12", ".pfx"].iter().any(|e| name.ends_with(e))
         || name.starts_with("id_rsa")
         || name.starts_with("id_ed25519")
 }
@@ -364,9 +336,7 @@ fn matches(pattern: &str, rel: &Path) -> bool {
         let base = &pat[..pat.len() - 1];
         return parts.len() > base.len()
             && base.iter().zip(&parts).all(|(p, s)| glob(p, s))
-            && !parts[base.len()..]
-                .iter()
-                .any(|s| DEEP.1.contains(&s.as_str()));
+            && !parts[base.len()..].iter().any(|s| DEEP.1.contains(&s.as_str()));
     }
     pat.len() == parts.len() && pat.iter().zip(&parts).all(|(p, s)| glob(p, s))
 }
@@ -476,9 +446,7 @@ pub fn merge(base: &[u8], ours: &[u8], theirs: &[u8]) -> Option<Vec<u8>> {
     ) else {
         return None;
     };
-    diffy::merge(base, ours, theirs)
-        .ok()
-        .map(String::into_bytes)
+    diffy::merge(base, ours, theirs).ok().map(String::into_bytes)
 }
 
 #[cfg(test)]
@@ -536,10 +504,7 @@ mod tests {
         let base = b"a = 1\nb = 2\nc = 3\n";
         let ours = b"a = 10\nb = 2\nc = 3\n";
         let theirs = b"a = 1\nb = 2\nc = 30\n";
-        assert_eq!(
-            merge(base, ours, theirs).unwrap(),
-            b"a = 10\nb = 2\nc = 30\n"
-        );
+        assert_eq!(merge(base, ours, theirs).unwrap(), b"a = 10\nb = 2\nc = 30\n");
         assert!(merge(base, b"a = 5\nb = 2\nc = 3\n", ours).is_none());
         assert!(merge(b"\xff", b"x", b"y").is_none());
     }
@@ -598,15 +563,9 @@ mod tests {
         // to stand down
         fs::create_dir_all(h.join(".config/nvim/lua/plugins"))?;
         fs::write(h.join(".config/nvim/lua/plugins/editor.lua"), "return {}\n")?;
-        std::os::unix::fs::symlink(
-            "/elsewhere/theme.lua",
-            h.join(".config/nvim/lua/plugins/theme.lua"),
-        )?;
+        std::os::unix::fs::symlink("/elsewhere/theme.lua", h.join(".config/nvim/lua/plugins/theme.lua"))?;
         let m = Manifest::parse(BUNDLED)?;
-        assert!(
-            m.watch_dirs(h)
-                .contains(&(h.join(".config/nvim/lua"), true))
-        );
+        assert!(m.watch_dirs(h).contains(&(h.join(".config/nvim/lua"), true)));
         assert_eq!(m.dormant(h), None);
         assert_eq!(
             m.shared_files(h),
@@ -630,10 +589,7 @@ mod tests {
         put(".claude/skills/review/scripts/run.sh", b"echo\n");
         put(".claude/skills/review/node_modules/x/index.js", b"x");
         put(".claude/skills/review/logo.png", b"\x89PNG\0\0");
-        put(
-            ".claude/skills/review/big.txt",
-            &vec![b'a'; (DEEP.0 + 1) as usize],
-        );
+        put(".claude/skills/review/big.txt", &vec![b'a'; (DEEP.0 + 1) as usize]);
         put(".claude/skills/synced/managed/SKILL.md", b"managed\n");
         put(".claude/skills/review/token.json", b"{}");
         put(".claude/.credentials.json", b"{}");
@@ -664,11 +620,7 @@ mod tests {
         ] {
             assert!(!has(p), "{p} must not sync");
         }
-        assert!(
-            !files
-                .iter()
-                .any(|f| f.starts_with(".claude/skills/outside"))
-        );
+        assert!(!files.iter().any(|f| f.starts_with(".claude/skills/outside")));
         // a link below a deep entry: neither synced nor a dotfile manager
         assert!(m.through_link(h, Path::new(".claude/skills/outside/passwd")));
         assert_eq!(m.dormant(h), None);
@@ -687,14 +639,8 @@ mod tests {
         // watched recursively
         assert!(m.watch_dirs(h).contains(&(h.join(".claude/skills"), true)));
         assert!(Manifest::parse("shared a/**/b\n").is_err());
-        assert_eq!(
-            group_of(Path::new(".claude/skills/review/SKILL.md")),
-            "agents"
-        );
-        assert_eq!(
-            group_of(Path::new(".config/opencode/opencode.json")),
-            "agents"
-        );
+        assert_eq!(group_of(Path::new(".claude/skills/review/SKILL.md")), "agents");
+        assert_eq!(group_of(Path::new(".config/opencode/opencode.json")), "agents");
         assert_eq!(group_of(Path::new(".config/herdr/config.toml")), "shell");
         Ok(())
     }
@@ -715,10 +661,7 @@ mod tests {
         assert!(m.through_link(h, Path::new(".claude/CLAUDE.md")));
         assert!(m.through_link(h, Path::new(".codex/AGENTS.md")));
         assert!(!m.through_link(h, Path::new(".bashrc")));
-        assert_eq!(
-            m.linked(h),
-            [".claude/CLAUDE.md", ".codex"].map(PathBuf::from)
-        );
+        assert_eq!(m.linked(h), [".claude/CLAUDE.md", ".codex"].map(PathBuf::from));
         assert_eq!(m.shared_files(h), [PathBuf::from(".bashrc")]);
         // a link among Omarchy's own still stands settings sync down
         fs::remove_file(h.join(".bashrc"))?;

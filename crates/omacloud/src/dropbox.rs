@@ -46,13 +46,8 @@ pub fn exchange(client_id: &str, client_secret: &str, code: &str) -> Result<Stri
         "Dropbox refused the authorization code ({})",
         response.status()
     );
-    let token: Token = response
-        .body_mut()
-        .read_json()
-        .context("Dropbox token response")?;
-    token
-        .refresh_token
-        .context("Dropbox returned no offline refresh token")
+    let token: Token = response.body_mut().read_json().context("Dropbox token response")?;
+    token.refresh_token.context("Dropbox returned no offline refresh token")
 }
 
 /// Revoke an old authorization after every remaining computer has switched.

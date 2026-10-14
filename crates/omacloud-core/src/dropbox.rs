@@ -48,10 +48,7 @@ impl DropboxCreate {
     /// a refresh token rather than a four-hour access token.
     pub fn new(options: &BTreeMap<String, String>) -> Result<Self> {
         let get = |key: &str| options.get(key).filter(|v| !v.is_empty()).cloned();
-        let root = options
-            .get("root")
-            .map_or("", String::as_str)
-            .trim_matches('/');
+        let root = options.get("root").map_or("", String::as_str).trim_matches('/');
         ensure!(
             root.is_ascii()
                 && (root.is_empty()
@@ -64,8 +61,7 @@ impl DropboxCreate {
             root: root.to_string(),
             client_id: get("client_id").context("Dropbox needs --opt client_id=...")?,
             client_secret: get("client_secret").context("Dropbox needs an app secret")?,
-            refresh_token: get("refresh_token")
-                .context("Dropbox needs an offline refresh token")?,
+            refresh_token: get("refresh_token").context("Dropbox needs an offline refresh token")?,
             token: Mutex::new(None),
             directories: Mutex::new(HashSet::new()),
             agent: ureq::Agent::config_builder()
@@ -80,10 +76,7 @@ impl DropboxCreate {
 
     fn path(&self, key: &str) -> Result<String> {
         ensure!(
-            !key.is_empty()
-                && !key
-                    .split('/')
-                    .any(|p| p.is_empty() || p == "." || p == ".."),
+            !key.is_empty() && !key.split('/').any(|p| p.is_empty() || p == "." || p == ".."),
             "invalid Dropbox object path"
         );
         Ok(if self.root.is_empty() {
@@ -115,14 +108,8 @@ impl DropboxCreate {
             "Dropbox refused this refresh token ({}); authorize again with `omacloud bucket set-key --here-only`",
             response.status()
         );
-        let token: Token = response
-            .body_mut()
-            .read_json()
-            .context("Dropbox token response")?;
-        ensure!(
-            !token.access_token.is_empty(),
-            "Dropbox returned an empty access token"
-        );
+        let token: Token = response.body_mut().read_json().context("Dropbox token response")?;
+        ensure!(!token.access_token.is_empty(), "Dropbox returned an empty access token");
         let until = Instant::now() + Duration::from_secs(token.expires_in.saturating_sub(120));
         *cached = Some((token.access_token.clone(), until));
         Ok(token.access_token)
@@ -142,10 +129,7 @@ impl DropboxCreate {
         match response.status().as_u16() {
             200 => {}
             409 => {
-                let error: DropboxError = response
-                    .body_mut()
-                    .read_json()
-                    .context("Dropbox folder error")?;
+                let error: DropboxError = response.body_mut().read_json().context("Dropbox folder error")?;
                 ensure!(
                     is_conflict(&error.error_summary, "folder"),
                     "Dropbox folder {path}: {}",
@@ -177,11 +161,7 @@ impl DropboxCreate {
 
     fn prepare_dir(&self, dir: &str) -> Result<()> {
         let mut path = String::new();
-        for part in dir
-            .trim_start_matches('/')
-            .split('/')
-            .filter(|p| !p.is_empty())
-        {
+        for part in dir.trim_start_matches('/').split('/').filter(|p| !p.is_empty()) {
             path.push('/');
             path.push_str(part);
             self.create_dir(&path)?;
@@ -211,10 +191,7 @@ impl DropboxCreate {
         match response.status().as_u16() {
             200 => Ok(true),
             409 => {
-                let error: DropboxError = response
-                    .body_mut()
-                    .read_json()
-                    .context("Dropbox upload error")?;
+                let error: DropboxError = response.body_mut().read_json().context("Dropbox upload error")?;
                 if is_conflict(&error.error_summary, "file") {
                     Ok(false)
                 } else {
@@ -276,15 +253,9 @@ mod tests {
                 let mut body = vec![0; len];
                 reader.read_exact(&mut body)?;
                 let (status, answer) = match step {
-                    0 => (
-                        "200 OK",
-                        r#"{"access_token":"temporary","expires_in":14400}"#,
-                    ),
+                    0 => ("200 OK", r#"{"access_token":"temporary","expires_in":14400}"#),
                     1 | 2 => ("200 OK", "{}"),
-                    _ => (
-                        "409 Conflict",
-                        r#"{"error_summary":"path/conflict/file/..."}"#,
-                    ),
+                    _ => ("409 Conflict", r#"{"error_summary":"path/conflict/file/..."}"#),
                 };
                 write!(
                     stream,

@@ -76,10 +76,7 @@ impl Network {
             security: v.get("security")?.as_str()?.to_string(),
             psk: v.get("psk").and_then(Value::as_str).map(str::to_string),
             hidden: v.get("hidden").and_then(Value::as_bool).unwrap_or(false),
-            autoconnect: v
-                .get("autoconnect")
-                .and_then(Value::as_bool)
-                .unwrap_or(true),
+            autoconnect: v.get("autoconnect").and_then(Value::as_bool).unwrap_or(true),
             priority: v.get("priority").and_then(Value::as_i64).unwrap_or(0),
         })
     }
@@ -267,13 +264,7 @@ impl Group for Wifi {
         Some(&Self::as_here(mirror, applied)) != applied
     }
 
-    fn apply(
-        &self,
-        _doc: &str,
-        value: &Value,
-        applied: Option<&Value>,
-        backups: &Path,
-    ) -> Result<()> {
+    fn apply(&self, _doc: &str, value: &Value, applied: Option<&Value>, backups: &Path) -> Result<()> {
         let saved = self.nm.saved()?;
         let mut here: BTreeMap<String, (String, Network)> = BTreeMap::new();
         // networks here that don't sync: never added again, changed or
@@ -282,9 +273,7 @@ impl Group for Wifi {
         for s in &saved {
             match (&s.network, &s.key) {
                 (Ok(n), _) => {
-                    _ = here
-                        .entry(n.key())
-                        .or_insert_with(|| (s.uuid.clone(), n.clone()));
+                    _ = here.entry(n.key()).or_insert_with(|| (s.uuid.clone(), n.clone()));
                 }
                 (Err(_), Some(k)) => _ = unknown.insert(k.clone()),
                 (Err(_), None) => {}
@@ -345,8 +334,7 @@ impl Group for Wifi {
         }
         *self.held.lock().expect("not poisoned") = (in_use > 0).then(|| {
             (
-                "a network forgotten on another computer is in use here; it goes once disconnected"
-                    .to_string(),
+                "a network forgotten on another computer is in use here; it goes once disconnected".to_string(),
                 active.clone(),
             )
         });
@@ -395,20 +383,12 @@ impl Group for Wifi {
         }
         // the network's name stays out of the record
         let label = |_: &str| "a Wi-Fi network".to_string();
-        let mut value = merged::merge_map(
-            base.and_then(Value::as_object),
-            &o,
-            &t,
-            true,
-            &label,
-            &mut conflicts,
-        );
+        let mut value = merged::merge_map(base.and_then(Value::as_object), &o, &t, true, &label, &mut conflicts);
         // once set, it stays (a computer's capture never has it), until
         // the key is changed on a computer: a new password is meant for all
         for (k, v) in &mut value {
             let before = base.and_then(|b| b.get(k));
-            let rekeyed =
-                before.is_some_and(|b| b.get("psk") != o.get(k).and_then(|x| x.get("psk")));
+            let rekeyed = before.is_some_and(|b| b.get("psk") != o.get(k).and_then(|x| x.get("psk")));
             let Some(m) = v.as_object_mut() else { continue };
             if rekeyed {
                 _ = m.remove(OWN_KEYS);
@@ -435,25 +415,18 @@ impl Group for Wifi {
                     let synced = saved.iter().filter(|s| s.network.is_ok()).count();
                     let not: Vec<String> = saved
                         .iter()
-                        .filter_map(|s| {
-                            s.network
-                                .as_ref()
-                                .err()
-                                .map(|why| format!("{}: {why}", s.name))
-                        })
+                        .filter_map(|s| s.network.as_ref().err().map(|why| format!("{}: {why}", s.name)))
                         .collect();
-                    let refused = waiting
-                        .iter()
-                        .find_map(|(_, w)| w.strip_prefix("refused: "));
+                    let refused = waiting.iter().find_map(|(_, w)| w.strip_prefix("refused: "));
                     // a network forgotten elsewhere and in use here
                     let doc = merged::read(&mirror.join("networks.json"));
                     let active = self.nm.active();
                     let in_use = !waiting.is_empty()
                         && saved.iter().any(|s| {
                             active.contains(&s.uuid)
-                                && s.network.as_ref().is_ok_and(|n| {
-                                    doc.as_ref().is_some_and(|d| d.get(n.key()).is_none())
-                                })
+                                && s.network
+                                    .as_ref()
+                                    .is_ok_and(|n| doc.as_ref().is_some_and(|d| d.get(n.key()).is_none()))
                         });
                     let state = match (waiting.is_empty(), refused) {
                         (true, _) => "synced",
@@ -474,9 +447,7 @@ impl Group for Wifi {
                             "; a network forgotten on another computer is in use here, and goes once disconnected",
                         );
                     } else if !waiting.is_empty() {
-                        detail.push_str(
-                            "; changes from another computer are applied at the next sync",
-                        );
+                        detail.push_str("; changes from another computer are applied at the next sync");
                     }
                     (state, detail, not)
                 }
@@ -511,19 +482,13 @@ pub struct Nmcli {
 impl Nmcli {
     #[must_use]
     pub fn new(user: &str) -> Self {
-        Self {
-            user: user.to_string(),
-        }
+        Self { user: user.to_string() }
     }
 
     fn run(args: &[&str], stdin: Option<&str>) -> Result<String> {
         let mut child = Command::new("nmcli")
             .args(args)
-            .stdin(if stdin.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
+            .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -543,12 +508,7 @@ impl Nmcli {
         let change = matches!(args.get(1), Some(&"edit" | &"delete")) && *what == "connection";
         if failed && change && !transient {
             // NetworkManager answered, and said no
-            return Err(merged::Refused(
-                format!("NetworkManager refused a {} ", args[1])
-                    .trim()
-                    .to_string(),
-            )
-            .into());
+            return Err(merged::Refused(format!("NetworkManager refused a {} ", args[1]).trim().to_string()).into());
         }
         if failed {
             bail!("nmcli {what} failed");
@@ -562,20 +522,15 @@ impl Nmcli {
         let out = Self::run(&["-t", "general", "permissions"], None)
             .map_err(|_| "NetworkManager didn't say what this user may change".to_string())?;
         let yes = |p: &str| {
-            out.lines().any(|l| {
-                l.strip_prefix(p)
-                    .is_some_and(|v| v.trim_start_matches(':') == "yes")
-            })
+            out.lines()
+                .any(|l| l.strip_prefix(p).is_some_and(|v| v.trim_start_matches(':') == "yes"))
         };
         if yes("org.freedesktop.NetworkManager.settings.modify.system") {
             Ok(true)
         } else if yes("org.freedesktop.NetworkManager.settings.modify.own") {
             Ok(false)
         } else {
-            Err(
-                "NetworkManager doesn't let this user change saved networks without a password"
-                    .into(),
-            )
+            Err("NetworkManager doesn't let this user change saved networks without a password".into())
         }
     }
 
@@ -587,25 +542,13 @@ impl Nmcli {
         if new {
             c.push_str(&format!("set connection.id {}\n", clean(&n.ssid)));
             if !system {
-                c.push_str(&format!(
-                    "set connection.permissions user:{}\n",
-                    clean(&self.user)
-                ));
+                c.push_str(&format!("set connection.permissions user:{}\n", clean(&self.user)));
             }
         }
         c.push_str(&format!("set 802-11-wireless.ssid {}\n", clean(&n.ssid)));
-        c.push_str(&format!(
-            "set 802-11-wireless.hidden {}\n",
-            yes_no(n.hidden)
-        ));
-        c.push_str(&format!(
-            "set connection.autoconnect {}\n",
-            yes_no(n.autoconnect)
-        ));
-        c.push_str(&format!(
-            "set connection.autoconnect-priority {}\n",
-            n.priority
-        ));
+        c.push_str(&format!("set 802-11-wireless.hidden {}\n", yes_no(n.hidden)));
+        c.push_str(&format!("set connection.autoconnect {}\n", yes_no(n.autoconnect)));
+        c.push_str(&format!("set connection.autoconnect-priority {}\n", n.priority));
         match n.security.as_str() {
             "open" => {
                 if !new {
@@ -615,10 +558,7 @@ impl Nmcli {
             sec => {
                 c.push_str(&format!("set 802-11-wireless-security.key-mgmt {sec}\n"));
                 if let Some(psk) = &n.psk {
-                    c.push_str(&format!(
-                        "set 802-11-wireless-security.psk {}\n",
-                        clean(psk)
-                    ));
+                    c.push_str(&format!("set 802-11-wireless-security.psk {}\n", clean(psk)));
                     c.push_str("set 802-11-wireless-security.psk-flags 0\n");
                 }
             }
@@ -722,10 +662,7 @@ impl Manager for Nmcli {
     }
 
     fn saved(&self) -> Result<Vec<Saved>> {
-        let list = Self::run(
-            &["-t", "-e", "yes", "-f", "TYPE,UUID", "connection", "show"],
-            None,
-        )?;
+        let list = Self::run(&["-t", "-e", "yes", "-f", "TYPE,UUID", "connection", "show"], None)?;
         let mut out = Vec::new();
         for line in list.lines() {
             let Some((kind, uuid)) = line.split_once(':') else {
@@ -757,12 +694,9 @@ impl Manager for Nmcli {
     }
 
     fn active(&self) -> Vec<String> {
-        Self::run(
-            &["-t", "-f", "UUID", "connection", "show", "--active"],
-            None,
-        )
-        .map(|o| o.lines().map(str::to_string).collect())
-        .unwrap_or_default()
+        Self::run(&["-t", "-f", "UUID", "connection", "show", "--active"], None)
+            .map(|o| o.lines().map(str::to_string).collect())
+            .unwrap_or_default()
     }
 
     fn add(&self, n: &Network) -> Result<()> {

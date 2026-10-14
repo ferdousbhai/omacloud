@@ -63,10 +63,7 @@ impl Skill {
         let Ok(entries) = fs::read_dir(dir) else {
             return false;
         };
-        let names: Vec<_> = entries
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name())
-            .collect();
+        let names: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.file_name()).collect();
         names.len() == 1
             && names[0] == SKILL_FILE
             && fs::symlink_metadata(dir.join(SKILL_FILE)).is_ok_and(|m| m.is_file())
@@ -75,9 +72,7 @@ impl Skill {
 
 /// `$HOME`, if set and non-empty.
 pub fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from)
+    std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from)
 }
 
 fn unmanaged(path: &Path, cli: &str) -> io::Error {
@@ -108,9 +103,7 @@ pub fn install(home: &Path, skill: &Skill) -> io::Result<Outcome> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => fs::create_dir_all(&dir)?,
         Err(e) => return Err(e),
         Ok(m) if !m.is_dir() => return Err(unmanaged(&dir, skill.cli)),
-        Ok(_)
-            if !skill.owns(&dir) && !skill.legacy(&dir) && fs::read_dir(&dir)?.next().is_some() =>
-        {
+        Ok(_) if !skill.owns(&dir) && !skill.legacy(&dir) && fs::read_dir(&dir)?.next().is_some() => {
             return Err(unmanaged(&dir, skill.cli));
         }
         Ok(_) => {}
@@ -197,9 +190,7 @@ pub fn refresh(home: &Path, skill: &Skill) -> bool {
     if skill.legacy(&dir) {
         return install(home, skill).is_ok();
     }
-    if !skill.owns(&dir)
-        || fs::read_to_string(dir.join(VERSION_FILE)).is_ok_and(|v| v == skill.version)
-    {
+    if !skill.owns(&dir) || fs::read_to_string(dir.join(VERSION_FILE)).is_ok_and(|v| v == skill.version) {
         return false;
     }
     write_file(&dir.join(SKILL_FILE), skill.body, skill.cli).is_ok()
@@ -287,10 +278,7 @@ mod tests {
         assert!(install(&h, &S).is_err());
         assert!(!refresh(&h, &S));
         remove(&h, &S).unwrap();
-        assert_eq!(
-            fs::read_to_string(elsewhere.join("SKILL.md")).unwrap(),
-            "mine"
-        );
+        assert_eq!(fs::read_to_string(elsewhere.join("SKILL.md")).unwrap(), "mine");
 
         // A hand-authored directory: left alone, as is a foreign Claude entry.
         fs::remove_file(h.join(".agents/skills/demo")).unwrap();

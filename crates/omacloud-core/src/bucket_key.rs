@@ -53,12 +53,7 @@ impl KeyRecord {
     /// # Errors
     ///
     /// If `signer` isn't a member, or a key can't be sealed to.
-    pub fn new(
-        signer: &SigningKey,
-        seq: u64,
-        chain: &DeviceChain,
-        creds: &Credentials,
-    ) -> Result<Self> {
+    pub fn new(signer: &SigningKey, seq: u64, chain: &DeviceChain, creds: &Credentials) -> Result<Self> {
         let me = public_hex(signer);
         let members = chain.members();
         ensure!(
@@ -99,11 +94,7 @@ impl KeyRecord {
             self.seq
         );
         ensure!(
-            self.signer == chain.root
-                || chain
-                    .members_at(self.devices)
-                    .valid
-                    .contains_key(&self.signer),
+            self.signer == chain.root || chain.members_at(self.devices).valid.contains_key(&self.signer),
             "bucket key record {} is signed by a key that wasn't a member",
             self.seq
         );
@@ -117,9 +108,10 @@ impl KeyRecord {
     /// If it wasn't sealed to `key`: this computer was removed before the
     /// change.
     pub fn open(&self, key: &SigningKey) -> Result<Credentials> {
-        let sealed = self.keys.get(&public_hex(key)).context(
-            "the new bucket key wasn't sealed to this computer: it was removed before the change",
-        )?;
+        let sealed = self
+            .keys
+            .get(&public_hex(key))
+            .context("the new bucket key wasn't sealed to this computer: it was removed before the change")?;
         let plain = SecretKey::from(key.to_scalar_bytes())
             .unseal(&hex::decode(sealed)?)
             .map_err(|_| anyhow::anyhow!("the bucket key doesn't open"))?;

@@ -48,10 +48,7 @@ impl Alerts {
                 );
             }
         }
-        if self
-            .requests_at
-            .is_some_and(|t| t.elapsed() < REQUESTS_EVERY)
-        {
+        if self.requests_at.is_some_and(|t| t.elapsed() < REQUESTS_EVERY) {
             return;
         }
         self.requests_at = Some(Instant::now());

@@ -6,17 +6,14 @@ use std::{collections::BTreeMap, fs, path::Path, sync::Arc};
 
 use anyhow::Result;
 use ed25519_dalek::SigningKey;
-use omacloud_core::{
-    BucketCoordinator, Coordinator, Engine, Head, RepoSpec, Setup, account, devices::public_hex,
-};
+use omacloud_core::{BucketCoordinator, Coordinator, Engine, Head, RepoSpec, Setup, account, devices::public_hex};
 
 fn key() -> SigningKey {
     SigningKey::generate(&mut rand::rngs::OsRng)
 }
 
 fn coordinator(dir: &Path) -> Result<Arc<BucketCoordinator>> {
-    let opts: BTreeMap<String, String> =
-        [("root".to_string(), dir.to_string_lossy().into_owned())].into();
+    let opts: BTreeMap<String, String> = [("root".to_string(), dir.to_string_lossy().into_owned())].into();
     Ok(Arc::new(BucketCoordinator::new("fs", &opts)?))
 }
 
@@ -57,45 +54,19 @@ fn an_account_with_no_service() -> Result<()> {
 
     let created = account::create(coordinator(&coord_dir)?.as_ref(), &repo, &ka, "a")?;
     let root = created.root.clone();
-    let mut a = engine(
-        coordinator(&coord_dir)?,
-        &root,
-        "a",
-        &ka,
-        &repo,
-        &t.join("A"),
-    )?;
+    let mut a = engine(coordinator(&coord_dir)?, &root, "a", &ka, &repo, &t.join("A"))?;
     fs::write(t.join("A/hello.txt"), "hi\n")?;
     a.sync()?;
 
     // b joins with the recovery code, c by approval
-    account::join_with_recovery(
-        coordinator(&coord_dir)?.as_ref(),
-        &created.recovery_code,
-        &kb,
-        "b",
-    )?;
-    let mut b = engine(
-        coordinator(&coord_dir)?,
-        &root,
-        "b",
-        &kb,
-        &repo,
-        &t.join("B"),
-    )?;
+    account::join_with_recovery(coordinator(&coord_dir)?.as_ref(), &created.recovery_code, &kb, "b")?;
+    let mut b = engine(coordinator(&coord_dir)?, &root, "b", &kb, &repo, &t.join("B"))?;
     b.sync()?;
     assert_eq!(fs::read_to_string(t.join("B/hello.txt"))?, "hi\n");
     account::request(coordinator(&coord_dir)?.as_ref(), &kc, "c")?;
     let req = a.requests()?.pop().expect("c's request");
     a.approve(&req)?;
-    let mut c = engine(
-        coordinator(&coord_dir)?,
-        &root,
-        "c",
-        &kc,
-        &repo,
-        &t.join("C"),
-    )?;
+    let mut c = engine(coordinator(&coord_dir)?, &root, "c", &kc, &repo, &t.join("C"))?;
     c.sync()?;
     fs::write(t.join("C/from-c.txt"), "c\n")?;
     c.notice(["from-c.txt".into()]);
@@ -130,20 +101,8 @@ fn an_account_with_no_service() -> Result<()> {
     assert!(format!("{err:#}").contains("removed"), "{err:#}");
     // a computer joining after the change came with a key of its own
     let kd = key();
-    account::join_with_recovery(
-        coordinator(&coord_dir)?.as_ref(),
-        &created.recovery_code,
-        &kd,
-        "d",
-    )?;
-    let mut d = engine(
-        coordinator(&coord_dir)?,
-        &root,
-        "d",
-        &kd,
-        &repo,
-        &t.join("D"),
-    )?;
+    account::join_with_recovery(coordinator(&coord_dir)?.as_ref(), &created.recovery_code, &kd, "d")?;
+    let mut d = engine(coordinator(&coord_dir)?, &root, "d", &kd, &repo, &t.join("D"))?;
     assert_eq!(d.latest_bucket_key()?, Some((1, None)));
 
     assert_eq!(a.rotate()?.epoch, 1);
@@ -164,14 +123,7 @@ fn every_write_moves_the_change_marker() -> Result<()> {
     let coord_dir = t.join("coordination");
     let ka = key();
     let created = account::create(coordinator(&coord_dir)?.as_ref(), &repo, &ka, "a")?;
-    let mut a = engine(
-        coordinator(&coord_dir)?,
-        &created.root,
-        "a",
-        &ka,
-        &repo,
-        &t.join("A"),
-    )?;
+    let mut a = engine(coordinator(&coord_dir)?, &created.root, "a", &ka, &repo, &t.join("A"))?;
     a.sync()?;
     let watcher = coordinator(&coord_dir)?;
     let before = watcher.marker()?;
@@ -203,14 +155,7 @@ fn a_stray_entry_far_ahead_is_refused() -> Result<()> {
     let coord_dir = t.join("coordination");
     let ka = key();
     let created = account::create(coordinator(&coord_dir)?.as_ref(), &repo, &ka, "a")?;
-    let mut a = engine(
-        coordinator(&coord_dir)?,
-        &created.root,
-        "a",
-        &ka,
-        &repo,
-        &t.join("A"),
-    )?;
+    let mut a = engine(coordinator(&coord_dir)?, &created.root, "a", &ka, &repo, &t.join("A"))?;
     fs::write(t.join("A/hello.txt"), "hi\n")?;
     a.sync()?;
     let head = fs::read(coord_dir.join("heads/00000000000000000001.json"))?;

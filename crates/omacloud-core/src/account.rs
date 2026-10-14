@@ -13,8 +13,7 @@ use ed25519_dalek::SigningKey;
 use crate::{
     RepoSpec,
     devices::{
-        Action, Anchor, DeviceChain, JoinRequest, genesis, new_recovery_code, public_hex,
-        random_secret, root_key,
+        Action, Anchor, DeviceChain, JoinRequest, genesis, new_recovery_code, public_hex, random_secret, root_key,
     },
     epoch::{EpochChain, EpochRecord, EpochSecret, Grant},
     head::Coordinator,
@@ -36,12 +35,7 @@ pub struct Created {
 ///
 /// If the coordinator already serves an account, or the repository can't be
 /// created (for example because one exists there).
-pub fn create(
-    coord: &dyn Coordinator,
-    repo: &RepoSpec,
-    device: &SigningKey,
-    name: &str,
-) -> Result<Created> {
+pub fn create(coord: &dyn Coordinator, repo: &RepoSpec, device: &SigningKey, name: &str) -> Result<Created> {
     ensure!(
         coord.anchor()?.is_none(),
         "an account already exists here; join it instead"
@@ -84,10 +78,7 @@ pub fn create(
 ///
 /// If there is no account here.
 pub fn request(coord: &dyn Coordinator, device: &SigningKey, name: &str) -> Result<String> {
-    let root = coord
-        .anchor()?
-        .context("no account here yet; create one first")?
-        .root;
+    let root = coord.anchor()?.context("no account here yet; create one first")?.root;
     coord.request(&JoinRequest::new(device, name, &root))?;
     Ok(root)
 }
@@ -99,12 +90,7 @@ pub fn request(coord: &dyn Coordinator, device: &SigningKey, name: &str) -> Resu
 ///
 /// If the code doesn't belong to this account, or the account's records
 /// don't verify.
-pub fn join_with_recovery(
-    coord: &dyn Coordinator,
-    code: &str,
-    device: &SigningKey,
-    name: &str,
-) -> Result<String> {
+pub fn join_with_recovery(coord: &dyn Coordinator, code: &str, device: &SigningKey, name: &str) -> Result<String> {
     let root_key = root_key(code)?;
     let root = public_hex(&root_key);
     let hint = coord.anchor()?.context("no account here yet")?.root;

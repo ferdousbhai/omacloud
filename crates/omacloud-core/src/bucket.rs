@@ -77,9 +77,7 @@ impl BucketCoordinator {
     /// If the options don't make an operator.
     pub fn new(scheme: &str, options: &BTreeMap<String, String>) -> Result<Self> {
         let _guard = runtime().enter();
-        let dropbox = (scheme == "dropbox")
-            .then(|| DropboxCreate::new(options))
-            .transpose()?;
+        let dropbox = (scheme == "dropbox").then(|| DropboxCreate::new(options)).transpose()?;
         if let Some(dropbox) = &dropbox {
             dropbox.prepare_root()?;
         }
@@ -124,14 +122,7 @@ impl BucketCoordinator {
                 self.touch();
                 Ok(true)
             }
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    ErrorKind::ConditionNotMatch | ErrorKind::AlreadyExists
-                ) =>
-            {
-                Ok(false)
-            }
+            Err(e) if matches!(e.kind(), ErrorKind::ConditionNotMatch | ErrorKind::AlreadyExists) => Ok(false),
             Err(e) => Err(e).with_context(|| format!("writing {key}")),
         }
     }
@@ -246,10 +237,7 @@ impl BucketCoordinator {
         if let Some(e) = failed.into_inner().unwrap() {
             return Err(e);
         }
-        Ok(slots
-            .into_iter()
-            .filter_map(|m| m.into_inner().unwrap())
-            .collect())
+        Ok(slots.into_iter().filter_map(|m| m.into_inner().unwrap()).collect())
     }
 
     fn append_seq<T: Serialize>(&self, kind: &'static str, seq: u64, value: &T) -> Result<bool> {
@@ -311,10 +299,7 @@ impl Coordinator for BucketCoordinator {
             .collect()
     }
     fn put_grant(&self, grant: &Grant) -> Result<()> {
-        self.put(
-            &format!("grants/{}-{}.json", grant.device, grant.epoch),
-            grant,
-        )
+        self.put(&format!("grants/{}-{}.json", grant.device, grant.epoch), grant)
     }
     fn requests(&self) -> Result<Vec<JoinRequest>> {
         self.names("requests")?
@@ -366,9 +351,7 @@ pub fn new_bucket_name() -> String {
     use rand::Rng;
     const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
     let mut rng = rand::rngs::OsRng;
-    let tail: String = (0..10)
-        .map(|_| CHARS[rng.gen_range(0..CHARS.len())] as char)
-        .collect();
+    let tail: String = (0..10).map(|_| CHARS[rng.gen_range(0..CHARS.len())] as char).collect();
     format!("omacloud-{tail}")
 }
 
@@ -390,13 +373,7 @@ pub enum Created {
 ///
 /// If the provider refuses for another reason, such as a key that can't
 /// create buckets, or can't be reached.
-pub fn create_bucket(
-    endpoint: &str,
-    region: &str,
-    access_key: &str,
-    secret: &str,
-    name: &str,
-) -> Result<Created> {
+pub fn create_bucket(endpoint: &str, region: &str, access_key: &str, secret: &str, name: &str) -> Result<Created> {
     let mut answer = put_bucket(endpoint, region, access_key, secret, name, "")?;
     if answer.0 >= 400 && answer.1.contains("LocationConstraint") {
         let body = format!(
@@ -416,12 +393,12 @@ pub fn create_bucket(
                 .and_then(|t| t.split("</Code>").next())
                 .unwrap_or("");
             match code {
-                "SignatureDoesNotMatch" | "InvalidAccessKeyId" => anyhow::bail!(
-                    "the provider refused the key: check the access key and the secret key"
-                ),
-                "AccessDenied" => anyhow::bail!(
-                    "this key can't create buckets: make one at the provider and give its name"
-                ),
+                "SignatureDoesNotMatch" | "InvalidAccessKeyId" => {
+                    anyhow::bail!("the provider refused the key: check the access key and the secret key")
+                }
+                "AccessDenied" => {
+                    anyhow::bail!("this key can't create buckets: make one at the provider and give its name")
+                }
                 "TooManyBuckets" => anyhow::bail!(
                     "the provider allows no more buckets here: delete one, or give an existing \
                      bucket's name"
@@ -443,14 +420,7 @@ fn put_bucket(
     body: &str,
 ) -> Result<(u16, String)> {
     let endpoint = endpoint.trim_end_matches('/');
-    signed_request(
-        "PUT",
-        &format!("{endpoint}/{name}"),
-        region,
-        access_key,
-        secret,
-        body,
-    )
+    signed_request("PUT", &format!("{endpoint}/{name}"), region, access_key, secret, body)
 }
 
 /// A PUT or POST to `url` (no query; its path already encoded) signed with AWS
@@ -499,10 +469,7 @@ pub fn signed_request(
         key = hmac(&key, part);
     }
     let signature = hex::encode(hmac(&key, &to_sign));
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .http_status_as_error(false)
-        .build()
-        .into();
+    let agent: ureq::Agent = ureq::Agent::config_builder().http_status_as_error(false).build().into();
     let request = match method {
         "PUT" => agent.put(url),
         "POST" => agent.post(url),

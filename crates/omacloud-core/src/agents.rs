@@ -56,10 +56,7 @@ impl Agents {
     }
 
     fn file(doc: &str) -> Option<(&'static str, Kind)> {
-        FILES
-            .iter()
-            .find(|(d, _, _)| *d == doc)
-            .map(|(_, f, k)| (*f, *k))
+        FILES.iter().find(|(d, _, _)| *d == doc).map(|(_, f, k)| (*f, *k))
     }
 
     /// A file of the home that's a link isn't ours to write through.
@@ -95,9 +92,7 @@ pub fn codex_merge(base: &str, ours: &str, theirs: &str, conflicts: &mut Vec<Str
     }
     let parse = |t: &str| t.parse::<toml_edit::DocumentMut>().ok();
     let (Some(mut o), Some(t)) = (parse(ours), parse(theirs)) else {
-        conflicts.push(format!(
-            "~/.codex/config.toml: not TOML on one side; kept {ME}'s"
-        ));
+        conflicts.push(format!("~/.codex/config.toml: not TOML on one side; kept {ME}'s"));
         return ours.to_string();
     };
     let b = parse(base);
@@ -144,9 +139,7 @@ fn merge_table(
         let b = base.and_then(|b| b.get(&k));
         let t = theirs.get(&k);
         let name = format!("{path}{k}");
-        if let (Some(toml_edit::Item::Table(_)), Some(toml_edit::Item::Table(tt))) =
-            (ours.get(&k), t)
-        {
+        if let (Some(toml_edit::Item::Table(_)), Some(toml_edit::Item::Table(tt))) = (ours.get(&k), t) {
             let bt = b.and_then(toml_edit::Item::as_table);
             if let Some(ot) = ours.get_mut(&k).and_then(toml_edit::Item::as_table_mut) {
                 merge_table(bt, ot, tt, &format!("{name}."), conflicts);
@@ -154,11 +147,7 @@ fn merge_table(
             continue;
         }
         let (o, b, tv) = (ours.get(&k).map(plain), b.map(plain), t.map(plain));
-        let clash = || {
-            format!(
-                "~/.codex/config.toml: {name} differs on {ME} and another computer; kept {ME}'s"
-            )
-        };
+        let clash = || format!("~/.codex/config.toml: {name} differs on {ME} and another computer; kept {ME}'s");
         match (o, tv) {
             (Some(o), Some(tv)) if o == tv => {}
             (Some(o), Some(_)) if Some(&o) == b.as_ref() => {
@@ -242,13 +231,7 @@ impl Group for Agents {
         None
     }
 
-    fn apply(
-        &self,
-        doc: &str,
-        value: &Value,
-        _applied: Option<&Value>,
-        backups: &Path,
-    ) -> Result<()> {
+    fn apply(&self, doc: &str, value: &Value, _applied: Option<&Value>, backups: &Path) -> Result<()> {
         let (rel, kind) = Self::file(doc).ok_or_else(|| anyhow!("no agent file for {doc}"))?;
         let path = self
             .path(rel)
@@ -264,8 +247,7 @@ impl Group for Agents {
             )?,
             Kind::PiJson => {
                 let mut v = value.clone();
-                let mine: Option<Value> =
-                    here.as_deref().and_then(|h| serde_json::from_str(h).ok());
+                let mine: Option<Value> = here.as_deref().and_then(|h| serde_json::from_str(h).ok());
                 if let (Some(m), Some(mine)) = (v.as_object_mut(), mine) {
                     for k in PI_LOCAL {
                         if let Some(x) = mine.get(*k) {
@@ -346,26 +328,13 @@ impl Group for Agents {
         }
         let names: Vec<&str> = docs
             .iter()
-            .map(|d| {
-                if d.starts_with("codex") {
-                    "Codex"
-                } else {
-                    "pi"
-                }
-            })
+            .map(|d| if d.starts_with("codex") { "Codex" } else { "pi" })
             .collect();
         vec![Item {
             group: "agents".into(),
             title: format!("{} settings", names.join(" and ")),
-            state: if waiting.is_empty() {
-                "synced"
-            } else {
-                "waiting"
-            }
-            .into(),
-            detail:
-                "Synced without what belongs to this computer (trusted projects, version notes)"
-                    .into(),
+            state: if waiting.is_empty() { "synced" } else { "waiting" }.into(),
+            detail: "Synced without what belongs to this computer (trusted projects, version notes)".into(),
             install: Vec::new(),
             not_synced: linked,
             scope: "agents/".into(),
@@ -426,8 +395,7 @@ trust_level = "trusted"
         fs::write(home.path().join(".codex/config.toml"), CODEX)?;
         let g = Agents::new(home.path());
         let before = g.capture("codex/config.json", None)?.unwrap();
-        let more =
-            format!("{CODEX}\n[projects.\"/home/someone/new\"]\ntrust_level = \"trusted\"\n");
+        let more = format!("{CODEX}\n[projects.\"/home/someone/new\"]\ntrust_level = \"trusted\"\n");
         fs::write(home.path().join(".codex/config.toml"), more)?;
         assert_eq!(g.capture("codex/config.json", None)?.unwrap(), before);
         // two computers editing different lines merge
@@ -439,12 +407,7 @@ trust_level = "trusted"
         let text = m.value["text"].as_str().unwrap();
         assert!(text.contains("gpt-6") && text.contains("mcp2.example.com"));
         // and writing it keeps this computer's trust
-        g.apply(
-            "codex/config.json",
-            &m.value,
-            None,
-            &home.path().join("backups"),
-        )?;
+        g.apply("codex/config.json", &m.value, None, &home.path().join("backups"))?;
         let now = fs::read_to_string(home.path().join(".codex/config.toml"))?;
         assert!(now.contains("gpt-6") && now.contains("/home/someone/new"));
         Ok(())
@@ -466,10 +429,7 @@ trust_level = "trusted"
             &home.path().join("b"),
         )?;
         let now: Value = serde_json::from_str(&fs::read_to_string(&p)?)?;
-        assert_eq!(
-            now,
-            json!({"theme": "light", "lastChangelogVersion": "1.0.0"})
-        );
+        assert_eq!(now, json!({"theme": "light", "lastChangelogVersion": "1.0.0"}));
         Ok(())
     }
 
@@ -517,10 +477,7 @@ trust_level = "trusted"
             )
             .is_err()
         );
-        assert_eq!(
-            fs::read_to_string(h.join("dots/codex/config.toml"))?,
-            "model = \"x\"\n"
-        );
+        assert_eq!(fs::read_to_string(h.join("dots/codex/config.toml"))?, "model = \"x\"\n");
         let items = g.status(h, &[]);
         assert_eq!(items[0].not_synced.len(), 2);
         Ok(())

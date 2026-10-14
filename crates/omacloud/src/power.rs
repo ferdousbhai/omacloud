@@ -12,12 +12,7 @@ pub fn be_nice() {
         // ioprio_set(IOPRIO_WHO_PROCESS, self, IOPRIO_CLASS_IDLE << 13)
         const IOPRIO_WHO_PROCESS: libc::c_long = 1;
         const IOPRIO_CLASS_IDLE: libc::c_long = 3;
-        _ = libc::syscall(
-            libc::SYS_ioprio_set,
-            IOPRIO_WHO_PROCESS,
-            0,
-            IOPRIO_CLASS_IDLE << 13,
-        );
+        _ = libc::syscall(libc::SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, IOPRIO_CLASS_IDLE << 13);
     }
 }
 
@@ -35,11 +30,7 @@ pub fn battery() -> Option<Battery> {
 }
 
 fn battery_in(root: &Path) -> Option<Battery> {
-    let read = |dir: &Path, f: &str| {
-        fs::read_to_string(dir.join(f))
-            .ok()
-            .map(|s| s.trim().to_string())
-    };
+    let read = |dir: &Path, f: &str| fs::read_to_string(dir.join(f)).ok().map(|s| s.trim().to_string());
     fs::read_dir(root).ok()?.flatten().find_map(|e| {
         let dir = e.path();
         if read(&dir, "type")? != "Battery" {

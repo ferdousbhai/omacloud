@@ -33,12 +33,7 @@ fn enabled() -> bool {
 fn attributes(config: &Path) -> Result<[String; 4]> {
     let path = std::path::absolute(config)?;
     let path = path.to_str().context("config path isn't UTF-8")?;
-    Ok([
-        "service".into(),
-        "omacloud".into(),
-        "config".into(),
-        path.into(),
-    ])
+    Ok(["service".into(), "omacloud".into(), "config".into(), path.into()])
 }
 
 fn encode(key: &BTreeMap<String, String>) -> Result<String> {
@@ -117,10 +112,7 @@ mod tests {
     fn a_key_round_trips_through_base64() -> Result<()> {
         let key = BTreeMap::from([
             ("access_key_id".to_string(), "id".to_string()),
-            (
-                "secret_access_key".to_string(),
-                "a\\\"b\\\\c\nd".to_string(),
-            ),
+            ("secret_access_key".to_string(), "a\\\"b\\\\c\nd".to_string()),
         ]);
         let stored = encode(&key)?;
         assert!(!stored.contains(['\\', '\n']), "{stored}");

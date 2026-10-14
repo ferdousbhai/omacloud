@@ -48,8 +48,7 @@ pub fn parse_rate(text: &str) -> Result<u64> {
 
 /// Bytes that went through a throttle since the process started; for
 /// measuring.
-pub static THROTTLED_READ_WRITE: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+pub static THROTTLED_READ_WRITE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The shared schedule: when the link is next free.
 struct Bucket {
@@ -108,14 +107,7 @@ impl ReadBackend for Throttled {
         Ok(data)
     }
 
-    fn read_partial(
-        &self,
-        tpe: FileType,
-        id: &Id,
-        cacheable: bool,
-        offset: u32,
-        length: u32,
-    ) -> RusticResult<Bytes> {
+    fn read_partial(&self, tpe: FileType, id: &Id, cacheable: bool, offset: u32, length: u32) -> RusticResult<Bytes> {
         self.bucket.take(length as usize);
         self.inner.read_partial(tpe, id, cacheable, offset, length)
     }
@@ -138,13 +130,7 @@ impl WriteBackend for Throttled {
         self.inner.create()
     }
 
-    fn write_bytes(
-        &self,
-        tpe: FileType,
-        id: &Id,
-        cacheable: bool,
-        buf: BytesList,
-    ) -> RusticResult<()> {
+    fn write_bytes(&self, tpe: FileType, id: &Id, cacheable: bool, buf: BytesList) -> RusticResult<()> {
         self.bucket.take(buf.size());
         self.inner.write_bytes(tpe, id, cacheable, buf)
     }

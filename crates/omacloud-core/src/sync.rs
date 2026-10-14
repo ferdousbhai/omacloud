@@ -98,20 +98,12 @@ enum Applied {
 
 /// Whether a merged document holds changes for its app here: pending, and
 /// not just what was written last time with the app as it was then.
-fn waits(
-    s: &SettingsSetup,
-    g: &dyn Group,
-    doc: &str,
-    mirror: &Value,
-    applied: Option<&Value>,
-) -> bool {
+fn waits(s: &SettingsSetup, g: &dyn Group, doc: &str, mirror: &Value, applied: Option<&Value>) -> bool {
     if !g.pending(doc, mirror, applied) {
         return false;
     }
     let tried = merged::read(&s.merged.join("tried").join(g.name()).join(doc));
-    tried.is_none_or(|t| {
-        t.get("mirror") != Some(mirror) || t.get("applied") != Some(applied.unwrap_or(&Value::Null))
-    })
+    tried.is_none_or(|t| t.get("mirror") != Some(mirror) || t.get("applied") != Some(applied.unwrap_or(&Value::Null)))
 }
 
 /// Every computer's settled conflicts of the last week, oldest first.
@@ -315,10 +307,7 @@ pub struct Version {
 /// A local change found against `base`.
 #[derive(Debug)]
 enum Local {
-    Put {
-        node: Box<Node>,
-        source: Option<PathBuf>,
-    },
+    Put { node: Box<Node>, source: Option<PathBuf> },
     Delete,
 }
 
@@ -384,10 +373,7 @@ impl Engine {
                 ..State::default()
             },
         };
-        anyhow::ensure!(
-            state.devices.root == root,
-            "sync state belongs to another account root"
-        );
+        anyhow::ensure!(state.devices.root == root, "sync state belongs to another account root");
         Ok(Self {
             device,
             folder,
@@ -427,8 +413,7 @@ impl Engine {
     pub fn change_bucket_key(&mut self, creds: &crate::bucket_key::Credentials) -> Result<u64> {
         self.refresh_devices()?;
         let seq = self.coord.key_records()?.last().map_or(0, |r| r.seq) + 1;
-        let record =
-            crate::bucket_key::KeyRecord::new(&self.signing, seq, &self.state.devices, creds)?;
+        let record = crate::bucket_key::KeyRecord::new(&self.signing, seq, &self.state.devices, creds)?;
         anyhow::ensure!(
             self.coord.append_key_record(&record)?,
             "another computer changed the bucket key at the same time; look again"
@@ -446,9 +431,7 @@ impl Engine {
     /// If a record doesn't verify, or wasn't sealed to this device although
     /// it was a member then (it was removed before the change).
     #[allow(clippy::type_complexity)]
-    pub fn latest_bucket_key(
-        &mut self,
-    ) -> Result<Option<(u64, Option<crate::bucket_key::Credentials>)>> {
+    pub fn latest_bucket_key(&mut self) -> Result<Option<(u64, Option<crate::bucket_key::Credentials>)>> {
         let Some(record) = self.coord.key_records()?.pop() else {
             return Ok(None);
         };
@@ -456,10 +439,7 @@ impl Engine {
         record.verify(&self.state.devices)?;
         let me = self.device_key();
         let then = self.state.devices.members_at(record.devices);
-        if !record.keys.contains_key(&me)
-            && !then.valid.contains_key(&me)
-            && !then.revoked.contains_key(&me)
-        {
+        if !record.keys.contains_key(&me) && !then.valid.contains_key(&me) && !then.revoked.contains_key(&me) {
             return Ok(Some((record.seq, None)));
         }
         Ok(Some((record.seq, Some(record.open(&self.signing)?))))
@@ -501,10 +481,7 @@ impl Engine {
     /// folders; a watcher watches each.
     #[must_use]
     pub fn synced_folders(&self) -> Vec<PathBuf> {
-        self.synced
-            .iter()
-            .map(|n| self.on_disk(Path::new(n)))
-            .collect()
+        self.synced.iter().map(|n| self.on_disk(Path::new(n))).collect()
     }
 
     /// The folders syncing here: account name, and where it is here.
@@ -652,10 +629,7 @@ impl Engine {
     pub fn approve(&mut self, req: &JoinRequest) -> Result<()> {
         self.refresh_devices()?;
         self.check_membership()?;
-        anyhow::ensure!(
-            req.signed(),
-            "the join request is not signed by the device it names"
-        );
+        anyhow::ensure!(req.signed(), "the join request is not signed by the device it names");
         // the joining device pins whatever root the coordinator showed it; a
         // different root here means it was shown someone else's account
         anyhow::ensure!(
@@ -669,9 +643,7 @@ impl Engine {
                 device: req.device.clone(),
                 name: req.name.clone(),
             };
-            self.state
-                .devices
-                .append(self.coord.as_ref(), &self.signing, action)?;
+            self.state.devices.append(self.coord.as_ref(), &self.signing, action)?;
         }
         let (epoch, secret) = self.secret()?;
         let grant = Grant::new(&self.signing, epoch, &req.device, &secret)?;
@@ -734,17 +706,15 @@ impl Engine {
     /// Verify the epoch records and hold the latest epoch's key. On moving
     /// to a new epoch, the base snapshot is carried over by the record's map.
     fn ensure_key(&mut self) -> Result<()> {
-        self.state
-            .epochs
-            .advance(self.coord.as_ref(), &self.state.devices)?;
+        self.state.epochs.advance(self.coord.as_ref(), &self.state.devices)?;
         let latest = self.state.epochs.current();
         if latest.is_some() && self.state.secret.as_ref().map(|s| s.0) == latest {
             return Ok(());
         }
-        let (epoch, secret) =
-            self.state
-                .epochs
-                .secret(self.coord.as_ref(), &self.state.devices, &self.signing)?;
+        let (epoch, secret) = self
+            .state
+            .epochs
+            .secret(self.coord.as_ref(), &self.state.devices, &self.signing)?;
         let from = self.state.secret.as_ref().map_or(0, |s| s.0);
         if let Some(base) = self.state.base.as_mut()
             && let Some(id) = self.state.epochs.map(&base.snapshot, from, epoch)
@@ -771,9 +741,7 @@ impl Engine {
         let action = Action::Revoke {
             device: device.to_string(),
         };
-        self.state
-            .devices
-            .append(self.coord.as_ref(), &self.signing, action)?;
+        self.state.devices.append(self.coord.as_ref(), &self.signing, action)?;
         self.save_state()
     }
 
@@ -834,13 +802,7 @@ impl Engine {
                 .map(&head.snapshot, head.epoch, old_epoch)
                 .and_then(|id| map.get(&id).cloned())
                 .context("latest snapshot missing from the copy")?;
-            let next = Head::next_in(
-                &self.signing,
-                Some(&head),
-                &current,
-                self.state.devices.len(),
-                epoch,
-            );
+            let next = Head::next_in(&self.signing, Some(&head), &current, self.state.devices.len(), epoch);
             let record = EpochRecord::next(
                 &self.signing,
                 self.state.epochs.records.last(),
@@ -865,10 +827,7 @@ impl Engine {
         self.save_state()?;
 
         // the old repository goes only once the new one checks out
-        new_spec
-            .open(&secret.key)?
-            .check(CheckOptions::default())?
-            .is_ok()?;
+        new_spec.open(&secret.key)?.check(CheckOptions::default())?.is_ok()?;
         let left = old_spec.destroy()?;
         if left > 0 {
             warn!(
@@ -879,10 +838,7 @@ impl Engine {
             self.state.cleaned_at = unix_now();
             self.save_state()?;
         }
-        info!(
-            "rotated to repository epoch {epoch}: {} snapshots",
-            map.len()
-        );
+        info!("rotated to repository epoch {epoch}: {} snapshots", map.len());
         Ok(Rotated {
             epoch,
             snapshots: map.len(),
@@ -956,9 +912,7 @@ impl Engine {
             return self.settings.as_ref().map(|s| s.secrets.join(name));
         }
         if let Ok(rest) = path.strip_prefix(MERGED) {
-            return self
-                .settings_on()
-                .map(|s| s.merged.join("synced").join(rest));
+            return self.settings_on().map(|s| s.merged.join("synced").join(rest));
         }
         match path.strip_prefix(SETTINGS) {
             Ok(rest) => self.settings_on().map(|s| s.home.join(rest)),
@@ -993,15 +947,16 @@ impl Engine {
         match path.strip_prefix(SETTINGS) {
             // settings are files the manifest shares; directories under
             // home are never managed
-            Ok(rest) => self.settings_on().is_none_or(|s| {
-                is_dir || !s.manifest.is_shared(rest) || s.manifest.through_link(&s.home, rest)
-            }),
+            Ok(rest) => self
+                .settings_on()
+                .is_none_or(|s| is_dir || !s.manifest.is_shared(rest) || s.manifest.through_link(&s.home, rest)),
             Err(_) => {
                 path.starts_with(".omacloud")
                     || (self.folders.is_some()
-                        && path.components().next().is_none_or(|c| {
-                            !self.synced.contains(&*c.as_os_str().to_string_lossy())
-                        }))
+                        && path
+                            .components()
+                            .next()
+                            .is_none_or(|c| !self.synced.contains(&*c.as_os_str().to_string_lossy())))
                     || self.ignores.is_ignored(path, is_dir)
             }
         }
@@ -1014,10 +969,7 @@ impl Engine {
     ///
     /// If settings sync is off, or the file can't be written.
     pub fn update_package_list(&mut self, list: &str) -> Result<bool> {
-        let s = self
-            .settings
-            .as_ref()
-            .ok_or_else(|| anyhow!("settings sync is off"))?;
+        let s = self.settings.as_ref().ok_or_else(|| anyhow!("settings sync is off"))?;
         let name = format!("{}.txt", self.device);
         let dest = s.packages.join(&name);
         if fs::read_to_string(&dest).is_ok_and(|old| old == list) {
@@ -1036,10 +988,7 @@ impl Engine {
     ///
     /// If settings sync is off, or the file can't be written.
     pub fn put_secrets(&mut self, sealed: &[u8]) -> Result<()> {
-        let s = self
-            .settings
-            .as_ref()
-            .ok_or_else(|| anyhow!("settings sync is off"))?;
+        let s = self.settings.as_ref().ok_or_else(|| anyhow!("settings sync is off"))?;
         let name = format!("{}.sealed", self.device);
         fs::create_dir_all(&s.secrets)?;
         let tmp = s.secrets.join(format!(".{name}.tmp"));
@@ -1077,21 +1026,14 @@ impl Engine {
     ///
     /// If settings sync is off or there is no bundle from `device`.
     pub fn secrets_of(&self, device: &str) -> Result<Vec<u8>> {
-        let s = self
-            .settings
-            .as_ref()
-            .ok_or_else(|| anyhow!("settings sync is off"))?;
-        fs::read(s.secrets.join(format!("{device}.sealed")))
-            .with_context(|| format!("no secrets bundle from {device}"))
+        let s = self.settings.as_ref().ok_or_else(|| anyhow!("settings sync is off"))?;
+        fs::read(s.secrets.join(format!("{device}.sealed"))).with_context(|| format!("no secrets bundle from {device}"))
     }
 
     /// Settings sync on this device.
     #[must_use]
     pub fn settings_status(&self) -> SettingsStatus {
-        let dormant = self
-            .settings
-            .as_ref()
-            .and_then(|s| s.manifest.dormant(&s.home));
+        let dormant = self.settings.as_ref().and_then(|s| s.manifest.dormant(&s.home));
         let held: Vec<PathBuf> = self
             .state
             .held
@@ -1132,14 +1074,8 @@ impl Engine {
                 "Hyprland bindings, look and feel, terminals",
             ),
         ] {
-            let n = files
-                .iter()
-                .filter(|p| settings::group_of(p) == group)
-                .count();
-            let h = held
-                .iter()
-                .filter(|p| settings::group_of(p) == group)
-                .count();
+            let n = files.iter().filter(|p| settings::group_of(p) == group).count();
+            let h = held.iter().filter(|p| settings::group_of(p) == group).count();
             out.push(Item {
                 group: group.into(),
                 title: title.into(),
@@ -1190,22 +1126,14 @@ impl Engine {
         for i in out.iter_mut().filter(|i| !i.scope.is_empty()) {
             for (doc, error) in failed.iter().filter(|(d, _)| d.starts_with(&i.scope)) {
                 i.state = "failed".into();
-                let what = doc
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(doc)
-                    .trim_end_matches(".json");
-                i.detail.push_str(&format!(
-                    "; {what} couldn't be written: {error} (trying again)"
-                ));
+                let what = doc.rsplit('/').next().unwrap_or(doc).trim_end_matches(".json");
+                i.detail
+                    .push_str(&format!("; {what} couldn't be written: {error} (trying again)"));
             }
         }
         let settled = settled(&s.merged.join("synced").join(CONFLICTS));
         for i in out.iter_mut().filter(|i| !i.scope.is_empty()) {
-            let mine: Vec<&Settled> = settled
-                .iter()
-                .filter(|c| c.doc.starts_with(&i.scope))
-                .collect();
+            let mine: Vec<&Settled> = settled.iter().filter(|c| c.doc.starts_with(&i.scope)).collect();
             let Some(latest) = mine.last() else { continue };
             if matches!(i.state.as_str(), "synced" | "new") {
                 i.state = "settled".into();
@@ -1249,8 +1177,7 @@ impl Engine {
     /// document that changed is pushed, and what waited for an app to
     /// allow writing (Chromium closed) syncs now. A look costs no network.
     pub fn look_at_apps(&mut self) {
-        if self.apps_touched.is_empty() || self.apps_looked.is_some_and(|t| t.elapsed() < APPS_LOOK)
-        {
+        if self.apps_touched.is_empty() || self.apps_looked.is_some_and(|t| t.elapsed() < APPS_LOOK) {
             return;
         }
         self.apps_looked = Some(Instant::now());
@@ -1269,9 +1196,7 @@ impl Engine {
                 let rel = Path::new(g.name()).join(&doc);
                 let mirror = merged::read(&s.merged.join("synced").join(&rel));
                 let applied = merged::read(&s.merged.join("applied").join(&rel));
-                if mirror.is_some_and(|m| waits(&s, g.as_ref(), &doc, &m, applied.as_ref()))
-                    && g.busy(&doc).is_none()
-                {
+                if mirror.is_some_and(|m| waits(&s, g.as_ref(), &doc, &m, applied.as_ref())) && g.busy(&doc).is_none() {
                     self.merged_dirty = true;
                 }
             }
@@ -1280,17 +1205,9 @@ impl Engine {
 
     /// Capture one document; a change here merges into the synced copy.
     /// Returns what the app holds now, `None` if it can't be read now.
-    fn capture_doc(
-        &mut self,
-        s: &SettingsSetup,
-        g: &dyn Group,
-        doc: &str,
-    ) -> Result<Option<Value>> {
+    fn capture_doc(&mut self, s: &SettingsSetup, g: &dyn Group, doc: &str) -> Result<Option<Value>> {
         let rel = Path::new(g.name()).join(doc);
-        let (mirror_path, applied_path) = (
-            s.merged.join("synced").join(&rel),
-            s.merged.join("applied").join(&rel),
-        );
+        let (mirror_path, applied_path) = (s.merged.join("synced").join(&rel), s.merged.join("applied").join(&rel));
         let applied = merged::read(&applied_path);
         let Some(now) = g.capture(doc, applied.as_ref())? else {
             return Ok(None);
@@ -1350,10 +1267,7 @@ impl Engine {
 
     fn apply_doc(&mut self, s: &SettingsSetup, g: &dyn Group, doc: &str) -> Result<Applied> {
         let rel = Path::new(g.name()).join(doc);
-        let (mirror_path, applied_path) = (
-            s.merged.join("synced").join(&rel),
-            s.merged.join("applied").join(&rel),
-        );
+        let (mirror_path, applied_path) = (s.merged.join("synced").join(&rel), s.merged.join("applied").join(&rel));
         // a part held back (a network in use) is tried again when the app
         // is due a look, or at once when something newer came
         if let Some(held) = self.held_docs.get(&rel)
@@ -1367,15 +1281,12 @@ impl Engine {
         if let Some(f) = merged::read(&failed_path)
             && f.get("mirror") == merged::read(&mirror_path).as_ref()
             && f.get("applied") == Some(&merged::read(&applied_path).unwrap_or(Value::Null))
-            && f.get("next")
-                .and_then(Value::as_u64)
-                .is_some_and(|n| unix_now() < n)
+            && f.get("next").and_then(Value::as_u64).is_some_and(|n| unix_now() < n)
         {
             return Ok(Applied::Nothing);
         }
-        let waits = |mirror: Option<&Value>, applied: Option<&Value>| {
-            mirror.is_some_and(|m| waits(s, g, doc, m, applied))
-        };
+        let waits =
+            |mirror: Option<&Value>, applied: Option<&Value>| mirror.is_some_and(|m| waits(s, g, doc, m, applied));
         if !waits(
             merged::read(&mirror_path).as_ref(),
             merged::read(&applied_path).as_ref(),
@@ -1410,8 +1321,7 @@ impl Engine {
         }
         match &result {
             Err(e) if e.downcast_ref::<merged::Refused>().is_none() => {
-                let before =
-                    merged::read(&failed_path).filter(|f| f.get("mirror") == Some(&mirror));
+                let before = merged::read(&failed_path).filter(|f| f.get("mirror") == Some(&mirror));
                 let attempts = before
                     .and_then(|f| f.get("attempts").and_then(Value::as_u64))
                     .unwrap_or(0)
@@ -1443,10 +1353,7 @@ impl Engine {
             // again (an engine Chromium keeps as the default, a network
             // this computer can't take) until something changes
             (Ok(()), None) => {
-                merged::write(
-                    &tried_path,
-                    &serde_json::json!({ "mirror": mirror, "applied": now }),
-                )?;
+                merged::write(&tried_path, &serde_json::json!({ "mirror": mirror, "applied": now }))?;
                 Ok(Applied::Done)
             }
             // the app said no (NetworkManager turned a change down):
@@ -1477,20 +1384,14 @@ impl Engine {
             rel.display(),
             lines.len()
         );
-        let lines: Vec<String> = lines
-            .iter()
-            .map(|l| l.replace(merged::ME, &self.device))
-            .collect();
+        let lines: Vec<String> = lines.iter().map(|l| l.replace(merged::ME, &self.device)).collect();
         let stamp = Timestamp::now()
             .to_zoned(TimeZone::system())
             .strftime("%Y-%m-%d %H:%M:%S")
             .to_string();
         let log = s.merged.join("conflicts.log");
         let written = private_dirs(&s.merged, &s.merged).and_then(|()| {
-            let mut f = fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log)?;
+            let mut f = fs::OpenOptions::new().create(true).append(true).open(&log)?;
             for l in &lines {
                 writeln!(f, "{stamp} {}: {l}", rel.display())?;
             }
@@ -1527,12 +1428,7 @@ impl Engine {
         self.settings_on()
             .map(|s| {
                 let mut dirs = s.manifest.watch_dirs(&s.home);
-                dirs.extend(
-                    s.groups
-                        .iter()
-                        .flat_map(|g| g.watch_dirs())
-                        .map(|d| (d, false)),
-                );
+                dirs.extend(s.groups.iter().flat_map(|g| g.watch_dirs()).map(|d| (d, false)));
                 dirs
             })
             .unwrap_or_default()
@@ -1552,9 +1448,7 @@ impl Engine {
             .remove(&tree_path)
             .ok_or_else(|| anyhow!("{} is not waiting to be resolved", path.display()))?;
         if keep_remote {
-            let dest = self
-                .local(&tree_path)
-                .ok_or_else(|| anyhow!("settings sync is off"))?;
+            let dest = self.local(&tree_path).ok_or_else(|| anyhow!("settings sync is off"))?;
             self.back_up(&tree_path)?;
             fs::create_dir_all(dest.parent().ok_or_else(|| anyhow!("bad path"))?)?;
             replace_file(&dest, &fs::read(&parked)?)?;
@@ -1579,10 +1473,7 @@ impl Engine {
             .to_string();
         let history = s.backups.join("history");
         let dest = history.join(stamp).join(rest);
-        private_dirs(
-            &s.backups,
-            dest.parent().ok_or_else(|| anyhow!("bad path"))?,
-        )?;
+        private_dirs(&s.backups, dest.parent().ok_or_else(|| anyhow!("bad path"))?)?;
         fs::copy(&src, &dest)?;
         prune_history(&history, KEEP_BACKUPS)
     }
@@ -1611,16 +1502,9 @@ impl Engine {
                 continue;
             }
             // (home can be both the folder and where settings live)
-            let rel = if let Some(rel) = p
-                .strip_prefix(&self.folder)
-                .ok()
-                .and_then(|rel| self.synced_path(rel))
-            {
+            let rel = if let Some(rel) = p.strip_prefix(&self.folder).ok().and_then(|rel| self.synced_path(rel)) {
                 rel
-            } else if let Some(rest) = self
-                .settings_on()
-                .and_then(|s| p.strip_prefix(&s.home).ok())
-            {
+            } else if let Some(rest) = self.settings_on().and_then(|s| p.strip_prefix(&s.home).ok()) {
                 Path::new(SETTINGS).join(rest)
             } else {
                 p
@@ -1667,10 +1551,7 @@ impl Engine {
     }
 
     fn refresh_dormant(&mut self) {
-        let dormant = self
-            .settings
-            .as_ref()
-            .and_then(|s| s.manifest.dormant(&s.home));
+        let dormant = self.settings.as_ref().and_then(|s| s.manifest.dormant(&s.home));
         if dormant != self.dormant {
             match &dormant {
                 Some(why) => warn!("settings sync stands down: {why}"),
@@ -1692,10 +1573,7 @@ impl Engine {
             self.state.devices.advance(self.coord.as_ref())?;
             self.check_membership()?;
             self.ensure_key()?;
-            let head = self
-                .state
-                .heads
-                .advance(self.coord.as_ref(), &self.state.devices)?;
+            let head = self.state.heads.advance(self.coord.as_ref(), &self.state.devices)?;
             let epoch = self.secret()?.0;
             if let Some(h) = head.as_ref().filter(|h| h.epoch > epoch) {
                 // a rotation's head lands before its key record
@@ -1733,10 +1611,7 @@ impl Engine {
                         return Ok(stats);
                     }
                     self.save_state()?;
-                    debug!(
-                        "{} files changed during upload, pushing again",
-                        self.pending.len()
-                    );
+                    debug!("{} files changed during upload, pushing again", self.pending.len());
                 }
                 None => stats.retries += 1,
             }
@@ -1773,9 +1648,7 @@ impl Engine {
             let changed = match (&last, &node) {
                 (None, None) => false,
                 (Some(a), Some(b)) => {
-                    a.content != b.content
-                        || a.node_type != b.node_type
-                        || a.meta.mode != b.meta.mode
+                    a.content != b.content || a.node_type != b.node_type || a.meta.mode != b.meta.mode
                 }
                 _ => true,
             };
@@ -1837,9 +1710,7 @@ impl Engine {
     fn verified_history(&mut self) -> Result<Vec<Head>> {
         self.state.devices.advance(self.coord.as_ref())?;
         self.ensure_key()?;
-        self.state
-            .heads
-            .advance(self.coord.as_ref(), &self.state.devices)?;
+        self.state.heads.advance(self.coord.as_ref(), &self.state.devices)?;
         let heads = self.coord.since(0)?;
         let mut prev: Option<&Head> = None;
         for h in &heads {
@@ -1933,10 +1804,9 @@ impl Engine {
                 Err(e) if e.kind() == ErrorKind::NotFound => None,
                 Err(e) => return Err(e).with_context(|| format!("stat {}", full.display())),
             };
-            let is_dir = meta.as_ref().map_or(
-                base.as_ref().is_some_and(Node::is_dir),
-                fs::Metadata::is_dir,
-            );
+            let is_dir = meta
+                .as_ref()
+                .map_or(base.as_ref().is_some_and(Node::is_dir), fs::Metadata::is_dir);
             if self.excluded(&path, is_dir) {
                 continue;
             }
@@ -1996,12 +1866,10 @@ impl Engine {
             if meta.file_type().is_symlink() {
                 let target = fs::read_link(&full)?;
                 let same = base.as_ref().is_some_and(|b| {
-                    matches!(b.node_type, NodeType::Symlink { .. })
-                        && b.node_type.to_link() == target
+                    matches!(b.node_type, NodeType::Symlink { .. }) && b.node_type.to_link() == target
                 });
                 if !same {
-                    let node =
-                        Node::new_node(name, NodeType::from_link(&target), node_meta(&meta, mtime));
+                    let node = Node::new_node(name, NodeType::from_link(&target), node_meta(&meta, mtime));
                     _ = out.insert(
                         path,
                         Local::Put {
@@ -2017,9 +1885,9 @@ impl Engine {
                 {
                     continue;
                 }
-                let mut same = base.as_ref().is_some_and(|b| {
-                    b.is_file() && b.meta.size == meta.len() && b.meta.mtime == Some(mtime)
-                });
+                let mut same = base
+                    .as_ref()
+                    .is_some_and(|b| b.is_file() && b.meta.size == meta.len() && b.meta.mtime == Some(mtime));
                 if same && self.state.racy.contains(&path) {
                     let b = base.as_ref().expect("same implies a base node");
                     same = b.meta.size <= MAX_COMPARE && file_matches(repo, &full, b)?;
@@ -2062,22 +1930,12 @@ impl Engine {
             .pop()
             .ok_or_else(|| anyhow!("snapshot {id} of head {} missing", head.seq))?;
         if snapshot_hex(&snap.id) != id {
-            bail!(
-                "snapshot {} does not match head {}",
-                snapshot_hex(&snap.id),
-                head.seq
-            );
+            bail!("snapshot {} does not match head {}", snapshot_hex(&snap.id), head.seq);
         }
         // a folder another device added syncs here too
         self.refresh_synced(repo, Some(snap.tree))?;
         let mut remote = BTreeMap::new();
-        diff(
-            repo,
-            self.base_tree()?,
-            Some(snap.tree),
-            Path::new(""),
-            &mut remote,
-        )?;
+        diff(repo, self.base_tree()?, Some(snap.tree), Path::new(""), &mut remote)?;
         info!(
             "pull head {}: {} changes from {}",
             head.seq,
@@ -2093,16 +1951,7 @@ impl Engine {
             }
             stats.pulled += 1;
             if path.starts_with(SETTINGS) || path.starts_with(MERGED) {
-                self.pull_setting(
-                    repo,
-                    base_tree,
-                    path,
-                    rnode,
-                    local,
-                    &mut writes,
-                    &mut deletes,
-                    stats,
-                )?;
+                self.pull_setting(repo, base_tree, path, rnode, local, &mut writes, &mut deletes, stats)?;
                 continue;
             }
             let mine = local.get(&path);
@@ -2238,12 +2087,8 @@ impl Engine {
                     self.adopt_metadata(&path, &r)?;
                     return Ok(());
                 }
-                let dest = self
-                    .local(&path)
-                    .ok_or_else(|| anyhow!("settings sync is off"))?;
-                let base = Trees::new(repo)
-                    .lookup(base_tree, &path)?
-                    .filter(Node::is_file);
+                let dest = self.local(&path).ok_or_else(|| anyhow!("settings sync is off"))?;
+                let base = Trees::new(repo).lookup(base_tree, &path)?.filter(Node::is_file);
                 let ancestor = base.as_ref().map(dump).transpose()?.unwrap_or_default();
                 let (ours, theirs) = (fs::read(&dest)?, dump(&r)?);
                 _ = local.remove(&path);
@@ -2270,23 +2115,14 @@ impl Engine {
 
     /// A merged document changed here and elsewhere: its group merges it,
     /// which always settles (see [`merged::merge_map`]).
-    fn merge_doc(
-        &mut self,
-        path: &Path,
-        dest: &Path,
-        ancestor: &[u8],
-        ours: &[u8],
-        theirs: &[u8],
-    ) -> Result<()> {
+    fn merge_doc(&mut self, path: &Path, dest: &Path, ancestor: &[u8], ours: &[u8], theirs: &[u8]) -> Result<()> {
         let s = self
             .settings_on()
             .cloned()
             .ok_or_else(|| anyhow!("settings sync is off"))?;
         let rel = path.strip_prefix(MERGED)?.to_path_buf();
         let mut parts = rel.components();
-        let name = parts
-            .next()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned());
+        let name = parts.next().map(|c| c.as_os_str().to_string_lossy().into_owned());
         let doc = parts.as_path().to_string_lossy().into_owned();
         let parse = |b: &[u8]| serde_json::from_slice::<serde_json::Value>(b).ok();
         let group = s.groups.iter().find(|g| Some(g.name()) == name.as_deref());
@@ -2313,10 +2149,7 @@ impl Engine {
             return Ok(());
         };
         let parked = s.backups.join("held").join(rest);
-        private_dirs(
-            &s.backups,
-            parked.parent().ok_or_else(|| anyhow!("bad path"))?,
-        )?;
+        private_dirs(&s.backups, parked.parent().ok_or_else(|| anyhow!("bad path"))?)?;
         write_private(&parked, content)?;
         _ = self.state.held.insert(path.to_path_buf(), parked);
         Ok(())
@@ -2324,11 +2157,7 @@ impl Engine {
 
     /// Returns the number of paths pushed and the files that changed while
     /// uploading, or `None` if another device took the next head first.
-    fn push(
-        &mut self,
-        repo: &Repo,
-        local: BTreeMap<PathBuf, Local>,
-    ) -> Result<Option<(usize, BTreeSet<PathBuf>)>> {
+    fn push(&mut self, repo: &Repo, local: BTreeMap<PathBuf, Local>) -> Result<Option<(usize, BTreeSet<PathBuf>)>> {
         let count = local.len();
         for (path, change) in &local {
             let what = match change {
@@ -2398,8 +2227,7 @@ impl Engine {
             _ = self.state.racy.remove(&path);
             let now = self.local(&path).and_then(|p| fs::symlink_metadata(p).ok());
             let same = now.is_some_and(|m| {
-                m.len() == size
-                    && m.modified().ok().and_then(|t| Timestamp::try_from(t).ok()) == mtime
+                m.len() == size && m.modified().ok().and_then(|t| Timestamp::try_from(t).ok()) == mtime
             });
             if !same {
                 _ = moved.insert(path);
@@ -2469,19 +2297,12 @@ impl Engine {
     /// A conflict copy name for `path` that nothing on disk or planned in
     /// this pull uses yet. Names have one second resolution, so two versions
     /// losing within a second would otherwise overwrite each other's copy.
-    fn free_conflict_name(
-        &mut self,
-        path: &Path,
-        mtime: Option<Timestamp>,
-        device: &str,
-    ) -> PathBuf {
+    fn free_conflict_name(&mut self, path: &Path, mtime: Option<Timestamp>, device: &str) -> PathBuf {
         let mut n = 0;
         loop {
             let name = conflict_name(path, mtime, device, n);
-            let taken = self.reserved.contains(&name)
-                || self
-                    .local(&name)
-                    .is_some_and(|p| fs::symlink_metadata(p).is_ok());
+            let taken =
+                self.reserved.contains(&name) || self.local(&name).is_some_and(|p| fs::symlink_metadata(p).is_ok());
             if !taken {
                 _ = self.reserved.insert(name.clone());
                 return name;
@@ -2493,9 +2314,7 @@ impl Engine {
     /// Make room for `path`: anything in the way that isn't a directory
     /// moves aside as a conflict copy, and the parent directories exist.
     fn prepare_write(&mut self, path: &Path, node: &Node) -> Result<()> {
-        let dest = self
-            .local(path)
-            .ok_or_else(|| anyhow!("settings sync is off"))?;
+        let dest = self.local(path).ok_or_else(|| anyhow!("settings sync is off"))?;
         if path.starts_with(SETTINGS) || path.starts_with(MERGED) {
             self.back_up(path)?;
             fs::create_dir_all(dest.parent().ok_or_else(|| anyhow!("bad path"))?)?;
@@ -2506,13 +2325,8 @@ impl Engine {
             prefix.push(c);
             self.move_aside_unless_dir(&prefix)?;
         }
-        let in_the_way = fs::symlink_metadata(&dest).is_ok_and(|m| {
-            if node.is_dir() {
-                !m.is_dir()
-            } else {
-                m.is_dir()
-            }
-        });
+        let in_the_way =
+            fs::symlink_metadata(&dest).is_ok_and(|m| if node.is_dir() { !m.is_dir() } else { m.is_dir() });
         if in_the_way {
             let device = self.device.clone();
             let copy = self.free_conflict_name(path, None, &device);
@@ -2637,11 +2451,7 @@ impl Engine {
         if self.folders.is_none() || path.starts_with(".omacloud") {
             return 0;
         }
-        match path
-            .components()
-            .next()
-            .and_then(|c| c.as_os_str().to_str())
-        {
+        match path.components().next().and_then(|c| c.as_os_str().to_str()) {
             Some("Desktop" | "Documents") => 0,
             Some("Pictures" | "Music" | "Videos") => 2,
             _ => 1,
@@ -2652,9 +2462,7 @@ impl Engine {
         let Some(full) = self.local(path) else {
             return Ok(false);
         };
-        if let (NodeType::Symlink { .. }, NodeType::Symlink { .. }) =
-            (&local.node_type, &remote.node_type)
-        {
+        if let (NodeType::Symlink { .. }, NodeType::Symlink { .. }) = (&local.node_type, &remote.node_type) {
             return Ok(local.node_type.to_link() == remote.node_type.to_link());
         }
         if !(local.is_file() && remote.is_file())
@@ -2704,12 +2512,7 @@ impl Engine {
 /// synced mtime and mode. The parent directory must exist. If what's at
 /// `path` changed since `base` (the node it was), it stays, and the temp
 /// file holding the new version is returned.
-fn write_file(
-    dest: &Path,
-    repo: &Repo,
-    node: &Node,
-    base: Option<&Node>,
-) -> Result<Option<PathBuf>> {
+fn write_file(dest: &Path, repo: &Repo, node: &Node, base: Option<&Node>) -> Result<Option<PathBuf>> {
     let dest = dest.to_path_buf();
     if node.is_dir() {
         fs::create_dir_all(&dest)?;
@@ -2779,10 +2582,7 @@ fn replace_file(path: &Path, content: &[u8]) -> Result<()> {
         Ok(m) if m.file_type().is_symlink() => fs::canonicalize(path)?,
         _ => path.to_path_buf(),
     };
-    let (parent, name) = path
-        .parent()
-        .zip(path.file_name())
-        .ok_or_else(|| anyhow!("bad path"))?;
+    let (parent, name) = path.parent().zip(path.file_name()).ok_or_else(|| anyhow!("bad path"))?;
     let tmp = parent.join(format!("{TEMP_PREFIX}{}", name.to_string_lossy()));
     let mut f = File::create(&tmp)?;
     f.write_all(content)?;
@@ -2799,10 +2599,7 @@ fn replace_file(path: &Path, content: &[u8]) -> Result<()> {
 /// settings backups and held versions can hold anything a setting does.
 fn private_dirs(root: &Path, dir: &Path) -> Result<()> {
     use std::os::unix::fs::DirBuilderExt;
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)?;
+    fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
     // made by an earlier version, open to all
     fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
     Ok(())
@@ -2861,11 +2658,7 @@ fn same_file_here(repo: &Repo, path: &Path, node: &Node) -> Result<bool> {
     if !fs::symlink_metadata(path).is_ok_and(|m| m.is_file()) {
         return Ok(false);
     }
-    let Ok(file) = File::options()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)
-    else {
+    let Ok(file) = File::options().read(true).custom_flags(libc::O_NONBLOCK).open(path) else {
         return Ok(false);
     };
     let before = file.metadata()?;
@@ -2875,8 +2668,7 @@ fn same_file_here(repo: &Repo, path: &Path, node: &Node) -> Result<bool> {
     let after = file.metadata()?;
     let unchanged = after.len() == before.len()
         && after.modified().ok() == before.modified().ok()
-        && fs::symlink_metadata(path)
-            .is_ok_and(|m| m.is_file() && m.dev() == before.dev() && m.ino() == before.ino());
+        && fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.dev() == before.dev() && m.ino() == before.ino());
     if !unchanged {
         return Ok(false);
     }
@@ -3027,11 +2819,7 @@ impl<'r> Trees<'r> {
             let Some(id) = tree else {
                 return Ok(None);
             };
-            let Some(n) = self
-                .nodes(id)?
-                .get(&*c.as_os_str().to_string_lossy())
-                .cloned()
-            else {
+            let Some(n) = self.nodes(id)?.get(&*c.as_os_str().to_string_lossy()).cloned() else {
                 return Ok(None);
             };
             tree = n.subtree;
@@ -3092,12 +2880,7 @@ fn diff(
     Ok(())
 }
 
-fn walk_local(
-    root: &Path,
-    rel: &Path,
-    skip: &dyn Fn(&Path, bool) -> bool,
-    out: &mut BTreeSet<PathBuf>,
-) -> Result<()> {
+fn walk_local(root: &Path, rel: &Path, skip: &dyn Fn(&Path, bool) -> bool, out: &mut BTreeSet<PathBuf>) -> Result<()> {
     let mut empty = true;
     for e in fs::read_dir(root.join(rel))? {
         let e = e?;
@@ -3163,10 +2946,7 @@ fn conflict_name(path: &Path, mtime: Option<Timestamp>, device: &str, n: u32) ->
         .strftime("%Y%m%d-%H%M%S");
     let stem = path.file_stem().unwrap_or_default().to_string_lossy();
     let name = match path.extension() {
-        Some(ext) => format!(
-            "{stem}.sync-conflict-{when}-{device}.{}",
-            ext.to_string_lossy()
-        ),
+        Some(ext) => format!("{stem}.sync-conflict-{when}-{device}.{}", ext.to_string_lossy()),
         None => format!("{stem}.sync-conflict-{when}-{device}"),
     };
     path.with_file_name(name)
@@ -3208,10 +2988,7 @@ mod tests {
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
         left.sort();
-        assert_eq!(
-            left,
-            ["20261007-000003", "20261007-000004", "20261007-000005"]
-        );
+        assert_eq!(left, ["20261007-000003", "20261007-000004", "20261007-000005"]);
         Ok(())
     }
 

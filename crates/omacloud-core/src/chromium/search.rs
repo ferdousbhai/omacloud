@@ -100,9 +100,7 @@ fn to_sql(v: &Value) -> Sql {
 pub fn capture(web_data: &Path, scratch: &Path) -> Result<Option<Value>> {
     let journal = web_data.with_file_name("Web Data-journal");
     let wal = web_data.with_file_name("Web Data-wal");
-    if fs::metadata(&journal).is_ok_and(|m| m.len() > 0)
-        || fs::metadata(&wal).is_ok_and(|m| m.len() > 0)
-    {
+    if fs::metadata(&journal).is_ok_and(|m| m.len() > 0) || fs::metadata(&wal).is_ok_and(|m| m.len() > 0) {
         return Ok(None);
     }
     let stamp = |p: &Path| fs::metadata(p).ok().map(|m| (m.len(), m.modified().ok()));
@@ -127,11 +125,7 @@ pub fn capture(web_data: &Path, scratch: &Path) -> Result<Option<Value>> {
 pub fn read(path: &Path) -> Result<Value> {
     let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let cols = columns(&db)?;
-    let fields: Vec<&str> = FIELDS
-        .iter()
-        .copied()
-        .filter(|f| cols.contains(*f))
-        .collect();
+    let fields: Vec<&str> = FIELDS.iter().copied().filter(|f| cols.contains(*f)).collect();
     let sql = format!(
         "SELECT sync_guid, {} FROM keywords WHERE {}",
         fields.join(", "),
@@ -171,10 +165,7 @@ pub fn write(path: &Path, doc: &Value, keep: Option<&str>) -> Result<()> {
     let cols = columns(&db)?;
     let tx = db.transaction()?;
     let here: BTreeSet<String> = {
-        let mut st = tx.prepare(&format!(
-            "SELECT sync_guid FROM keywords WHERE {}",
-            synced_rows(&cols)
-        ))?;
+        let mut st = tx.prepare(&format!("SELECT sync_guid FROM keywords WHERE {}", synced_rows(&cols)))?;
         st.query_map([], |r| r.get::<_, Option<String>>(0))?
             .filter_map(|g| g.ok().flatten())
             .collect()
@@ -188,20 +179,12 @@ pub fn write(path: &Path, doc: &Value, keep: Option<&str>) -> Result<()> {
         let Some(e) = e.as_object() else { continue };
         // an engine needs a url and a keyword (KeywordTable drops rows
         // without a url)
-        if e.get("url")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
-            || e.get("keyword")
-                .and_then(Value::as_str)
-                .is_none_or(str::is_empty)
+        if e.get("url").and_then(Value::as_str).is_none_or(str::is_empty)
+            || e.get("keyword").and_then(Value::as_str).is_none_or(str::is_empty)
         {
             continue;
         }
-        let fields: Vec<&str> = FIELDS
-            .iter()
-            .copied()
-            .filter(|f| cols.contains(*f))
-            .collect();
+        let fields: Vec<&str> = FIELDS.iter().copied().filter(|f| cols.contains(*f)).collect();
         let values: Vec<Sql> = fields
             .iter()
             .map(|f| match (e.get(*f), *f) {
@@ -244,10 +227,7 @@ pub fn write(path: &Path, doc: &Value, keep: Option<&str>) -> Result<()> {
             ]);
             let marks = vec!["?"; names.len()].join(", ");
             _ = tx.execute(
-                &format!(
-                    "INSERT INTO keywords ({}) VALUES ({marks})",
-                    names.join(", ")
-                ),
+                &format!("INSERT INTO keywords ({}) VALUES ({marks})", names.join(", ")),
                 params_from_iter(args),
             )?;
         }

@@ -22,8 +22,7 @@ use clap::{Parser, Subcommand};
 use log::{info, warn};
 use notify::{RecursiveMode, Watcher};
 use omacloud_core::{
-    Coordinator, DeviceError, DirCoordinator, Engine, HeadError, Membership, RepoSpec,
-    SettingsSetup, Setup, account,
+    Coordinator, DeviceError, DirCoordinator, Engine, HeadError, Membership, RepoSpec, SettingsSetup, Setup, account,
     bucket::key_refused,
     devices::{fingerprint, public_hex},
     epoch::EpochError,
@@ -428,14 +427,7 @@ struct FolderChoice {
 const DEFAULT_FOLDERS: &[&str] = &["Desktop", "Documents", "Pictures"];
 
 /// The folders of home a computer is asked about.
-const USUAL_FOLDERS: &[&str] = &[
-    "Desktop",
-    "Documents",
-    "Pictures",
-    "Music",
-    "Videos",
-    "Downloads",
-];
+const USUAL_FOLDERS: &[&str] = &["Desktop", "Documents", "Pictures", "Music", "Videos", "Downloads"];
 
 /// This machine's names for the XDG user folders, where they differ from
 /// the English names the account uses (`Documents` -> `Dokumente`). Only
@@ -524,16 +516,10 @@ impl Limits {
         if let Some(bw) = &self.bandwidth {
             // a token bucket around the backend (throttle.rs), which also
             // holds for small transfers
-            _ = repo
-                .options
-                .entry("bandwidth".into())
-                .or_insert_with(|| bw.clone());
+            _ = repo.options.entry("bandwidth".into()).or_insert_with(|| bw.clone());
         }
         if let Some(n) = self.connections {
-            _ = repo
-                .options
-                .entry("connections".into())
-                .or_insert(n.to_string());
+            _ = repo.options.entry("connections".into()).or_insert(n.to_string());
         }
     }
 }
@@ -547,14 +533,9 @@ struct Paths {
 
 impl Paths {
     fn new(config: Option<PathBuf>) -> Result<Self> {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .context("HOME not set")?;
-        let xdg = |var: &str, fallback: &str| {
-            std::env::var_os(var).map_or_else(|| home.join(fallback), PathBuf::from)
-        };
-        let config = config
-            .unwrap_or_else(|| xdg("XDG_CONFIG_HOME", ".config").join("omacloud/config.toml"));
+        let home = std::env::var_os("HOME").map(PathBuf::from).context("HOME not set")?;
+        let xdg = |var: &str, fallback: &str| std::env::var_os(var).map_or_else(|| home.join(fallback), PathBuf::from);
+        let config = config.unwrap_or_else(|| xdg("XDG_CONFIG_HOME", ".config").join("omacloud/config.toml"));
         // a custom config file gets its own data directory beside it
         let data = if config.file_name().is_some_and(|n| n == "config.toml") {
             xdg("XDG_DATA_HOME", ".local/share").join("omacloud")
@@ -585,12 +566,8 @@ impl Paths {
 }
 
 fn load(paths: &Paths) -> Result<Config> {
-    let text = fs::read_to_string(&paths.config).with_context(|| {
-        format!(
-            "reading {} (run `omacloud init` first)",
-            paths.config.display()
-        )
-    })?;
+    let text = fs::read_to_string(&paths.config)
+        .with_context(|| format!("reading {} (run `omacloud init` first)", paths.config.display()))?;
     let mut config: Config = toml::from_str(&text)?;
     if config.coordinator == SELF_HOSTED
         && let Some(c) = config.coordination.as_mut()
@@ -604,8 +581,7 @@ fn load(paths: &Paths) -> Result<Config> {
 /// The config without its bucket key, for `bucket set-key --here-only`: the
 /// way back when the keyring lost it.
 fn load_without_key(paths: &Paths) -> Result<Config> {
-    let text = fs::read_to_string(&paths.config)
-        .with_context(|| format!("reading {}", paths.config.display()))?;
+    let text = fs::read_to_string(&paths.config).with_context(|| format!("reading {}", paths.config.display()))?;
     Ok(toml::from_str(&text)?)
 }
 
@@ -672,8 +648,7 @@ fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
     if config.coordinator == SELF_HOSTED
         && let Some(c) = &config.coordination
     {
-        repo.options
-            .extend(omacloud_core::bucket_key::credentials_of(c));
+        repo.options.extend(omacloud_core::bucket_key::credentials_of(c));
     }
     let setup = Setup {
         device: config.device.clone(),
@@ -733,10 +708,7 @@ enum Recovery {
 
 fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>) -> Result<()> {
     if paths.config.exists() {
-        bail!(
-            "{} exists; this device is already set up",
-            paths.config.display()
-        );
+        bail!("{} exists; this device is already set up", paths.config.display());
     }
     fs::create_dir_all(&config.folder)?;
     fs::create_dir_all(&paths.data)?;
@@ -865,8 +837,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
         if now != config_seen {
             config_seen = now;
             if let Ok(Config {
-                folders: Some(choice),
-                ..
+                folders: Some(choice), ..
             }) = load(paths)
             {
                 info!("folder choice changed");
@@ -913,10 +884,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
         let pause = power::should_pause(power::battery(), config.limits.pause_on_battery_below);
         if pause != paused {
             paused = pause;
-            info!(
-                "{} sync (battery)",
-                if paused { "pausing" } else { "resuming" }
-            );
+            info!("{} sync (battery)", if paused { "pausing" } else { "resuming" });
         }
         // idle: one look at the change marker instead of a sync, with a full
         // sync now and then in case a write didn't mark itself
@@ -1163,10 +1131,7 @@ fn main() -> Result<()> {
         }
         default_hook(info);
     }));
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,rustic_core=warn"),
-    )
-    .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info,rustic_core=warn")).init();
     let cli = Cli::parse();
     if let Some(home) = agent_skill::home() {
         agent_skill::refresh(&home, &SKILL);
@@ -1210,19 +1175,18 @@ fn main() -> Result<()> {
         } => {
             let mut recovery = recovery_code.map(|c| (c, Recovery::Code));
             // Omacloud storage: signing in gives the bucket and its key
-            let service = hosted.then(|| {
-                std::env::var("OMACLOUD_SERVICE_URL")
-                    .unwrap_or_else(|_| hosted::SERVICE.to_string())
-            });
+            let service =
+                hosted.then(|| std::env::var("OMACLOUD_SERVICE_URL").unwrap_or_else(|_| hosted::SERVICE.to_string()));
             let (repo, opts) = if let Some(service) = &service {
                 let s = if contact_card {
                     // checked before the browser opens: a typo is caught here
                     let card = read_secret("OMACLOUD_CONTACT_CARD", "your contact's card")?;
                     omacloud_core::contact::checked(&card)?;
                     let s = hosted::sign_in_with_pad(service)?;
-                    let pad = s.contact_pad.as_deref().with_context(|| {
-                        format!("{} has no trusted contact: no card opens it", s.email)
-                    })?;
+                    let pad = s
+                        .contact_pad
+                        .as_deref()
+                        .with_context(|| format!("{} has no trusted contact: no card opens it", s.email))?;
                     recovery = Some((omacloud_core::contact::open(&card, pad)?, Recovery::Card));
                     s
                 } else {
@@ -1261,9 +1225,7 @@ fn main() -> Result<()> {
             let coordinator = if coordinator == SELF_HOSTED {
                 coordinator
             } else {
-                absolute(Path::new(&coordinator))?
-                    .to_string_lossy()
-                    .into_owned()
+                absolute(Path::new(&coordinator))?.to_string_lossy().into_owned()
             };
             let repo = match repo.as_deref() {
                 // joining an account whose bucket location comes sealed with
@@ -1289,20 +1251,12 @@ fn main() -> Result<()> {
                             o.entry("root".into()).or_insert("/Omacloud".into());
                             let secret = match o.get("client_secret") {
                                 Some(secret) => secret.clone(),
-                                None => read_secret(
-                                    "OMACLOUD_DROPBOX_CLIENT_SECRET",
-                                    "Dropbox app secret",
-                                )?,
+                                None => read_secret("OMACLOUD_DROPBOX_CLIENT_SECRET", "Dropbox app secret")?,
                             };
                             o.insert("client_secret".into(), secret.clone());
                             if !o.contains_key("refresh_token") {
-                                eprintln!(
-                                    "Open this Dropbox authorization URL and paste its code:\n\n  {url}\n"
-                                );
-                                let code = read_secret(
-                                    "OMACLOUD_DROPBOX_AUTH_CODE",
-                                    "Dropbox authorization code",
-                                )?;
+                                eprintln!("Open this Dropbox authorization URL and paste its code:\n\n  {url}\n");
+                                let code = read_secret("OMACLOUD_DROPBOX_AUTH_CODE", "Dropbox authorization code")?;
                                 let refresh = dropbox::exchange(&id, &secret, &code)?;
                                 o.insert("refresh_token".into(), refresh);
                             }
@@ -1316,15 +1270,8 @@ fn main() -> Result<()> {
             if repo.repository == "opendal:s3" && !repo.options.contains_key("bucket") {
                 let opt = |k: &str| repo.options.get(k).cloned().unwrap_or_default();
                 let (endpoint, region) = (opt("endpoint"), opt("region"));
-                anyhow::ensure!(
-                    !endpoint.is_empty(),
-                    "give the storage's endpoint: --opt endpoint=..."
-                );
-                let region = if region.is_empty() {
-                    "auto".to_string()
-                } else {
-                    region
-                };
+                anyhow::ensure!(!endpoint.is_empty(), "give the storage's endpoint: --opt endpoint=...");
+                let region = if region.is_empty() { "auto".to_string() } else { region };
                 let mut made = None;
                 for _ in 0..3 {
                     let name = omacloud_core::bucket::new_bucket_name();
@@ -1418,10 +1365,7 @@ fn main() -> Result<()> {
                 }
                 other => other?,
             };
-            println!(
-                "pushed {}, pulled {}, conflicts {}",
-                st.pushed, st.pulled, st.conflicts
-            );
+            println!("pushed {}, pulled {}, conflicts {}", st.pushed, st.pulled, st.conflicts);
             if follow_bucket_key(&paths, &mut e)? {
                 println!("switched to the account's new bucket key");
             }
@@ -1510,9 +1454,7 @@ fn main() -> Result<()> {
             let config = load(&paths)?;
             let rel = relative(&config, &path)?;
             for v in engine(&paths, &config)?.versions(&rel)? {
-                let what = v
-                    .size
-                    .map_or_else(|| "deleted".to_string(), |s| format!("{s} bytes"));
+                let what = v.size.map_or_else(|| "deleted".to_string(), |s| format!("{s} bytes"));
                 println!(
                     "{:>6}  {}  {:<12}  {what}",
                     v.seq,
@@ -1528,9 +1470,7 @@ fn main() -> Result<()> {
             let config = load(&paths)?;
             let rel = relative(&config, &path)?;
             let dest = to.unwrap_or_else(|| {
-                let name = rel
-                    .file_name()
-                    .map_or_else(Default::default, |n| n.to_string_lossy());
+                let name = rel.file_name().map_or_else(Default::default, |n| n.to_string_lossy());
                 PathBuf::from(format!("{name}.v{at}"))
             });
             engine(&paths, &config)?.restore_version(&rel, at, &dest)?;
@@ -1595,9 +1535,7 @@ fn main() -> Result<()> {
             if started {
                 println!("keeping in sync from now on (systemd user unit omacloud)");
             } else {
-                println!(
-                    "to keep in sync, run `omacloud watch` (or install the package for its unit)"
-                );
+                println!("to keep in sync, run `omacloud watch` (or install the package for its unit)");
             }
             Ok(())
         }
@@ -1647,9 +1585,7 @@ fn main() -> Result<()> {
                     println!("{k} = \"{v}\"");
                 }
             } else {
-                println!(
-                    "RESTIC_PASSWORD='{password}' restic -r {repo} restore latest --target <dir>"
-                );
+                println!("RESTIC_PASSWORD='{password}' restic -r {repo} restore latest --target <dir>");
             }
             Ok(())
         }
@@ -1699,10 +1635,7 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Result<()> {
         }
         DevicesCmd::Approve { fingerprint: fp } => {
             let requests = e.requests()?;
-            let keys = requests
-                .iter()
-                .map(|r| (r.device.clone(), r.name.clone()))
-                .collect();
+            let keys = requests.iter().map(|r| (r.device.clone(), r.name.clone())).collect();
             let (key, name) = pick(&fp, keys)?;
             let req = requests
                 .into_iter()
@@ -1720,10 +1653,7 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Result<()> {
                 bail!("remove this device from another one");
             }
             e.revoke(&key)?;
-            println!(
-                "removed {name} ({}). It can't push anymore.",
-                fingerprint(&key)
-            );
+            println!("removed {name} ({}). It can't push anymore.", fingerprint(&key));
             if rotate {
                 let r = e.rotate()?;
                 println!(
@@ -1746,10 +1676,7 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Result<()> {
 /// (AUR) apart; `None` without pacman.
 fn package_list(device: &str) -> Option<String> {
     let run = |args: &[&str]| -> Option<Vec<String>> {
-        let out = std::process::Command::new("pacman")
-            .args(args)
-            .output()
-            .ok()?;
+        let out = std::process::Command::new("pacman").args(args).output().ok()?;
         out.status.success().then(|| {
             String::from_utf8_lossy(&out.stdout)
                 .lines()
@@ -1798,10 +1725,7 @@ fn packages(paths: &Paths, action: PackagesCmd) -> Result<()> {
         let text = fs::read_to_string(dir.join(format!("{device}.txt")))
             .with_context(|| format!("no package list from {device}"))?;
         let (mut repo, mut foreign, mut section) = (Vec::new(), Vec::new(), "");
-        for line in text
-            .lines()
-            .filter(|l| !l.starts_with('#') && !l.is_empty())
-        {
+        for line in text.lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
             match line {
                 "[repo]" | "[foreign]" => section = line,
                 p if section == "[repo]" => repo.push(p.to_string()),
@@ -1815,52 +1739,32 @@ fn packages(paths: &Paths, action: PackagesCmd) -> Result<()> {
             let mut devices: Vec<String> = fs::read_dir(&dir)
                 .map(|it| {
                     it.flatten()
-                        .filter_map(|e| {
-                            e.file_name()
-                                .to_string_lossy()
-                                .strip_suffix(".txt")
-                                .map(str::to_string)
-                        })
+                        .filter_map(|e| e.file_name().to_string_lossy().strip_suffix(".txt").map(str::to_string))
                         .collect()
                 })
                 .unwrap_or_default();
             devices.sort();
             for d in devices {
                 let (repo, foreign) = read(&d)?;
-                println!(
-                    "{d:<16} {} packages, {} from the AUR",
-                    repo.len(),
-                    foreign.len()
-                );
+                println!("{d:<16} {} packages, {} from the AUR", repo.len(), foreign.len());
             }
         }
         PackagesCmd::Restore { from, yes } => {
             let (repo, foreign) = read(&from)?;
-            let installed: std::collections::BTreeSet<String> =
-                std::process::Command::new("pacman")
-                    .arg("-Qq")
-                    .output()
-                    .map(|o| {
-                        String::from_utf8_lossy(&o.stdout)
-                            .lines()
-                            .map(str::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default();
+            let installed: std::collections::BTreeSet<String> = std::process::Command::new("pacman")
+                .arg("-Qq")
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).lines().map(str::to_string).collect())
+                .unwrap_or_default();
             let missing: Vec<&String> = repo.iter().filter(|p| !installed.contains(*p)).collect();
-            let missing_aur: Vec<&String> =
-                foreign.iter().filter(|p| !installed.contains(*p)).collect();
+            let missing_aur: Vec<&String> = foreign.iter().filter(|p| !installed.contains(*p)).collect();
             if missing.is_empty() && missing_aur.is_empty() {
                 println!("everything {from} has is installed here");
                 return Ok(());
             }
             let list = |v: &[&String]| v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
             if !missing.is_empty() {
-                println!(
-                    "from the repositories ({}): {}",
-                    missing.len(),
-                    list(&missing)
-                );
+                println!("from the repositories ({}): {}", missing.len(), list(&missing));
             }
             if !missing_aur.is_empty() {
                 println!(
@@ -1892,9 +1796,7 @@ fn hostname() -> String {
 }
 
 fn home_dir() -> Result<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("HOME not set")
+    std::env::var_os("HOME").map(PathBuf::from).context("HOME not set")
 }
 
 fn settings(paths: &Paths, action: SettingsCmd) -> Result<()> {
@@ -2001,11 +1903,7 @@ fn relative(config: &Config, path: &Path) -> Result<PathBuf> {
     if path.is_relative() {
         return Ok(path.to_path_buf()); // taken as folder relative
     }
-    bail!(
-        "{} is not inside {}",
-        path.display(),
-        config.folder.display()
-    )
+    bail!("{} is not inside {}", path.display(), config.folder.display())
 }
 
 fn absolute(p: &Path) -> Result<PathBuf> {
@@ -2077,11 +1975,7 @@ fn secrets(paths: &Paths, action: SecretsCmd) -> Result<()> {
                 return Ok(());
             }
             for en in &changes {
-                let what = if home.join(&en.path).exists() {
-                    "replace"
-                } else {
-                    "new"
-                };
+                let what = if home.join(&en.path).exists() { "replace" } else { "new" };
                 println!("  {what:<8} ~/{}", en.path.display());
             }
             if !yes {
@@ -2238,9 +2132,7 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
             let computers: Vec<_> = members
                 .valid
                 .iter()
-                .map(|(k, name)| {
-                    json!({ "name": name, "fingerprint": fingerprint(k), "switched": acked.contains(k) })
-                })
+                .map(|(k, name)| json!({ "name": name, "fingerprint": fingerprint(k), "switched": acked.contains(k) }))
                 .collect();
             json!({ "seq": seq, "computers": computers, "retired": config.bucket_key_retired >= seq })
         })
@@ -2265,9 +2157,7 @@ fn status_json(paths: &Paths) -> Result<serde_json::Value> {
     };
     let list = |m: &std::collections::BTreeMap<String, String>| -> Vec<serde_json::Value> {
         m.iter()
-            .map(|(k, name)| {
-                json!({ "fingerprint": fingerprint(k), "name": name, "this": *k == me })
-            })
+            .map(|(k, name)| json!({ "fingerprint": fingerprint(k), "name": name, "this": *k == me }))
             .collect()
     };
     let requests: Vec<_> = e
@@ -2385,9 +2275,7 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Result<()> {
         println!("skipped here: {}", list.join(", "));
     }
     if changed {
-        println!(
-            "(a running daemon picks this up when restarted: systemctl --user restart omacloud)"
-        );
+        println!("(a running daemon picks this up when restarted: systemctl --user restart omacloud)");
     }
     Ok(())
 }
@@ -2395,9 +2283,10 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Result<()> {
 /// Where coordination lives beside the data: the data's bucket (or
 /// `bucket`, with the same endpoint and keys), under `omacloud-coordination`.
 fn coordination_beside(repo: &RepoSpec, bucket: Option<&str>) -> Result<BTreeMap<String, String>> {
-    let scheme = repo.repository.strip_prefix("opendal:").context(
-        "coordinating in the bucket needs the repository to be one (`--repo opendal:s3 --opt ...`)",
-    )?;
+    let scheme = repo
+        .repository
+        .strip_prefix("opendal:")
+        .context("coordinating in the bucket needs the repository to be one (`--repo opendal:s3 --opt ...`)")?;
     let mut opts: BTreeMap<String, String> = repo
         .options
         .iter()
@@ -2486,8 +2375,7 @@ fn hosted_service(config: &Config) -> Option<String> {
     }
     config.service.clone().or_else(|| {
         let endpoint = config.coordination.as_ref()?.get("endpoint")?;
-        (endpoint.trim_end_matches('/') == "https://storage.omacloud.computer")
-            .then(|| hosted::SERVICE.to_string())
+        (endpoint.trim_end_matches('/') == "https://storage.omacloud.computer").then(|| hosted::SERVICE.to_string())
     })
 }
 
@@ -2506,21 +2394,13 @@ fn key_of(config: &Config) -> Result<(String, String, String)> {
         .as_ref()
         .context("no coordination location in the config")?;
     let get = |k: &str| c.get(k).cloned().unwrap_or_default();
-    Ok((
-        get("region"),
-        get("access_key_id"),
-        get("secret_access_key"),
-    ))
+    Ok((get("region"), get("access_key_id"), get("secret_access_key")))
 }
 
 /// A new Omacloud storage key: asked for with this computer's key, or, when
 /// that key was retired (this computer missed a key change, or a removed one
 /// retired the rest), by signing in with Google again.
-fn hosted_key(
-    config: &Config,
-    service: &str,
-    here_only: bool,
-) -> Result<omacloud_core::bucket_key::Credentials> {
+fn hosted_key(config: &Config, service: &str, here_only: bool) -> Result<omacloud_core::bucket_key::Credentials> {
     let (region, id, secret) = key_of(config)?;
     let asked = if here_only || id.is_empty() {
         hosted::Asked::Refused
@@ -2579,10 +2459,7 @@ fn retire_old_keys(paths: &Paths, e: &mut Engine) -> Result<bool> {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(err) => return Err(err.into()),
         };
-        let current = config
-            .coordination
-            .as_ref()
-            .context("no Dropbox location")?;
+        let current = config.coordination.as_ref().context("no Dropbox location")?;
         let get = |key: &str| {
             current
                 .get(key)
@@ -2602,11 +2479,7 @@ fn retire_old_keys(paths: &Paths, e: &mut Engine) -> Result<bool> {
         return Ok(false);
     }
     let (region, id, secret) = key_of(&config)?;
-    match hosted::retire_others(
-        service.as_deref().expect("hosted storage"),
-        &region,
-        (&id, &secret),
-    )? {
+    match hosted::retire_others(service.as_deref().expect("hosted storage"), &region, (&id, &secret))? {
         hosted::Asked::Done(n) => {
             info!("retired {n} old storage keys after key change {seq}");
             config.bucket_key_retired = seq;
@@ -2618,13 +2491,7 @@ fn retire_old_keys(paths: &Paths, e: &mut Engine) -> Result<bool> {
 }
 
 fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
-    let mut config = if matches!(
-        action,
-        BucketCmd::SetKey {
-            here_only: true,
-            ..
-        }
-    ) {
+    let mut config = if matches!(action, BucketCmd::SetKey { here_only: true, .. }) {
         load_without_key(paths)?
     } else {
         load(paths)?
@@ -2664,9 +2531,7 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
                                 "every computer switched; check the computer that changed the Dropbox token to confirm the old token was revoked"
                             );
                         } else {
-                            println!(
-                                "every computer switched; the old keys are retired by a computer on the new key"
-                            );
+                            println!("every computer switched; the old keys are retired by a computer on the new key");
                         }
                     } else if waiting == 0 {
                         println!(
@@ -2682,18 +2547,12 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
             access_key_id,
             here_only,
         } => {
-            let key: omacloud_core::bucket_key::Credentials = match (
-                access_key_id,
-                hosted_service(&config),
-            ) {
+            let key: omacloud_core::bucket_key::Credentials = match (access_key_id, hosted_service(&config)) {
                 (Some(access_key_id), _) => {
                     // the same key again would cut nobody off
                     anyhow::ensure!(
                         here_only
-                            || config
-                                .coordination
-                                .as_ref()
-                                .and_then(|c| c.get("access_key_id"))
+                            || config.coordination.as_ref().and_then(|c| c.get("access_key_id"))
                                 != Some(&access_key_id),
                         "{access_key_id} is the key in use: make a new one at your provider first"
                     );
@@ -2706,10 +2565,7 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
                 }
                 (None, Some(service)) => hosted_key(&config, &service, here_only)?,
                 (None, None) if is_dropbox(&config) => {
-                    let c = config
-                        .coordination
-                        .as_ref()
-                        .context("no Dropbox location")?;
+                    let c = config.coordination.as_ref().context("no Dropbox location")?;
                     let id = c.get("client_id").context("no Dropbox app key")?;
                     let secret = if here_only || !c.contains_key("client_secret") {
                         read_secret("OMACLOUD_DROPBOX_CLIENT_SECRET", "Dropbox app secret")?
@@ -2720,8 +2576,7 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
                         "Open this Dropbox authorization URL and paste its code:\n\n  {}\n",
                         dropbox::authorize_url(id)?
                     );
-                    let code =
-                        read_secret("OMACLOUD_DROPBOX_AUTH_CODE", "Dropbox authorization code")?;
+                    let code = read_secret("OMACLOUD_DROPBOX_AUTH_CODE", "Dropbox authorization code")?;
                     let refresh = dropbox::exchange(id, &secret, &code)?;
                     anyhow::ensure!(
                         here_only || c.get("refresh_token") != Some(&refresh),
@@ -2733,9 +2588,9 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
                     ]
                     .into()
                 }
-                (None, None) => anyhow::bail!(
-                    "give the new key: make it at your provider, then `--access-key-id <id>`"
-                ),
+                (None, None) => {
+                    anyhow::bail!("give the new key: make it at your provider, then `--access-key-id <id>`")
+                }
             };
             // does the new key reach the bucket?
             let mut trial = config.clone();
@@ -2750,9 +2605,7 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
             if here_only {
                 config = trial;
                 save(paths, &config)?;
-                println!(
-                    "this computer uses the new key; it picks up the account's key change on the next sync"
-                );
+                println!("this computer uses the new key; it picks up the account's key change on the next sync");
                 return Ok(());
             }
             // published with the old key, which still works
@@ -2767,19 +2620,13 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Result<()> {
                     Err(err) => return Err(err.into()),
                 };
                 if let Some(old) = existing {
-                    let current = config
-                        .coordination
-                        .as_ref()
-                        .and_then(|c| c.get("refresh_token"));
+                    let current = config.coordination.as_ref().and_then(|c| c.get("refresh_token"));
                     let latest = e.bucket_key_status()?.map_or(0, |(seq, _)| seq);
                     if current == Some(&old) && latest <= config.bucket_key_seq {
                         fs::remove_file(&pending)?;
                     }
                 }
-                anyhow::ensure!(
-                    !pending.exists(),
-                    "an earlier Dropbox token still awaits revocation"
-                );
+                anyhow::ensure!(!pending.exists(), "an earlier Dropbox token still awaits revocation");
                 let old = config
                     .coordination
                     .as_ref()

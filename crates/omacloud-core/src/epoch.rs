@@ -138,12 +138,7 @@ impl EpochRecord {
         snapshots: BTreeMap<String, String>,
     ) -> Result<Self> {
         let mut keys = BTreeMap::new();
-        for holder in chain
-            .members()
-            .valid
-            .into_keys()
-            .chain([chain.root.clone()])
-        {
+        for holder in chain.members().valid.into_keys().chain([chain.root.clone()]) {
             let sealed = seal(&holder, secret)?;
             _ = keys.insert(holder, sealed);
         }
@@ -192,12 +187,7 @@ impl Grant {
     /// # Errors
     ///
     /// If sealing fails.
-    pub fn new(
-        signer: &SigningKey,
-        epoch: u64,
-        device: &str,
-        secret: &EpochSecret,
-    ) -> Result<Self> {
+    pub fn new(signer: &SigningKey, epoch: u64, device: &str, secret: &EpochSecret) -> Result<Self> {
         let sealed = seal(device, secret)?;
         let signer_hex = public_hex(signer);
         let sig = signer.sign(&Self::signed_bytes(epoch, device, &sealed, &signer_hex));
@@ -260,11 +250,7 @@ impl EpochChain {
     /// The [`EpochError`] that describes what's wrong.
     pub fn push(&mut self, rec: EpochRecord, devices: &DeviceChain) -> Result<(), EpochError> {
         let expected = self.current().map_or(0, |e| e + 1);
-        let prev = self
-            .records
-            .last()
-            .map(EpochRecord::hash)
-            .unwrap_or_default();
+        let prev = self.records.last().map(EpochRecord::hash).unwrap_or_default();
         if rec.epoch != expected || rec.prev != prev {
             return Err(EpochError::Broken { epoch: rec.epoch });
         }
@@ -307,11 +293,7 @@ impl EpochChain {
     #[must_use]
     pub fn map(&self, id: &str, from: u64, to: u64) -> Option<String> {
         let mut id = id.to_string();
-        for rec in self
-            .records
-            .iter()
-            .filter(|r| r.epoch > from && r.epoch <= to)
-        {
+        for rec in self.records.iter().filter(|r| r.epoch > from && r.epoch <= to) {
             id = rec.snapshots.get(&id)?.clone();
         }
         Some(id)
@@ -323,16 +305,8 @@ impl EpochChain {
     /// # Errors
     ///
     /// [`EpochError::NoKey`] if neither holds one, or an I/O error.
-    pub fn secret(
-        &self,
-        coord: &dyn Coordinator,
-        chain: &DeviceChain,
-        key: &SigningKey,
-    ) -> Result<(u64, EpochSecret)> {
-        let rec = self
-            .records
-            .last()
-            .context("the account has no repository key yet")?;
+    pub fn secret(&self, coord: &dyn Coordinator, chain: &DeviceChain, key: &SigningKey) -> Result<(u64, EpochSecret)> {
+        let rec = self.records.last().context("the account has no repository key yet")?;
         let me = public_hex(key);
         if let Some(sealed) = rec.keys.get(&me) {
             return Ok((rec.epoch, open(key, sealed)?));
@@ -404,19 +378,10 @@ mod tests {
             .push(DeviceEntry::next(
                 &a,
                 devices.last(),
-                Action::Revoke {
-                    device: public_hex(&b),
-                },
+                Action::Revoke { device: public_hex(&b) },
             ))
             .unwrap();
-        let r1 = EpochRecord::next(
-            &a,
-            Some(&r0),
-            7,
-            &devices,
-            &s("one"),
-            snaps(&[("s1", "t1")]),
-        )?;
+        let r1 = EpochRecord::next(&a, Some(&r0), 7, &devices, &s("one"), snaps(&[("s1", "t1")]))?;
         chain.push(r1.clone(), &devices).unwrap();
         assert!(r1.keys.contains_key(&public_hex(&a)));
         assert!(r1.keys.contains_key(&public_hex(&root)));
@@ -427,8 +392,7 @@ mod tests {
 
         // the revoked device can't start an epoch, nor can a stranger
         for signer in [&b, &c] {
-            let rogue =
-                EpochRecord::next(signer, Some(&r1), 9, &devices, &s("x"), BTreeMap::new())?;
+            let rogue = EpochRecord::next(signer, Some(&r1), 9, &devices, &s("x"), BTreeMap::new())?;
             assert_eq!(
                 chain.clone().push(rogue, &devices),
                 Err(EpochError::UntrustedSigner { epoch: 2 })

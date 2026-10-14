@@ -153,12 +153,7 @@ impl DeviceEntry {
     #[must_use]
     pub fn hash(&self) -> String {
         let mut h = Sha256::new();
-        h.update(Self::signed_bytes(
-            self.seq,
-            &self.prev,
-            &self.action,
-            &self.signer,
-        ));
+        h.update(Self::signed_bytes(self.seq, &self.prev, &self.action, &self.signer));
         h.update(self.sig.as_bytes());
         hex::encode(h.finalize())
     }
@@ -196,9 +191,7 @@ pub enum DeviceError {
     BadSignature { seq: u64 },
     #[error("device entry {seq} does not follow entry {after}")]
     Broken { seq: u64, after: u64 },
-    #[error(
-        "device entry {seq} is signed by {signer}, which is neither the root nor a valid device"
-    )]
+    #[error("device entry {seq} is signed by {signer}, which is neither the root nor a valid device")]
     UnauthorizedSigner { seq: u64, signer: String },
     #[error("device entry {seq}: the first entry must be the root adding a device")]
     BadGenesis { seq: u64 },
@@ -254,11 +247,7 @@ impl DeviceChain {
     #[must_use]
     pub fn members_at(&self, seq: u64) -> Members {
         let mut m = Members::default();
-        for e in self
-            .entries
-            .iter()
-            .take(usize::try_from(seq).unwrap_or(usize::MAX))
-        {
+        for e in self.entries.iter().take(usize::try_from(seq).unwrap_or(usize::MAX)) {
             match &e.action {
                 Action::Add { device, name } => _ = m.valid.insert(device.clone(), name.clone()),
                 Action::Revoke { device } => {
@@ -311,10 +300,7 @@ impl DeviceChain {
         }
         match &entry.action {
             Action::Add { device, .. } => {
-                if members.valid.contains_key(device)
-                    || members.revoked.contains_key(device)
-                    || *device == self.root
-                {
+                if members.valid.contains_key(device) || members.revoked.contains_key(device) || *device == self.root {
                     return Err(DeviceError::BadAdd {
                         seq,
                         device: device.clone(),
@@ -371,10 +357,7 @@ impl DeviceChain {
             self.push(entry)?;
         }
         if self.len() < served.map_or(0, |s| s.seq) {
-            return Err(DeviceError::Fork {
-                seq: self.len() + 1,
-            }
-            .into());
+            return Err(DeviceError::Fork { seq: self.len() + 1 }.into());
         }
         Ok(())
     }
@@ -385,12 +368,7 @@ impl DeviceChain {
     ///
     /// If the entry is invalid here, or another entry took its place (fetch
     /// with [`DeviceChain::advance`] and try again).
-    pub fn append(
-        &mut self,
-        coord: &dyn Coordinator,
-        key: &SigningKey,
-        action: Action,
-    ) -> Result<()> {
+    pub fn append(&mut self, coord: &dyn Coordinator, key: &SigningKey, action: Action) -> Result<()> {
         let entry = DeviceEntry::next(key, self.last(), action);
         let mut check = self.clone();
         check.push(entry.clone())?;
@@ -496,10 +474,7 @@ mod tests {
 
         // the first entry must be the root adding a device
         let e = DeviceEntry::next(&a, None, add(&a, "a"));
-        assert_eq!(
-            chain.clone().push(e),
-            Err(DeviceError::BadGenesis { seq: 1 })
-        );
+        assert_eq!(chain.clone().push(e), Err(DeviceError::BadGenesis { seq: 1 }));
         chain.push(genesis(&root, &a, "a")).unwrap();
 
         // a valid device adds another; a stranger can't
@@ -508,9 +483,7 @@ mod tests {
             chain.clone().push(e),
             Err(DeviceError::UnauthorizedSigner { seq: 2, .. })
         ));
-        chain
-            .push(DeviceEntry::next(&a, chain.last(), add(&b, "b")))
-            .unwrap();
+        chain.push(DeviceEntry::next(&a, chain.last(), add(&b, "b"))).unwrap();
         assert_eq!(chain.members().valid.len(), 2);
 
         // b revokes a; a can no longer sign, and can't be added back
@@ -518,9 +491,7 @@ mod tests {
             .push(DeviceEntry::next(
                 &b,
                 chain.last(),
-                Action::Revoke {
-                    device: public_hex(&a),
-                },
+                Action::Revoke { device: public_hex(&a) },
             ))
             .unwrap();
         let e = DeviceEntry::next(&a, chain.last(), add(&c, "c"));
@@ -529,10 +500,7 @@ mod tests {
             Err(DeviceError::UnauthorizedSigner { seq: 4, .. })
         ));
         let e = DeviceEntry::next(&root, chain.last(), add(&a, "a again"));
-        assert!(matches!(
-            chain.clone().push(e),
-            Err(DeviceError::BadAdd { seq: 4, .. })
-        ));
+        assert!(matches!(chain.clone().push(e), Err(DeviceError::BadAdd { seq: 4, .. })));
 
         // history keeps its meaning: a was valid until entry 3
         assert!(chain.is_valid_at(&public_hex(&a), 2));
@@ -541,9 +509,6 @@ mod tests {
         // tampering breaks the signature
         let mut e = DeviceEntry::next(&b, chain.last(), add(&c, "c"));
         e.action = add(&stranger, "c");
-        assert_eq!(
-            chain.clone().push(e),
-            Err(DeviceError::BadSignature { seq: 4 })
-        );
+        assert_eq!(chain.clone().push(e), Err(DeviceError::BadSignature { seq: 4 }));
     }
 }

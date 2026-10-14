@@ -45,16 +45,8 @@ pub struct Head {
 }
 
 impl Head {
-    fn signed_bytes(
-        seq: u64,
-        snapshot: &str,
-        prev: &str,
-        devices: u64,
-        epoch: u64,
-        device: &str,
-    ) -> Vec<u8> {
-        format!("omacloud-head-v3\n{seq}\n{snapshot}\n{prev}\n{devices}\n{epoch}\n{device}\n")
-            .into_bytes()
+    fn signed_bytes(seq: u64, snapshot: &str, prev: &str, devices: u64, epoch: u64, device: &str) -> Vec<u8> {
+        format!("omacloud-head-v3\n{seq}\n{snapshot}\n{prev}\n{devices}\n{epoch}\n{device}\n").into_bytes()
     }
 
     /// Build and sign the head that follows `prev`, in epoch 0.
@@ -65,19 +57,11 @@ impl Head {
 
     /// Build and sign the head that follows `prev`, in `epoch`.
     #[must_use]
-    pub fn next_in(
-        key: &SigningKey,
-        prev: Option<&Self>,
-        snapshot: &str,
-        devices: u64,
-        epoch: u64,
-    ) -> Self {
+    pub fn next_in(key: &SigningKey, prev: Option<&Self>, snapshot: &str, devices: u64, epoch: u64) -> Self {
         let seq = prev.map_or(1, |p| p.seq + 1);
         let prev = prev.map(Self::hash).unwrap_or_default();
         let device = public_hex(key);
-        let sig = key.sign(&Self::signed_bytes(
-            seq, snapshot, &prev, devices, epoch, &device,
-        ));
+        let sig = key.sign(&Self::signed_bytes(seq, snapshot, &prev, devices, epoch, &device));
         Self {
             seq,
             snapshot: snapshot.to_string(),
@@ -120,11 +104,7 @@ pub enum HeadError {
     #[error("head {seq} is not signed by the device it names")]
     BadSignature { seq: u64 },
     #[error("head {seq} is signed by {device}, not a valid device at device entry {devices}")]
-    UntrustedDevice {
-        seq: u64,
-        device: String,
-        devices: u64,
-    },
+    UntrustedDevice { seq: u64, device: String, devices: u64 },
     #[error("head {seq} names device entry {devices}, which this device hasn't been shown")]
     UnknownDevices { seq: u64, devices: u64 },
     #[error("head {seq} names an older device list than the head before it")]
@@ -239,11 +219,8 @@ impl DirCoordinator {
     /// If the directories can't be created.
     pub fn new(dir: impl Into<PathBuf>) -> Result<Self> {
         let dir = dir.into();
-        for sub in [
-            "heads", "devices", "epochs", "grants", "requests", "keys", "key-acks",
-        ] {
-            fs::create_dir_all(dir.join(sub))
-                .with_context(|| format!("creating {}", dir.join(sub).display()))?;
+        for sub in ["heads", "devices", "epochs", "grants", "requests", "keys", "key-acks"] {
+            fs::create_dir_all(dir.join(sub)).with_context(|| format!("creating {}", dir.join(sub).display()))?;
         }
         Ok(Self { dir })
     }
@@ -351,11 +328,7 @@ impl Coordinator for DirCoordinator {
         let mut out = Vec::new();
         for e in fs::read_dir(self.dir.join("grants"))? {
             let path = e?.path();
-            let name = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
+            let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
             if name.starts_with(&format!("{device}-")) && name.ends_with(".json") {
                 out.push(Self::read(&path)?);
             }
@@ -381,10 +354,7 @@ impl Coordinator for DirCoordinator {
         Ok(out)
     }
     fn request(&self, req: &JoinRequest) -> Result<()> {
-        let path = self
-            .dir
-            .join("requests")
-            .join(format!("{}.json", req.device));
+        let path = self.dir.join("requests").join(format!("{}.json", req.device));
         fs::write(path, serde_json::to_vec_pretty(req)?)?;
         Ok(())
     }
@@ -432,11 +402,7 @@ impl HeadTracker {
     /// # Errors
     ///
     /// A [`HeadError`] if the coordinator misbehaves, or an I/O error.
-    pub fn advance(
-        &mut self,
-        coord: &dyn Coordinator,
-        devices: &DeviceChain,
-    ) -> Result<Option<Head>> {
+    pub fn advance(&mut self, coord: &dyn Coordinator, devices: &DeviceChain) -> Result<Option<Head>> {
         let known_seq = self.known.as_ref().map_or(0, |k| k.seq);
         let served = coord.head()?;
         match (&self.known, &served) {
@@ -677,10 +643,7 @@ mod tests {
         let h1 = Head::next(&a, None, "s1", 2);
         assert!(c.append(&h1)?);
         // two devices race for seq 2: exactly one wins
-        let (x, y) = (
-            Head::next(&a, Some(&h1), "s2a", 2),
-            Head::next(&b, Some(&h1), "s2b", 2),
-        );
+        let (x, y) = (Head::next(&a, Some(&h1), "s2a", 2), Head::next(&b, Some(&h1), "s2b", 2));
         assert!(c.append(&x)?);
         assert!(!c.append(&y)?);
         assert_eq!(c.head()?, Some(x));
@@ -711,10 +674,7 @@ mod tests {
         );
 
         // fork: same position, different history
-        evil.0
-            .lock()
-            .unwrap()
-            .push(Head::next(&a, Some(&h1), "other", 2));
+        evil.0.lock().unwrap().push(Head::next(&a, Some(&h1), "other", 2));
         assert_eq!(err(t.advance(&evil, &devices)), HeadError::Fork { seq: 2 });
 
         let fresh = |heads: Vec<Head>| {
@@ -724,16 +684,10 @@ mod tests {
         // forged: snapshot changed after signing
         let mut forged = h2.clone();
         forged.snapshot = "evil".into();
-        assert_eq!(
-            err(fresh(vec![h1.clone(), forged])),
-            HeadError::BadSignature { seq: 2 }
-        );
+        assert_eq!(err(fresh(vec![h1.clone(), forged])), HeadError::BadSignature { seq: 2 });
         // validly signed, but not by a device of the account
         assert!(matches!(
-            err(fresh(vec![
-                h1.clone(),
-                Head::next(&stranger, Some(&h1), "s2", 2)
-            ])),
+            err(fresh(vec![h1.clone(), Head::next(&stranger, Some(&h1), "s2", 2)])),
             HeadError::UntrustedDevice { seq: 2, .. }
         ));
         // naming device entries the coordinator never showed
@@ -744,11 +698,7 @@ mod tests {
         // b signing as of device entry 1, before it was added
         assert!(matches!(
             err(fresh(vec![Head::next(&b, None, "s1", 1)])),
-            HeadError::UntrustedDevice {
-                seq: 1,
-                devices: 1,
-                ..
-            }
+            HeadError::UntrustedDevice { seq: 1, devices: 1, .. }
         ));
         // going back to an older device list
         assert_eq!(

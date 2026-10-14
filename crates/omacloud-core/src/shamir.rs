@@ -82,11 +82,7 @@ pub fn split(code: &str, k: u8, n: u8) -> Result<Vec<String>> {
                 .iter()
                 .map(|c| c.iter().rev().fold(0, |acc, &ci| mul(acc, x) ^ ci))
                 .collect();
-            let body = format!(
-                "{PREFIX}{}-{k}of{n}-{x}-{}",
-                &root[..TAG_LEN],
-                hex::encode(ys)
-            );
+            let body = format!("{PREFIX}{}-{k}of{n}-{x}-{}", &root[..TAG_LEN], hex::encode(ys));
             let sum = check(&body);
             format!("{body}-{sum}")
         })
@@ -141,9 +137,7 @@ pub fn combine(shares: &[String]) -> Result<String> {
     let first = parsed.first().context("no shares")?;
     let (tag, k, len) = (first.tag.clone(), first.k, first.ys.len());
     ensure!(
-        parsed
-            .iter()
-            .all(|s| s.tag == tag && s.k == k && s.ys.len() == len),
+        parsed.iter().all(|s| s.tag == tag && s.k == k && s.ys.len() == len),
         "these shares belong to different accounts or splits"
     );
     parsed.sort_by_key(|s| s.x);

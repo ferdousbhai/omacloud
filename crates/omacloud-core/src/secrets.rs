@@ -140,9 +140,7 @@ fn decode(bytes: &[u8]) -> Result<Vec<Entry>> {
         *b = rest;
         Ok(head)
     }
-    let mut b = bytes
-        .strip_prefix(MAGIC)
-        .context("not an omacloud secrets bundle")?;
+    let mut b = bytes.strip_prefix(MAGIC).context("not an omacloud secrets bundle")?;
     let mut out = Vec::new();
     while !b.is_empty() {
         let n = u32::from_le_bytes(take(&mut b, 4)?.try_into()?) as usize;
@@ -280,9 +278,7 @@ mod tests {
         assert_eq!(changes(f, &opened).len(), 2);
         assert_eq!(restore(f, &opened, &backups)?.len(), 2);
         assert_eq!(fs::read_to_string(f.join(".ssh/id_ed25519"))?, "private\n");
-        let mode = fs::metadata(f.join(".ssh/id_ed25519"))?
-            .permissions()
-            .mode();
+        let mode = fs::metadata(f.join(".ssh/id_ed25519"))?.permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
         assert_eq!(fs::read_to_string(backups.join(".ssh/config"))?, "old\n");
         assert!(changes(f, &opened).is_empty());

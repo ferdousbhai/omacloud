@@ -49,11 +49,7 @@ fn run(argv: &[String], env: &[(String, String)], stdin: Option<&str>) -> Result
     cmd.args(args)
         .env("RUST_LOG", "warn")
         .envs(env.iter().map(|(k, v)| (k, v)))
-        .stdin(if stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
+        .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("running {program}: {e}"))?;
@@ -123,44 +119,30 @@ impl Ui {
 
     fn refresh(self: &Rc<Self>) {
         let ui = self.clone();
-        run_then(
-            &["omacloud", "status", "--json"],
-            Vec::new(),
-            None,
-            move |r| {
-                let status = r
-                    .and_then(|out| serde_json::from_str::<Value>(&out).map_err(|e| e.to_string()));
-                match status {
-                    // no config yet: this computer needs setting up
-                    Ok(s) if s["set_up"] == Value::Bool(false) => {
-                        ui.overview.set_child(Some(&setup(&ui)));
-                        for bin in [&ui.devices, &ui.settings, &ui.secrets, &ui.recovery] {
-                            bin.set_child(Some(&not_set_up(
-                                "Set up this computer first, under Overview.",
-                            )));
-                        }
-                    }
-                    Ok(s) => {
-                        ui.overview.set_child(Some(&overview(&ui, &s)));
-                        ui.devices.set_child(Some(&devices(&ui, &s)));
-                        ui.settings.set_child(Some(&settings(&ui, &s)));
-                        ui.secrets.set_child(Some(&secrets(&ui, &s)));
-                        ui.recovery.set_child(Some(&recovery(&ui, &s)));
-                    }
-                    Err(e) => {
-                        for bin in [
-                            &ui.overview,
-                            &ui.devices,
-                            &ui.settings,
-                            &ui.secrets,
-                            &ui.recovery,
-                        ] {
-                            bin.set_child(Some(&not_set_up(&e)));
-                        }
+        run_then(&["omacloud", "status", "--json"], Vec::new(), None, move |r| {
+            let status = r.and_then(|out| serde_json::from_str::<Value>(&out).map_err(|e| e.to_string()));
+            match status {
+                // no config yet: this computer needs setting up
+                Ok(s) if s["set_up"] == Value::Bool(false) => {
+                    ui.overview.set_child(Some(&setup(&ui)));
+                    for bin in [&ui.devices, &ui.settings, &ui.secrets, &ui.recovery] {
+                        bin.set_child(Some(&not_set_up("Set up this computer first, under Overview.")));
                     }
                 }
-            },
-        );
+                Ok(s) => {
+                    ui.overview.set_child(Some(&overview(&ui, &s)));
+                    ui.devices.set_child(Some(&devices(&ui, &s)));
+                    ui.settings.set_child(Some(&settings(&ui, &s)));
+                    ui.secrets.set_child(Some(&secrets(&ui, &s)));
+                    ui.recovery.set_child(Some(&recovery(&ui, &s)));
+                }
+                Err(e) => {
+                    for bin in [&ui.overview, &ui.devices, &ui.settings, &ui.secrets, &ui.recovery] {
+                        bin.set_child(Some(&not_set_up(&e)));
+                    }
+                }
+            }
+        });
     }
 
     fn confirm(
@@ -201,32 +183,16 @@ fn build(app: &adw::Application, page: Option<&str>) {
         b.set_child(Some(&spinner));
         b
     };
-    let (overview_bin, devices_bin, settings_bin, secrets_bin, recovery_bin) =
-        (bin(), bin(), bin(), bin(), bin());
-    stack.add_titled_with_icon(
-        &overview_bin,
-        Some("overview"),
-        "Overview",
-        "folder-remote-symbolic",
-    );
-    stack.add_titled_with_icon(
-        &devices_bin,
-        Some("devices"),
-        "Devices",
-        "computer-symbolic",
-    );
+    let (overview_bin, devices_bin, settings_bin, secrets_bin, recovery_bin) = (bin(), bin(), bin(), bin(), bin());
+    stack.add_titled_with_icon(&overview_bin, Some("overview"), "Overview", "folder-remote-symbolic");
+    stack.add_titled_with_icon(&devices_bin, Some("devices"), "Devices", "computer-symbolic");
     stack.add_titled_with_icon(
         &settings_bin,
         Some("settings"),
         "Omarchy",
         "preferences-desktop-symbolic",
     );
-    stack.add_titled_with_icon(
-        &secrets_bin,
-        Some("secrets"),
-        "Keys",
-        "dialog-password-symbolic",
-    );
+    stack.add_titled_with_icon(&secrets_bin, Some("secrets"), "Keys", "dialog-password-symbolic");
 
     let toasts = adw::ToastOverlay::new();
     toasts.set_child(Some(&stack));
@@ -258,9 +224,8 @@ fn build(app: &adw::Application, page: Option<&str>) {
         .width_request(360)
         .height_request(400)
         .build();
-    let narrow = adw::Breakpoint::new(
-        adw::BreakpointCondition::parse("max-width: 900sp").expect("a breakpoint condition"),
-    );
+    let narrow =
+        adw::Breakpoint::new(adw::BreakpointCondition::parse("max-width: 900sp").expect("a breakpoint condition"));
     narrow.add_setter(
         &header,
         "title-widget",
@@ -277,12 +242,7 @@ fn build(app: &adw::Application, page: Option<&str>) {
         secrets: secrets_bin,
         recovery: recovery_bin.clone(),
     });
-    stack.add_titled_with_icon(
-        &recovery_bin,
-        Some("recovery"),
-        "Recovery",
-        "system-users-symbolic",
-    );
+    stack.add_titled_with_icon(&recovery_bin, Some("recovery"), "Recovery", "system-users-symbolic");
     {
         let ui = ui.clone();
         sync.connect_clicked(move |_| ui.act(&["omacloud", "sync"], "Synced"));
@@ -320,10 +280,7 @@ fn group(title: &str, description: &str) -> adw::PreferencesGroup {
 }
 
 fn button(label: &str, class: Option<&str>) -> gtk::Button {
-    let b = gtk::Button::builder()
-        .label(label)
-        .valign(gtk::Align::Center)
-        .build();
+    let b = gtk::Button::builder().label(label).valign(gtk::Align::Center).build();
     if let Some(c) = class {
         b.add_css_class(c);
     }
@@ -348,9 +305,8 @@ fn open_dropbox_authorization(ui: &Rc<Ui>, id: &str) {
         ui.toast("Enter the Dropbox app key first");
         return;
     }
-    let url = format!(
-        "https://www.dropbox.com/oauth2/authorize?client_id={id}&response_type=code&token_access_type=offline"
-    );
+    let url =
+        format!("https://www.dropbox.com/oauth2/authorize?client_id={id}&response_type=code&token_access_type=offline");
     gtk::UriLauncher::new(&url).launch(Some(&ui.window), None::<&gio::Cancellable>, |_| {});
 }
 
@@ -366,12 +322,7 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
         Err(e) => ui2.toast(&e),
         Ok(out) => {
             // set up: keep it syncing from now on, not from the next login
-            run_then(
-                &["systemctl", "--user", "start", "omacloud"],
-                Vec::new(),
-                None,
-                |_| {},
-            );
+            run_then(&["systemctl", "--user", "start", "omacloud"], Vec::new(), None, |_| {});
             let code = out
                 .lines()
                 .find_map(|l| l.strip_prefix("recovery code: "))
@@ -396,9 +347,7 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
                     .css_classes(["title-2", "monospace"])
                     .build();
                 // typed back, so nobody clicks past the one chance to keep it
-                let check = adw::EntryRow::builder()
-                    .title("Type its last four characters")
-                    .build();
+                let check = adw::EntryRow::builder().title("Type its last four characters").build();
                 let list = gtk::ListBox::new();
                 list.add_css_class("boxed-list");
                 list.set_selection_mode(gtk::SelectionMode::None);
@@ -413,8 +362,7 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
                 dialog.set_response_enabled("done", false);
                 dialog.set_close_response("copy");
                 let tail: String = {
-                    let chars: Vec<char> =
-                        code.chars().filter(char::is_ascii_alphanumeric).collect();
+                    let chars: Vec<char> = code.chars().filter(char::is_ascii_alphanumeric).collect();
                     chars[chars.len().saturating_sub(4)..]
                         .iter()
                         .collect::<String>()
@@ -504,11 +452,7 @@ const PROVIDERS: [Provider; 4] = [
     },
 ];
 
-const HETZNER_LOCATIONS: [(&str, &str); 3] = [
-    ("Falkenstein", "fsn1"),
-    ("Nuremberg", "nbg1"),
-    ("Helsinki", "hel1"),
-];
+const HETZNER_LOCATIONS: [(&str, &str); 3] = [("Falkenstein", "fsn1"), ("Nuremberg", "nbg1"), ("Helsinki", "hel1")];
 
 /// The endpoint and region for a provider's answers, or what's missing.
 fn s3_location(
@@ -541,9 +485,7 @@ fn s3_location(
         )),
         2 => {
             // s3.<region>.backblazeb2.com
-            let host = endpoint
-                .trim_start_matches("https://")
-                .trim_start_matches("http://");
+            let host = endpoint.trim_start_matches("https://").trim_start_matches("http://");
             let region = host
                 .strip_prefix("s3.")
                 .and_then(|r| r.strip_suffix(".backblazeb2.com"))
@@ -594,9 +536,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
                     env.push(("OMACLOUD_CONTACT_CARD".to_string(), typed));
                 }
                 _ => {
-                    ui.toast(
-                        "That's neither a recovery code (28 characters) nor a recovery card (32)",
-                    );
+                    ui.toast("That's neither a recovery code (28 characters) nor a recovery card (32)");
                     return;
                 }
             }
@@ -640,14 +580,10 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
         .build();
     let endpoint = entry("Endpoint");
     let region = entry("Region (blank for auto)");
-    let existing = adw::SwitchRow::builder()
-        .title("Use a bucket I already have")
-        .build();
+    let existing = adw::SwitchRow::builder().title("Use a bucket I already have").build();
     let bucket = entry("Bucket name");
     let key_id = entry("Access key ID");
-    let key = adw::PasswordEntryRow::builder()
-        .title("Secret access key")
-        .build();
+    let key = adw::PasswordEntryRow::builder().title("Secret access key").build();
     // a bucket with object lock can't take the create-only writes
     // coordination needs on some providers: it goes in a second bucket
     let advanced = adw::ExpanderRow::builder()
@@ -784,11 +720,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
             args.extend(sync_args());
             // the secret through the environment: a command line is readable
             // by other processes
-            run_init(
-                &ui,
-                args,
-                vec![("OMACLOUD_SECRET_ACCESS_KEY".to_string(), sk)],
-            );
+            run_init(&ui, args, vec![("OMACLOUD_SECRET_ACCESS_KEY".to_string(), sk)]);
         });
     }
     own.add(&create_own);
@@ -812,9 +744,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     });
     dropbox.add(&console);
     let app_key = entry("Dropbox app key");
-    let app_secret = adw::PasswordEntryRow::builder()
-        .title("Dropbox app secret")
-        .build();
+    let app_secret = adw::PasswordEntryRow::builder().title("Dropbox app secret").build();
     let auth_code = adw::PasswordEntryRow::builder()
         .title("Authorization code from Dropbox")
         .build();
@@ -935,10 +865,9 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         folder_group_row = Some(folder_row);
     }
     let daemon = s["daemon"].as_bool().unwrap_or(false);
-    let synced = s["synced_at"].as_u64().map_or_else(
-        || "Not synced yet".to_string(),
-        |t| format!("Synced {}", ago(t)),
-    );
+    let synced = s["synced_at"]
+        .as_u64()
+        .map_or_else(|| "Not synced yet".to_string(), |t| format!("Synced {}", ago(t)));
     let status = row(
         &synced,
         if daemon {
@@ -973,9 +902,7 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         Some("dropbox") => "Dropbox app folder".to_string(),
         Some("bucket") => {
             let host = text(&repo["endpoint"]);
-            let host = host
-                .trim_start_matches("https://")
-                .trim_start_matches("http://");
+            let host = host.trim_start_matches("https://").trim_start_matches("http://");
             format!("Your bucket {} at {host}", text(&repo["bucket"]))
         }
         _ => "A folder or server of your own".to_string(),
@@ -1072,10 +999,7 @@ fn subtitle_with_size(row: &adw::ActionRow, path: &str) {
 /// `flip` with the wanted state, and the page is rebuilt from the result.
 fn switch_row(title: &str, on: bool, flip: impl Fn(bool) + 'static) -> adw::ActionRow {
     let row = adw::ActionRow::builder().title(title).build();
-    let switch = gtk::Switch::builder()
-        .active(on)
-        .valign(gtk::Align::Center)
-        .build();
+    let switch = gtk::Switch::builder().active(on).valign(gtk::Align::Center).build();
     switch.connect_state_set(move |_, want| {
         flip(want);
         // the state follows once the change is made and the page refreshed
@@ -1113,17 +1037,10 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
     }
     // the usual order, then the account's own additions
     let order = |n: &str| {
-        [
-            "Desktop",
-            "Documents",
-            "Pictures",
-            "Music",
-            "Videos",
-            "Downloads",
-        ]
-        .iter()
-        .position(|u| *u == n)
-        .unwrap_or(99)
+        ["Desktop", "Documents", "Pictures", "Music", "Videos", "Downloads"]
+            .iter()
+            .position(|u| *u == n)
+            .unwrap_or(99)
     };
     rows.sort_by(|a, b| order(&a.0).cmp(&order(&b.0)).then(a.0.cmp(&b.0)));
     for (name, path, state) in rows {
@@ -1138,9 +1055,7 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
                 let ui4 = ui2.clone();
                 let dialog = adw::AlertDialog::new(
                     Some(&format!("Stop syncing {name} here?")),
-                    Some(
-                        "Its files stay on this computer, and your other computers keep syncing it.",
-                    ),
+                    Some("Its files stay on this computer, and your other computers keep syncing it."),
                 );
                 dialog.add_response("cancel", "Cancel");
                 dialog.add_response("skip", "Stop Syncing");
@@ -1148,10 +1063,7 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
                 dialog.set_close_response("cancel");
                 dialog.connect_response(None, move |_, id| {
                     if id == "skip" {
-                        ui3.act(
-                            &["omacloud", "folders", "skip", &name],
-                            "Stopped syncing here",
-                        );
+                        ui3.act(&["omacloud", "folders", "skip", &name], "Stopped syncing here");
                     } else {
                         ui4.refresh();
                     }
@@ -1241,15 +1153,10 @@ fn choose_what_syncs() -> (adw::PreferencesGroup, Rc<dyn Fn() -> Vec<String>>) {
             "Downloads" => "DOWNLOAD".to_string(),
             other => other.to_uppercase(),
         };
-        let dirs =
-            std::fs::read_to_string(format!("{home}/.config/user-dirs.dirs")).unwrap_or_default();
+        let dirs = std::fs::read_to_string(format!("{home}/.config/user-dirs.dirs")).unwrap_or_default();
         let set = dirs
             .lines()
-            .find_map(|l| {
-                l.trim()
-                    .strip_prefix(&format!("XDG_{key}_DIR="))
-                    .map(str::to_string)
-            })
+            .find_map(|l| l.trim().strip_prefix(&format!("XDG_{key}_DIR=")).map(str::to_string))
             .map(|v| v.trim_matches('"').replace("$HOME", &home));
         match set {
             Some(v) if v.trim_end_matches('/') == home => None,
@@ -1414,11 +1321,7 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
                      changing the key locks it out of that too, but uploads everything again.",
                     &[
                         ("remove", "Remove", adw::ResponseAppearance::Destructive),
-                        (
-                            "rotate",
-                            "Remove and Change Key",
-                            adw::ResponseAppearance::Destructive,
-                        ),
+                        ("rotate", "Remove and Change Key", adw::ResponseAppearance::Destructive),
                     ],
                     move |id| {
                         let mut argv = vec!["omacloud", "devices", "revoke", fp2.as_str()];
@@ -1452,33 +1355,23 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
 /// A join code for adding another computer to this account.
 fn show_join_code(ui: &Rc<Ui>) {
     let ui2 = ui.clone();
-    run_then(
-        &["omacloud", "join-code"],
-        Vec::new(),
-        None,
-        move |r| match r {
-            Err(e) => ui2.toast(&e),
-            Ok(out) => show_text(
-                &ui2,
-                "Join code",
-                "On the new computer, install Omacloud, open it, and paste this under Add this \
+    run_then(&["omacloud", "join-code"], Vec::new(), None, move |r| match r {
+        Err(e) => ui2.toast(&e),
+        Ok(out) => show_text(
+            &ui2,
+            "Join code",
+            "On the new computer, install Omacloud, open it, and paste this under Add this \
              computer to your account. Then approve it here. The code holds your bucket's key: \
              pass it only to your own computers, and not through chat or email.",
-                out.trim(),
-            ),
-        },
-    );
+            out.trim(),
+        ),
+    });
 }
 
 /// The account's bucket key: every computer holds it, so a lost one is
 /// locked out only by a new key, which the others switch to. With Omacloud
 /// storage, Omacloud makes the key and retires the old ones.
-fn bucket_key(
-    ui: &Rc<Ui>,
-    status: &Value,
-    hosted: bool,
-    dropbox_id: Option<String>,
-) -> adw::PreferencesGroup {
+fn bucket_key(ui: &Rc<Ui>, status: &Value, hosted: bool, dropbox_id: Option<String>) -> adw::PreferencesGroup {
     let empty = Vec::new();
     let computers = status["computers"].as_array().unwrap_or(&empty);
     let waiting = computers
@@ -1544,10 +1437,7 @@ fn bucket_key(
     // who has switched matters only while some haven't
     for c in computers.iter().filter(|_| waiting > 0) {
         let done = c["switched"].as_bool() == Some(true);
-        g.add(&row(
-            &text(&c["name"]),
-            if done { "On the new key" } else { "Not yet" },
-        ));
+        g.add(&row(&text(&c["name"]), if done { "On the new key" } else { "Not yet" }));
     }
     let change = button(
         if dropbox_id.is_some() {
@@ -1573,9 +1463,7 @@ fn change_bucket_key(ui: &Rc<Ui>, hosted: bool, dropbox_id: Option<String>) {
         return;
     }
     if let Some(id) = dropbox_id {
-        let code = adw::PasswordEntryRow::builder()
-            .title("New authorization code")
-            .build();
+        let code = adw::PasswordEntryRow::builder().title("New authorization code").build();
         let list = gtk::ListBox::new();
         list.add_css_class("boxed-list");
         list.set_selection_mode(gtk::SelectionMode::None);
@@ -1614,9 +1502,7 @@ fn change_bucket_key(ui: &Rc<Ui>, hosted: bool, dropbox_id: Option<String>) {
         return;
     }
     let id = adw::EntryRow::builder().title("New access key").build();
-    let secret = adw::PasswordEntryRow::builder()
-        .title("New secret key")
-        .build();
+    let secret = adw::PasswordEntryRow::builder().title("New secret key").build();
     let list = gtk::ListBox::new();
     list.add_css_class("boxed-list");
     list.set_selection_mode(gtk::SelectionMode::None);
@@ -1713,10 +1599,7 @@ fn settings(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
                 let b = button(label, Some("flat"));
                 let (ui, path) = (ui.clone(), path.clone());
                 b.connect_clicked(move |_| {
-                    ui.act(
-                        &["omacloud", "settings", "resolve", &path, "--keep", keep],
-                        "Resolved",
-                    );
+                    ui.act(&["omacloud", "settings", "resolve", &path, "--keep", keep], "Resolved");
                 });
                 rw.add_suffix(&b);
             }
@@ -1773,12 +1656,7 @@ fn setting_group(ui: &Rc<Ui>, item: &Value) -> gtk::Widget {
     for i in install {
         let r = row(&text(&i["name"]), &text(&i["url"]));
         let b = button("Install", Some("flat"));
-        let argv: Vec<String> = i["command"]
-            .as_array()
-            .unwrap_or(&empty)
-            .iter()
-            .map(text)
-            .collect();
+        let argv: Vec<String> = i["command"].as_array().unwrap_or(&empty).iter().map(text).collect();
         let ui = ui.clone();
         b.connect_clicked(move |_| {
             // Chromium opens the extension's page in that profile, where
@@ -1822,10 +1700,7 @@ fn secrets(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         "Seal ~/.ssh, ~/.gnupg and token files (or what ~/.config/omacloud/secrets lists) \
          so they travel with your files. No device can open them: only your recovery code.",
     );
-    let rw = row(
-        "Save this device's secrets",
-        "Replaces what was saved before",
-    );
+    let rw = row("Save this device's secrets", "Replaces what was saved before");
     let save = button("Save…", Some("suggested-action"));
     {
         let ui = ui.clone();
@@ -1868,9 +1743,7 @@ fn secrets(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
 
 /// A recovery code entry in a boxed list, for a dialog's extra child.
 fn code_entry() -> (gtk::ListBox, adw::PasswordEntryRow) {
-    let entry = adw::PasswordEntryRow::builder()
-        .title("Recovery code")
-        .build();
+    let entry = adw::PasswordEntryRow::builder().title("Recovery code").build();
     let list = gtk::ListBox::new();
     list.add_css_class("boxed-list");
     list.set_selection_mode(gtk::SelectionMode::None);
@@ -1901,11 +1774,7 @@ fn restore_secrets(ui: &Rc<Ui>, device: &str) {
             move |r| match r {
                 Err(e) => ui3.toast(&e),
                 Ok(out) => {
-                    let changes: Vec<&str> = out
-                        .lines()
-                        .filter(|l| l.starts_with("  "))
-                        .map(str::trim)
-                        .collect();
+                    let changes: Vec<&str> = out.lines().filter(|l| l.starts_with("  ")).map(str::trim).collect();
                     if changes.is_empty() {
                         ui3.toast(out.trim());
                         return;
@@ -1913,18 +1782,13 @@ fn restore_secrets(ui: &Rc<Ui>, device: &str) {
                     let ui4 = ui3.clone();
                     ui3.confirm(
                         "Write these files?",
-                        &format!(
-                            "{}\n\nFiles this replaces are backed up first.",
-                            changes.join("\n")
-                        ),
+                        &format!("{}\n\nFiles this replaces are backed up first.", changes.join("\n")),
                         &[("write", "Write", adw::ResponseAppearance::Destructive)],
                         move |_| {
                             let env = vec![("OMACLOUD_RECOVERY_CODE".to_string(), code.clone())];
                             let ui5 = ui4.clone();
                             run_then(
-                                &[
-                                    "omacloud", "secrets", "restore", "--from", &device2, "--yes",
-                                ],
+                                &["omacloud", "secrets", "restore", "--from", &device2, "--yes"],
                                 env,
                                 None,
                                 move |r| {
@@ -1967,9 +1831,7 @@ fn recovery(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
          your recovery code and every computer. The card works only together with your Google \
          sign-in: on its own it opens nothing, and Omacloud can't use its half without the card.",
     );
-    let code = adw::PasswordEntryRow::builder()
-        .title("Recovery code")
-        .build();
+    let code = adw::PasswordEntryRow::builder().title("Recovery code").build();
     contact.add(&code);
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     buttons.set_halign(gtk::Align::End);
@@ -1981,21 +1843,13 @@ fn recovery(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     {
         let ui = ui.clone();
         make.connect_clicked(move |_| {
-            let env = vec![(
-                "OMACLOUD_RECOVERY_CODE".to_string(),
-                code.text().to_string(),
-            )];
+            let env = vec![("OMACLOUD_RECOVERY_CODE".to_string(), code.text().to_string())];
             ui.toast("Sign in with Google in your browser to keep the card's other half");
             let ui2 = ui.clone();
-            run_then(
-                &["omacloud", "recovery", "contact"],
-                env,
-                None,
-                move |r| match r {
-                    Err(e) => ui2.toast(&e),
-                    Ok(out) => show_card(&ui2, out.trim()),
-                },
-            );
+            run_then(&["omacloud", "recovery", "contact"], env, None, move |r| match r {
+                Err(e) => ui2.toast(&e),
+                Ok(out) => show_card(&ui2, out.trim()),
+            });
         });
     }
     {
@@ -2096,14 +1950,7 @@ fn draw_card(cr: &gtk::cairo::Context, groups: &[String]) -> Result<(), gtk::cai
         cr.move_to(x, y);
         cr.show_text(text)
     };
-    line(
-        "Omacloud recovery card",
-        18.0,
-        30.0,
-        "Sans",
-        FontWeight::Bold,
-        14.0,
-    )?;
+    line("Omacloud recovery card", 18.0, 30.0, "Sans", FontWeight::Bold, 14.0)?;
     line(
         "For: ________________________________",
         18.0,
@@ -2172,14 +2019,7 @@ mod tests {
 
     use super::s3_location;
 
-    fn loc(
-        p: usize,
-        l: usize,
-        account: &str,
-        eu: bool,
-        endpoint: &str,
-        region: &str,
-    ) -> (String, String) {
+    fn loc(p: usize, l: usize, account: &str, eu: bool, endpoint: &str, region: &str) -> (String, String) {
         s3_location(p, l, account, eu, endpoint, region).expect("a location")
     }
 
@@ -2200,10 +2040,7 @@ mod tests {
         assert!(s3_location(1, 0, "", false, "", "").is_err());
         assert_eq!(
             loc(1, 0, "abc123", false, "", ""),
-            (
-                "https://abc123.r2.cloudflarestorage.com".into(),
-                "auto".into()
-            )
+            ("https://abc123.r2.cloudflarestorage.com".into(), "auto".into())
         );
         assert_eq!(
             loc(1, 0, "abc123", true, "", "").0,

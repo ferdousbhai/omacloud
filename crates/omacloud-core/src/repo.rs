@@ -7,8 +7,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use rustic_backend::BackendOptions;
 use rustic_core::{
-    ALL_FILE_TYPES, ConfigOptions, Credentials, FileType, Id, IndexedFullStatus, IndexedIdsStatus,
-    KeyOptions, Repository, RepositoryBackends, RepositoryOptions,
+    ALL_FILE_TYPES, ConfigOptions, Credentials, FileType, Id, IndexedFullStatus, IndexedIdsStatus, KeyOptions,
+    Repository, RepositoryBackends, RepositoryOptions,
     repofile::{MasterKey, SnapshotFile, SnapshotId},
 };
 use serde::{Deserialize, Serialize};
@@ -57,8 +57,7 @@ impl RepoSpec {
     #[must_use]
     pub fn without_credentials(&self) -> Self {
         let mut spec = self.clone();
-        spec.options
-            .retain(|k, _| !CREDENTIAL_OPTIONS.contains(&k.as_str()));
+        spec.options.retain(|k, _| !CREDENTIAL_OPTIONS.contains(&k.as_str()));
         spec
     }
 
@@ -67,8 +66,7 @@ impl RepoSpec {
     #[must_use]
     pub fn without_local_options(&self) -> Self {
         let mut spec = self.clone();
-        spec.options
-            .retain(|k, _| !LOCAL_OPTIONS.contains(&k.as_str()));
+        spec.options.retain(|k, _| !LOCAL_OPTIONS.contains(&k.as_str()));
         spec
     }
 
@@ -79,10 +77,7 @@ impl RepoSpec {
             Some(rate) => {
                 let rate = crate::throttle::parse_rate(rate)?;
                 let throttled = crate::throttle::Throttled::new(backends.repository(), rate);
-                Ok(RepositoryBackends::new(
-                    Arc::new(throttled),
-                    backends.repo_hot(),
-                ))
+                Ok(RepositoryBackends::new(Arc::new(throttled), backends.repo_hot()))
             }
             None => Ok(backends),
         }
@@ -144,10 +139,7 @@ impl RepoSpec {
         }
         let mut spec = self.clone();
         if spec.repository.starts_with("opendal:") {
-            let root = spec
-                .options
-                .get("root")
-                .map_or("", |r| r.trim_end_matches('/'));
+            let root = spec.options.get("root").map_or("", |r| r.trim_end_matches('/'));
             let new_root = format!("{root}/omacloud-e{n}");
             _ = spec.options.insert("root".into(), new_root);
         } else {
@@ -190,10 +182,7 @@ impl RepoSpec {
         // it goes last, so a partly deleted repository still says what it is
         if left == 0 {
             _ = be.remove(FileType::Config, &Id::default(), false);
-            let local = self
-                .repository
-                .strip_prefix("local:")
-                .unwrap_or(&self.repository);
+            let local = self.repository.strip_prefix("local:").unwrap_or(&self.repository);
             if !local.contains(':') && std::path::Path::new(local).is_dir() {
                 std::fs::remove_dir_all(local)?;
             }
@@ -237,20 +226,16 @@ impl RepoSpec {
     }
 
     pub(crate) fn open_ids(&self, key: &MasterKey) -> Result<Repository<IndexedIdsStatus>> {
-        Ok(
-            Repository::new(&RepositoryOptions::default(), &self.backends()?)?
-                .open(&Credentials::Masterkey(key.clone()))?
-                .to_indexed_ids()?,
-        )
+        Ok(Repository::new(&RepositoryOptions::default(), &self.backends()?)?
+            .open(&Credentials::Masterkey(key.clone()))?
+            .to_indexed_ids()?)
     }
 
     /// Open with the master key (no key derivation) and load the full index.
     pub(crate) fn open(&self, key: &MasterKey) -> Result<Repo> {
-        Ok(
-            Repository::new(&RepositoryOptions::default(), &self.backends()?)?
-                .open(&Credentials::Masterkey(key.clone()))?
-                .to_indexed()?,
-        )
+        Ok(Repository::new(&RepositoryOptions::default(), &self.backends()?)?
+            .open(&Credentials::Masterkey(key.clone()))?
+            .to_indexed()?)
     }
 }
 
@@ -272,10 +257,7 @@ pub(crate) fn copy_snapshots(
         .into_iter()
         .map(|s| (ident(&s), snapshot_hex(&s.id)))
         .collect();
-    let missing: Vec<_> = wanted
-        .iter()
-        .filter(|s| !present.contains_key(&ident(s)))
-        .collect();
+    let missing: Vec<_> = wanted.iter().filter(|s| !present.contains_key(&ident(s))).collect();
     if !missing.is_empty() {
         src.copy(&dest.open_ids(dest_key)?, missing)?;
     }

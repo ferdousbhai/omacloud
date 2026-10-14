@@ -45,11 +45,7 @@ impl Ignores {
     /// If a rule doesn't parse or the folder file can't be read.
     pub fn load(folder: &Path, extra: &[String]) -> Result<Self> {
         let mut b = GitignoreBuilder::new(folder);
-        for rule in DEFAULTS
-            .iter()
-            .copied()
-            .chain(extra.iter().map(String::as_str))
-        {
+        for rule in DEFAULTS.iter().copied().chain(extra.iter().map(String::as_str)) {
             _ = b.add_line(None, rule)?;
         }
         let file = folder.join(FOLDER_FILE);
@@ -83,9 +79,7 @@ impl Ignores {
         {
             return true;
         }
-        self.rules
-            .matched_path_or_any_parents(rel, is_dir)
-            .is_ignore()
+        self.rules.matched_path_or_any_parents(rel, is_dir).is_ignore()
     }
 }
 

@@ -28,9 +28,10 @@ fn digits(s: &str, what: &str, len: usize) -> Result<Vec<usize>> {
         .filter(char::is_ascii_alphanumeric)
         .map(|c| {
             let c = c.to_ascii_lowercase() as u8;
-            ALPHABET.iter().position(|&a| a == c).ok_or_else(|| {
-                anyhow::anyhow!("{what} has a character it can't have: {}", c as char)
-            })
+            ALPHABET
+                .iter()
+                .position(|&a| a == c)
+                .ok_or_else(|| anyhow::anyhow!("{what} has a character it can't have: {}", c as char))
         })
         .collect::<Result<_>>()?;
     ensure!(d.len() == len, "{what} has {len} characters");
@@ -76,13 +77,7 @@ pub fn card(code: &str, pad: &str) -> Result<String> {
     let n = ALPHABET.len();
     let code = digits(code, "a recovery code", CODE_LEN)?;
     let pad = digits(pad, "a pad", CODE_LEN)?;
-    let body = text(
-        &code
-            .iter()
-            .zip(&pad)
-            .map(|(c, p)| (c + p) % n)
-            .collect::<Vec<_>>(),
-    );
+    let body = text(&code.iter().zip(&pad).map(|(c, p)| (c + p) % n).collect::<Vec<_>>());
     let check = check(&body);
     Ok(grouped(&format!("{body}{check}")))
 }
@@ -120,11 +115,7 @@ pub fn open(card: &str, pad: &str) -> Result<String> {
     let n = ALPHABET.len();
     let body = checked(card)?;
     let pad = digits(pad, "a pad", CODE_LEN)?;
-    let code: Vec<usize> = body
-        .iter()
-        .zip(&pad)
-        .map(|(c, p)| (c + n - p) % n)
-        .collect();
+    let code: Vec<usize> = body.iter().zip(&pad).map(|(c, p)| (c + n - p) % n).collect();
     Ok(grouped(&text(&code)))
 }
 
