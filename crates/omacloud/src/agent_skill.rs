@@ -60,9 +60,7 @@ impl Skill {
         if !self.adopts_legacy || !fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
             return false;
         }
-        let Ok(entries) = fs::read_dir(dir) else {
-            return false;
-        };
+        let Ok(entries) = fs::read_dir(dir) else { return false };
         let names: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.file_name()).collect();
         names.len() == 1
             && names[0] == SKILL_FILE
