@@ -1,0 +1,39 @@
+#!/bin/bash
+# Every check a change must pass, run on this machine. .githooks/pre-push runs it before a push
+# (NO_CHECK=1 skips it); enable the hook once per clone with `git config core.hooksPath .githooks`.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export PATH="$HOME/.cargo/bin:$PATH"
+
+step() { printf '\n==> %s\n' "$*"; }
+
+step "rustfmt (fix with: cargo fmt --all)"
+cargo fmt --all -- --check
+step "clippy"
+cargo clippy --locked --workspace --all-targets -- -D warnings
+step "cargo test"
+cargo test --locked --workspace
+
+# CI also syncs through a SeaweedFS S3 container (scripts/s3-sync.sh).
+cargo build --locked -q -p omacloud
+if command -v restic >/dev/null; then
+  step "restore with plain restic"
+  scripts/restic-compat.sh target/debug/omacloud
+else
+  echo "note: skipping the plain-restic restore (install restic to run it)" >&2
+fi
+if docker info >/dev/null 2>&1; then
+  step "bucket key change, one computer offline"
+  scripts/bucket-key.sh target/debug/omacloud
+else
+  echo "note: skipping the bucket-key change test (needs a running Docker you can use)" >&2
+fi
+
+step "server"
+(cd server && { [[ -d node_modules ]] || npm ci; } && npm run check)
+
+step "packaging"
+bash -n install.sh pkgbuild/PKGBUILD packaging/omarchy-pkgs/omacloud/PKGBUILD scripts/*.sh .githooks/pre-push
+for t in scripts/tests/*.py; do python3 "$t"; done
+
+printf '\nAll checks passed.\n'

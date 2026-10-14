@@ -20,9 +20,11 @@ threat model: docs/design.md; build, test and release: CONTRIBUTING.md.
 ## Commands
 
 ```sh
+bin/check                                # every check below; .githooks/pre-push runs it before a push
+git config core.hooksPath .githooks      # once per clone (NO_CHECK=1 skips the hook)
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
 cd server && npm ci && npm run check     # Worker types + unit tests (node --test)
 ```
 
