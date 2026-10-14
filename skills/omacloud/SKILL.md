@@ -54,7 +54,7 @@ secret (`init` creating an account or recovering with a card, `join-code`,
 `export`, `recovery contact|split|combine`) refuse with `terminal_required`
 off a terminal: have the owner run them in their own terminal. Never work
 around that refusal (no pseudo-terminals, no `script`), and never run them
-merely to inspect status. Joining with a join code or recovery code prints none.
+yourself, even where your shell has a terminal and nothing refuses. Joining with a join code or recovery code prints none.
 Never put recovery codes, join codes, passwords, or secret keys in chat or shell
 arguments. The CLI accepts no-echo prompts or documented `OMACLOUD_*` environment
 variables; prefer the owner's terminal for those flows.

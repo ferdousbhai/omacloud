@@ -63,9 +63,18 @@ pub fn interactive(mode: Mode) -> bool {
     mode == Mode::Human && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 
-/// Whether what a command prints goes to a person's terminal: text mode, and
-/// stdout a terminal. Commands that print a secret print it only then.
+/// Whether what a command prints goes to a person at a terminal: text mode,
+/// with stdin and stdout both a terminal. Commands that print a secret print
+/// it only then. Asking stdin too turns away the harnesses that give a
+/// command a terminal for its output only; one that gives it a whole
+/// terminal (as `script` does) gets the secret: see docs/design.md.
 pub fn to_terminal(mode: Mode) -> bool {
+    interactive(mode)
+}
+
+/// [`to_terminal`] for a command that reads its input from stdin, which
+/// may then be a pipe: text mode, and stdout a terminal.
+pub fn stdout_to_terminal(mode: Mode) -> bool {
     mode == Mode::Human && std::io::stdout().is_terminal()
 }
 
@@ -523,6 +532,7 @@ mod tests {
         for mode in [Mode::Json, Mode::Quiet, Mode::Ids, Mode::Count] {
             assert!(!interactive(mode));
             assert!(!to_terminal(mode));
+            assert!(!stdout_to_terminal(mode));
         }
     }
 

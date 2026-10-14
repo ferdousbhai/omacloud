@@ -278,11 +278,15 @@ Commands only ask (a secret, a confirmation) in text mode with stdin and
 stdout on a terminal; elsewhere secrets come from the `OMACLOUD_*`
 environment variables and confirmations from `--yes`.
 
-What prints a secret prints it only to your terminal, in text mode, and
-refuses (exit 2) as JSON or into a pipe: `init` when it creates an account or
-recovers with a card (the recovery code), `join-code`, `export`, and
-`recovery contact`, `split` and `combine`. Joining with a join code or the
-recovery code prints no secret and works anywhere.
+What prints a secret prints it only to your terminal, in text mode with
+stdin and stdout on it, and refuses (exit 2) as JSON or into a pipe: `init`
+when it creates an account or recovers with a card (the recovery code),
+`join-code`, `export`, and `recovery contact`, `split` and `combine`
+(`combine` reads its shares from stdin, so only its stdout must be a
+terminal). Joining with a join code or the recovery code prints no secret
+and works anywhere. This guards against accidents, such as a secret landing
+in a script's or an agent's captured output; it is no wall against a program
+that gives a command a whole terminal (see docs/design.md).
 
 `omacloud watch`, which the systemd unit runs, keeps its own exit codes: 2
 when this computer was removed or the account can't be verified (the unit

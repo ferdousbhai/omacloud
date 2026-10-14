@@ -68,7 +68,8 @@ pub fn terminal_required(what: &str) -> CliError {
         format!("this prints {what}, so it only prints to a terminal, never as JSON or into a pipe"),
     )
     .hint(
-        "run it yourself in a terminal, without --json, --quiet, --ids-only or --count, and keep what it shows private",
+        "run it yourself in a terminal (stdin and stdout), without --json, --quiet, --ids-only or --count, and \
+         keep what it shows private",
     )
 }
 
@@ -97,7 +98,7 @@ pub fn classify(e: &anyhow::Error) -> CliError {
         }
         Some(Membership::Revoked) => {
             return setup("removed", message)
-                .hint("this computer was removed from the account; set it up again to rejoin");
+                .hint("its files here stay; to sync it again, move its config and data directory aside and run `omacloud init`");
         }
         None => {}
     }

@@ -42,8 +42,9 @@ scripts need docker (SeaweedFS) and are described in CONTRIBUTING.md.
   fails with a `CliError` (`fail.rs`: code, exit 1-5, remediation in the
   hint); piped output is the JSON envelope, so scripts parsing text pass
   `--styled`. Commands that print a secret (a recovery code, join code,
-  card, shares, export's password) check `output::to_terminal` first and
-  refuse otherwise; tests and scripts run them under a pty (`script`).
+  card, shares, export's password) check `output::to_terminal` (stdin and
+  stdout a terminal; `combine` stdout only) first and refuse otherwise;
+  tests and scripts run them under a pty (`script`), the app on its own.
   `watch` keeps its exit codes (2 stopped, 75 upgraded): the systemd unit's
   `RestartPreventExitStatus=2` depends on them.
 - Secrets never go on a command line: they come from env vars

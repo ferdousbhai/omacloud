@@ -73,7 +73,8 @@ error:/hint: lines on stderr in text mode.
 
 Commands that print a secret (init when it creates an account or recovers with
 a card, join-code, export, recovery contact, split and combine) print only to a
-terminal, in text mode.
+terminal, in text mode, with stdin a terminal too (combine excepted: its shares
+may come on stdin).
 
 Exit codes: 0 ok; 1 other failure; 2 invalid usage or request (a destructive
 command without --yes where nobody can be asked, a secret asked for where no
@@ -789,12 +790,50 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>,
     if paths.config.exists() {
         return Err(already_set_up(paths).into());
     }
+    // the refusals that need no account come before anything is made here:
+    // no folder, device key or coordination skeleton is left behind. A
+    // shared directory is only looked at, as opening it makes its skeleton
+    let bucket = if config.coordinator == SELF_HOSTED {
+        let c = coordinator(&config)?;
+        let anchor = c.anchor()?;
+        Some((c, anchor))
+    } else {
+        None
+    };
+    let creating = bucket.as_ref().map_or_else(
+        || !Path::new(&config.coordinator).join("account.json").exists(),
+        |(_, anchor)| anchor.is_none(),
+    );
+    if matches!(recovery, Some((_, Recovery::Card))) && !output::to_terminal(mode()) {
+        return Err(fail::terminal_required("your recovery code").into());
+    }
+    if creating && !output::to_terminal(mode()) {
+        if config.repo.repository.is_empty() {
+            return Err(fail::usage("creating an account needs --repo")
+                .hint("run `omacloud init --help`")
+                .into());
+        }
+        let refused = fail::terminal_required("the new account's recovery code");
+        // Omacloud storage: only the sign-in told there's no account yet
+        return Err(if notes.signed_in_as.is_some() {
+            refused.hint("there's no account for this Google account yet; create it in a terminal of your own")
+        } else {
+            refused
+        }
+        .into());
+    }
     fs::create_dir_all(&config.folder)?;
     fs::create_dir_all(&paths.data)?;
     let signing = load_or_create_key(&paths.device_key())?;
     let me = fingerprint(&public_hex(&signing));
-    let coord = coordinator(&config)?;
-    let anchor = coord.anchor()?;
+    let (coord, anchor) = match bucket {
+        Some(opened) => opened,
+        None => {
+            let c = coordinator(&config)?;
+            let anchor = c.anchor()?;
+            (c, anchor)
+        }
+    };
     let creating = anchor.is_none();
     if creating && matches!(recovery, Some((_, Recovery::Card))) {
         return Err(fail::not_found("there's no account here to recover")
@@ -817,7 +856,8 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>,
         }
     }
     // creating an account shows its recovery code and password once, and
-    // recovering with a card shows the code again: only to a terminal
+    // recovering with a card shows the code again: only to a terminal.
+    // Checked again here, as the account may have appeared or gone meanwhile
     if creating && config.repo.repository.is_empty() {
         return Err(fail::usage("creating an account needs --repo")
             .hint("run `omacloud init --help`")
@@ -830,13 +870,8 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>,
         return Err(fail::terminal_required("your recovery code").into());
     }
 
+    // the sign-in and a new bucket were told as they happened (on stderr)
     let mut out = String::new();
-    if let Some(email) = &notes.signed_in_as {
-        say!(out, "signed in as {email}");
-    }
-    if let Some(bucket) = &notes.created_bucket {
-        say!(out, "created bucket {bucket}");
-    }
     let how = if creating {
         let created = account::create(coord.as_ref(), &config.repo, &signing, &config.device)?;
         config.root = created.root;
@@ -1401,6 +1436,8 @@ fn run(cli: Cli) -> Out {
                 } else {
                     hosted::sign_in(service)?
                 };
+                // told now: a later failure would hide it
+                eprintln!("signed in as {}", s.email);
                 notes.signed_in_as = Some(s.email.clone());
                 let opts = [
                     ("endpoint", s.endpoint),
@@ -1420,9 +1457,10 @@ fn run(cli: Cli) -> Out {
             let joined = join_code
                 .as_deref()
                 .map(|code| {
-                    parse_join_code(code).map_err(|e| {
-                        fail::setup("join_code_rejected", format!("{e:#}"))
-                            .hint("copy the whole code from `omacloud join-code` (or Show Join Code in the app)")
+                    // a fixed message: the parser's would quote parts of the code
+                    parse_join_code(code).map_err(|_| {
+                        fail::setup("join_code_rejected", "that join code is damaged")
+                            .hint("copy the whole code again from `omacloud join-code` (or Show Join Code in the app)")
                     })
                 })
                 .transpose()?;
@@ -1517,6 +1555,8 @@ fn run(cli: Cli) -> Out {
                     }
                 }
                 let name = made.context("couldn't find a free bucket name; try again")?;
+                // told now: if setting up fails from here, the bucket still exists
+                eprintln!("created bucket {name}");
                 notes.created_bucket = Some(name.clone());
                 repo.options.insert("bucket".into(), name);
                 repo.options.entry("region".into()).or_insert(region);
@@ -2336,9 +2376,24 @@ fn relative(config: &Config, path: &Path) -> Result<PathBuf> {
     )
 }
 
+/// `p` made absolute, with symlinks resolved as far as it exists. It makes
+/// nothing: `init` creates the folder only once it knows it goes ahead.
 fn absolute(p: &Path) -> Result<PathBuf> {
-    fs::create_dir_all(p)?;
-    Ok(fs::canonicalize(p)?)
+    let p = std::path::absolute(p)?;
+    let mut rest = Vec::new();
+    let mut at = p.as_path();
+    loop {
+        if let Ok(real) = fs::canonicalize(at) {
+            return Ok(rest.iter().rev().fold(real, |path, name| path.join(name)));
+        }
+        match (at.file_name(), at.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name.to_owned());
+                at = parent;
+            }
+            _ => return Ok(p),
+        }
+    }
 }
 
 fn leftover_text(r: &omacloud_core::Rotated) -> String {
@@ -2518,8 +2573,14 @@ fn hosted_account(config: &Config) -> Option<(String, String)> {
 
 fn recovery(paths: &Paths, action: RecoveryCmd) -> Out {
     use omacloud_core::{contact, shamir};
-    // all but removing the contact print the recovery code or a part of it
-    if !matches!(action, RecoveryCmd::Contact { remove: true }) && !output::to_terminal(mode()) {
+    // all but removing the contact print the recovery code or a part of it;
+    // combine reads its shares from stdin, which may be a pipe
+    let to_terminal = if matches!(action, RecoveryCmd::Combine) {
+        output::stdout_to_terminal(mode())
+    } else {
+        output::to_terminal(mode())
+    };
+    if !matches!(action, RecoveryCmd::Contact { remove: true }) && !to_terminal {
         let what = match action {
             RecoveryCmd::Contact { .. } => "a trusted contact's card",
             RecoveryCmd::Split { .. } => "shares of your recovery code",
@@ -2594,7 +2655,8 @@ fn recovery(paths: &Paths, action: RecoveryCmd) -> Out {
                 let k = match shamir::needed(line) {
                     Ok(k) => k,
                     Err(e) => {
-                        eprintln!("{e:#}; try that one again");
+                        // by position: the share itself stays off stderr
+                        eprintln!("share {}: {e:#}; try that one again", got.len() + 1);
                         continue;
                     }
                 };

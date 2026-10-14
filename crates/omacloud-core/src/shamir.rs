@@ -102,7 +102,8 @@ fn parse(share: &str) -> Result<Share> {
     let rest = body.strip_prefix(PREFIX).context("not an omacloud share")?;
     ensure!(
         check(body) == sum,
-        "share {share} is mistyped (its check doesn't match)"
+        // never the share itself: errors end up in logs and redirected output
+        "that share is mistyped (its check doesn't match)"
     );
     let parts: Vec<&str> = rest.split('-').collect();
     let [tag, kn, x, ys] = parts[..] else {
@@ -133,7 +134,12 @@ pub fn needed(share: &str) -> Result<u8> {
 /// If a share is malformed, they belong to different accounts, there are too
 /// few, or together they don't rebuild the account's code.
 pub fn combine(shares: &[String]) -> Result<String> {
-    let mut parsed: Vec<Share> = shares.iter().map(|s| parse(s)).collect::<Result<_>>()?;
+    // by position, never by the share itself
+    let mut parsed: Vec<Share> = shares
+        .iter()
+        .enumerate()
+        .map(|(i, s)| parse(s).with_context(|| format!("share {}", i + 1)))
+        .collect::<Result<_>>()?;
     let first = parsed.first().context("no shares")?;
     let (tag, k, len) = (first.tag.clone(), first.k, first.ys.len());
     ensure!(
@@ -202,7 +208,10 @@ mod tests {
         let at = typo.len() - 10;
         typo[at] = if typo[at] == b'0' { b'1' } else { b'0' };
         let typo = String::from_utf8(typo)?;
-        assert!(needed(&typo).is_err());
+        let e = format!("{:#}", needed(&typo).unwrap_err());
+        assert!(e.contains("mistyped") && !e.contains(&typo), "{e}");
+        let e = format!("{:#}", combine(&[shares[1].clone(), typo.clone()]).unwrap_err());
+        assert!(e.starts_with("share 2: ") && !e.contains(&typo), "{e}");
         let other = split(&new_recovery_code(), 2, 3)?;
         assert!(combine(&[shares[0].clone(), other[1].clone()]).is_err());
         assert!(split("too-short", 2, 3).is_err());

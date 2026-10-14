@@ -14,9 +14,13 @@
   (`--json` is now global), and its data is in the envelope's `data`; a
   script reading text output passes `--styled`. `omacloud watch` keeps its
   exit codes, which the systemd unit relies on.
-- What prints a secret prints it only to your terminal, and refuses as JSON
-  or into a pipe: `init` creating an account or recovering with a card,
-  `join-code`, `export`, and `recovery contact`, `split` and `combine`.
+- What prints a secret prints it only to your terminal (stdin and stdout),
+  and refuses as JSON or into a pipe: `init` creating an account or
+  recovering with a card, `join-code`, `export`, and `recovery contact`,
+  `split` and `combine`. `init` refuses before it makes anything here.
+- Error messages no longer quote a damaged join code or a mistyped
+  recovery share. The browser `init --hosted` and `recovery contact` open
+  gets none of omacloud's secret environment variables.
 - Commands ask (a secret, a confirmation) only on a terminal. `devices
   revoke` and `rotate` ask first, and need `--yes` where nobody can be
   asked; so does `restore` over an existing file.

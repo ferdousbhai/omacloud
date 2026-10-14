@@ -84,42 +84,76 @@ impl Home {
     }
 }
 
-/// Runs `cmd` with stdout on a new pseudo-terminal; what it printed there
-/// (stderr too, as on a terminal) and the exit code.
-fn on_tty(mut cmd: Command) -> (String, i32) {
-    let (mut master, mut slave) = (0, 0);
-    // SAFETY: openpty fills in two new descriptors, owned from here on
-    let (master, slave) = unsafe {
-        assert_eq!(
-            libc::openpty(
-                &raw mut master,
-                &raw mut slave,
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                std::ptr::null()
-            ),
-            0
-        );
-        (File::from_raw_fd(master), OwnedFd::from_raw_fd(slave))
-    };
-    cmd.stdout(Stdio::from(slave.try_clone().unwrap()))
-        .stderr(Stdio::from(slave));
+/// A new pseudo-terminal: its controlling side and its terminal side, both
+/// close-on-exec from the start, so only the descriptors a child gets dup2ed
+/// onto it (stdin, stdout) hold it open, and reading ends with the child.
+fn pty() -> (File, OwnedFd) {
+    let flags = libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC;
+    // SAFETY: each call gets a descriptor owned from here on, or fails
+    unsafe {
+        let m = libc::posix_openpt(flags);
+        assert!(m >= 0, "{}", std::io::Error::last_os_error());
+        let master = File::from_raw_fd(m);
+        assert_eq!(libc::grantpt(m), 0);
+        assert_eq!(libc::unlockpt(m), 0);
+        let mut name = [0 as libc::c_char; 128];
+        assert_eq!(libc::ptsname_r(m, name.as_mut_ptr(), name.len()), 0);
+        let s = libc::open(name.as_ptr(), flags);
+        assert!(s >= 0, "{}", std::io::Error::last_os_error());
+        (master, OwnedFd::from_raw_fd(s))
+    }
+}
+
+/// Runs `cmd` with stdin and stdout on a new pseudo-terminal, as a person's
+/// terminal; what it printed there (stderr too, as on a terminal) and the
+/// exit code.
+fn on_tty(cmd: Command) -> (String, i32) {
+    let (out, _, code) = tty(cmd, true, true);
+    (out, code)
+}
+
+/// [`on_tty`] with stderr kept apart: what the terminal showed, stderr, and
+/// the exit code.
+fn on_tty_split(cmd: Command) -> (String, String, i32) {
+    tty(cmd, true, false)
+}
+
+/// `cmd` with stdout on a new pseudo-terminal, and stdin and stderr there
+/// too if asked (else stdin as `cmd` has it, and stderr apart).
+fn tty(mut cmd: Command, stdin_there: bool, stderr_there: bool) -> (String, String, i32) {
+    let (mut master, slave) = pty();
+    if stdin_there {
+        cmd.stdin(Stdio::from(slave.try_clone().unwrap()));
+    }
+    if stderr_there {
+        cmd.stderr(Stdio::from(slave.try_clone().unwrap()));
+    } else {
+        cmd.stderr(Stdio::piped());
+    }
+    cmd.stdout(Stdio::from(slave));
     let mut child = cmd.spawn().unwrap();
     // the parent's copies of the terminal side go, so reading ends with the child
     drop(cmd);
-    let mut out = Vec::new();
-    let mut master = master;
-    let mut buf = [0u8; 4096];
-    loop {
-        match master.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => out.extend_from_slice(&buf[..n]),
-            // EIO: the child closed the terminal
-            Err(_) => break,
+    let mut errors = child.stderr.take();
+    let errors = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(e) = errors.as_mut() {
+            e.read_to_string(&mut buf).unwrap();
         }
+        buf
+    });
+    let mut out = Vec::new();
+    let mut buf = [0u8; 4096];
+    // EIO: the child closed the terminal
+    while let Ok(n @ 1..) = master.read(&mut buf) {
+        out.extend_from_slice(&buf[..n]);
     }
     let status = child.wait().unwrap();
-    (String::from_utf8_lossy(&out).replace('\r', ""), status.code().unwrap())
+    (
+        String::from_utf8_lossy(&out).replace('\r', ""),
+        errors.join().unwrap(),
+        status.code().unwrap(),
+    )
 }
 
 fn code(out: &Output) -> i32 {
@@ -283,12 +317,14 @@ fn usage_errors_follow_the_contract() {
 #[test]
 fn commands_that_print_a_secret_refuse_anywhere_but_a_terminal() {
     let h = Home::new();
-    // creating an account shows its recovery code: refused before anything is made
+    // creating an account shows its recovery code: refused before anything
+    // is made, no config, folder, device key, repository or coordination
     let args = h.init_args("a");
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     machine_error(&h.run("a", &args), "terminal_required", 2);
-    assert!(!h.path("a.toml").exists());
-    assert!(!h.path("repo").exists() || std::fs::read_dir(h.path("repo")).unwrap().next().is_none());
+    for left in ["a.toml", "a.d", "A", "repo", "coord"] {
+        assert!(!h.path(left).exists(), "{left} made by a refused init");
+    }
 
     let recovery = h.create();
     for args in [
@@ -318,6 +354,11 @@ fn commands_that_print_a_secret_refuse_anywhere_but_a_terminal() {
         assert_eq!(stdout(&out), "", "{args:?}");
         assert!(stderr(&out).starts_with("error: this prints "), "{}", stderr(&out));
     }
+    // stdout on a terminal but stdin not: no person's terminal either
+    let (out, err, exit) = tty(h.cmd("a", &["export"]), false, false);
+    assert_eq!(exit, 2, "{out}{err}");
+    assert!(!out.contains("password:"), "{out}");
+    assert!(err.starts_with("error: this prints "), "{err}");
     // on a terminal, export shows the password
     let (out, exit) = on_tty(h.cmd("a", &["export"]));
     assert_eq!(exit, 0, "{out}");
@@ -414,4 +455,144 @@ fn a_bucket_key_kept_in_a_keyring_that_is_off_is_exit_3() {
     .unwrap();
     let e = machine_error(&h.run("k", &["sync"]), "keyring_off", 3);
     assert_eq!(e["hint"], "unset OMACLOUD_KEYRING");
+}
+
+/// `b` joined to `a`'s account with the recovery code; its fingerprint.
+fn join_b(h: &Home, recovery: &str) -> String {
+    let args = h.init_args("b");
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = h
+        .cmd("b", &args)
+        .env("OMACLOUD_RECOVERY_CODE", recovery)
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
+    json(&out)["data"]["fingerprint"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn watch_exits_2_once_this_computer_is_removed() {
+    let h = Home::new();
+    let recovery = h.create();
+    let fp = join_b(&h, &recovery);
+    // nobody confirmed it: nothing revoked
+    let e = machine_error(&h.run("a", &["devices", "revoke", &fp]), "confirmation_required", 2);
+    assert_eq!(e["hint"], "pass --yes");
+    let out = h.run("a", &["devices", "revoke", &fp, "--yes"]);
+    assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
+
+    // the systemd unit's RestartPreventExitStatus=2 depends on this exit
+    let mut watch = h
+        .cmd("b", &["watch", "--poll", "1"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let status = loop {
+        if let Some(status) = watch.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() > deadline {
+            watch.kill().unwrap();
+            panic!("watch kept running after its computer was removed");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let mut log = String::new();
+    watch.stderr.take().unwrap().read_to_string(&mut log).unwrap();
+    assert_eq!(status.code(), Some(2), "{log}");
+    assert!(log.contains("refusing to sync"), "{log}");
+}
+
+#[test]
+fn removing_the_trusted_contact_prints_no_secret_so_is_not_refused() {
+    let h = Home::new();
+    h.create();
+    // a local account has no contact to remove; the answer says that, not
+    // that a terminal is needed
+    let e = machine_error(&h.run("a", &["recovery", "contact", "--remove"]), "unsupported", 2);
+    assert!(e["message"].as_str().unwrap().contains("Omacloud storage"), "{e}");
+    let text = h.run("a", &["recovery", "contact", "--remove", "--styled"]);
+    assert_eq!(code(&text), 2);
+    assert!(
+        stderr(&text).starts_with("error: a trusted contact needs"),
+        "{}",
+        stderr(&text)
+    );
+}
+
+#[test]
+fn restore_over_an_existing_file_needs_yes() {
+    let h = Home::new();
+    h.create();
+    let file = h.path("A/hello.txt");
+    std::fs::write(&file, "one").unwrap();
+    assert_eq!(code(&h.run("a", &["sync"])), 0);
+    let file_arg = file.to_string_lossy().into_owned();
+    let seq = json(&h.run("a", &["versions", &file_arg]))["data"][0]["seq"].to_string();
+    let to = h.path("restored.txt");
+    let to_arg = to.to_string_lossy().into_owned();
+    std::fs::write(&to, "mine").unwrap();
+    let args = [
+        "restore",
+        file_arg.as_str(),
+        "--at",
+        seq.as_str(),
+        "--to",
+        to_arg.as_str(),
+    ];
+    let e = machine_error(&h.run("a", &args), "exists", 2);
+    assert!(e["hint"].as_str().unwrap().contains("--yes"), "{e}");
+    assert_eq!(std::fs::read_to_string(&to).unwrap(), "mine");
+    let mut yes = args.to_vec();
+    yes.push("--yes");
+    let v = json(&h.run("a", &yes));
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(std::fs::read_to_string(&to).unwrap(), "one");
+}
+
+#[test]
+fn join_code_on_a_terminal_prints_the_code_on_stdout_and_notes_on_stderr() {
+    let h = Home::new();
+    // coordination in the "bucket" (a directory through opendal); with the
+    // keyring off, the bucket key stays in the config
+    let p = |s: &str| h.path(s).to_string_lossy().into_owned();
+    let root = format!("root={}", p("bucket"));
+    let args = [
+        "init",
+        "--folder",
+        &p("A"),
+        "--repo",
+        "opendal:fs",
+        "--opt",
+        &root,
+        "--opt",
+        "access_key_id=k",
+        "--device",
+        "a",
+    ];
+    let mut init = h.cmd("a", &args);
+    init.env("OMACLOUD_SECRET_ACCESS_KEY", "s");
+    let (out, exit) = on_tty(init);
+    assert_eq!(exit, 0, "{out}");
+
+    let (out, err, exit) = on_tty_split(h.cmd("a", &["join-code"]));
+    assert_eq!(exit, 0, "{out}{err}");
+    let lines: Vec<&str> = out.lines().filter(|l| !l.is_empty()).collect();
+    assert_eq!(lines.len(), 1, "only the code on stdout: {out}");
+    assert!(lines[0].starts_with("omacloud-join-"), "{out}");
+    assert!(err.contains("pass it privately"), "{err}");
+    assert!(!err.contains("omacloud-join-"), "{err}");
+
+    // and it joins another computer, from the environment
+    let args = ["init", "--folder", &p("B"), "--device", "b"];
+    let out = h.cmd("b", &args).env("OMACLOUD_JOIN_CODE", lines[0]).output().unwrap();
+    let v = json(&out);
+    assert_eq!(v["data"]["result"], "asked_to_join", "{v}");
+    // a damaged code is refused without being quoted
+    let damaged = format!("{}7b2261", &lines[0][..40]);
+    let out = h.cmd("c", &args).env("OMACLOUD_JOIN_CODE", &damaged).output().unwrap();
+    let e = machine_error(&out, "join_code_rejected", 3);
+    assert_eq!(e["message"], "that join code is damaged");
 }

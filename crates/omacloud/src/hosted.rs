@@ -34,6 +34,16 @@ pub struct Storage {
     pub contact_pad: Option<String>,
 }
 
+/// The environment variables that carry a secret into omacloud.
+const SECRET_VARS: [&str; 6] = [
+    "OMACLOUD_RECOVERY_CODE",
+    "OMACLOUD_JOIN_CODE",
+    "OMACLOUD_SECRET_ACCESS_KEY",
+    "OMACLOUD_DROPBOX_CLIENT_SECRET",
+    "OMACLOUD_DROPBOX_AUTH_CODE",
+    "OMACLOUD_CONTACT_CARD",
+];
+
 /// A finished browser sign-in: the one-time code and the secret that
 /// redeems it.
 struct Grant {
@@ -105,7 +115,7 @@ pub fn set_contact(service: &str, account: &str, pad: Option<&str>) -> Result<St
         )
         .hint("sign in with that one")
         .into()),
-        status => Err(answered(status, refusal(status)).into()),
+        status => Err(answered(status).into()),
     }
 }
 
@@ -119,20 +129,21 @@ fn post(service: &str, path: &str, body: &serde_json::Value) -> Result<ureq::htt
 }
 
 /// A failure Omacloud answered with `status`: busy or down is out of reach
-/// (exit 5), anything else a sign-in it didn't take (exit 3).
-fn answered(status: u16, message: String) -> CliError {
-    if status == 429 || status >= 500 {
-        fail::unavailable(message).hint("try again in a minute")
-    } else {
-        fail::setup("not_signed_in", message).hint("sign in again")
-    }
-}
-
-/// Why Omacloud didn't take a sign-in it answered with `status`.
-fn refusal(status: u16) -> String {
+/// (exit 5), a sign-in it didn't take is `not_signed_in` (exit 3), and
+/// anything else a request it refused for another reason (exit 1).
+fn answered(status: u16) -> CliError {
     match status {
-        429 => "too many sign-ins for this account: wait a minute and try again".to_string(),
-        _ => format!("sign-in didn't work ({status}): try again"),
+        429 => fail::unavailable("too many sign-ins for this account").hint("wait a minute and try again"),
+        500.. => {
+            fail::unavailable(format!("Omacloud storage is out of reach ({status})")).hint("try again in a minute")
+        }
+        401 | 403 => fail::setup("not_signed_in", format!("sign-in didn't work ({status})")).hint("sign in again"),
+        _ => CliError::new(
+            "error",
+            crate::output::EXIT_ERROR,
+            format!("Omacloud didn't take the request ({status})"),
+        )
+        .hint("try again; if it keeps failing, update omacloud"),
     }
 }
 
@@ -145,7 +156,7 @@ fn credentials(service: &str, grant: &Grant, contact: bool) -> Result<Storage> {
     )?;
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        return Err(answered(status, refusal(status)).into());
+        return Err(answered(status).into());
     }
     response.body_mut().read_json().context("reading the key from Omacloud")
 }
@@ -159,8 +170,15 @@ fn browser(service: &str) -> Result<Grant> {
     let challenge = hex::encode(Sha256::digest(verifier.as_bytes()));
     let url = format!("{service}/signin?port={port}&state={state}&challenge={challenge}");
     eprintln!("Sign in with Google in your browser. If it didn't open, go to:\n\n  {url}\n");
-    _ = std::process::Command::new("xdg-open")
+    // the browser it may start keeps none of this process's secrets: not
+    // the ones in the environment, nor the terminal a secret prints to
+    let mut open = std::process::Command::new("xdg-open");
+    for var in SECRET_VARS {
+        open.env_remove(var);
+    }
+    _ = open
         .arg(&url)
+        .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
@@ -294,9 +312,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn too_many_sign_ins_says_to_wait() {
-        assert!(refusal(429).contains("wait a minute"));
-        assert_eq!(refusal(500), "sign-in didn't work (500): try again");
+    fn answers_map_to_codes() {
+        let c = answered(429);
+        assert_eq!((c.code.as_str(), c.exit), ("unavailable", 5));
+        // said once, in the hint
+        assert!(!c.message.contains("wait a minute"));
+        assert_eq!(c.hint.as_deref(), Some("wait a minute and try again"));
+        assert_eq!(answered(503).exit, 5);
+        assert_eq!(answered(403).code, "not_signed_in");
+        assert_eq!(answered(401).exit, 3);
+        for status in [400, 404] {
+            let c = answered(status);
+            assert_eq!((c.code.as_str(), c.exit), ("error", 1));
+        }
     }
 
     #[test]

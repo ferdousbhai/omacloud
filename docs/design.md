@@ -177,6 +177,20 @@ and every computer of the account can, Wi-Fi keys included.
 Nobody but your computers and your recovery code can read file contents,
 names, settings or keys.
 
+- **Programs you run, AI agents included,** can run `omacloud` as you. The
+  commands that print a secret (the recovery code, a join code, a
+  contact's card or shares, the repository password) print it only in text
+  mode with stdin and stdout on a terminal, and refuse as JSON or into a
+  pipe, so it doesn't land in a script's output, a JSON consumer or an
+  agent's captured output by accident. That is a guard against accidents,
+  not a boundary: a program that gives `omacloud` a whole pseudo-terminal
+  (as `script(1)` does, and some agent harnesses and tmux-based agents do)
+  sees the secret. Checking stdin as well turns away the many harnesses
+  that give a command a terminal for its output only. Beyond that, the
+  installed agent skill tells agents never to run these commands; whoever
+  lets a program act as them in a terminal trusts it with what that
+  terminal shows.
+
 ## Not yet
 
 - Key transparency for device keys; until then, approvals compare
