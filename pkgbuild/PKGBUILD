@@ -38,7 +38,7 @@ prepare() {
 build() {
   cd "$srcdir/$pkgname"
   export RUSTUP_TOOLCHAIN=stable
-  export CARGO_TARGET_DIR=target
+  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
   # dependency sources sit under the builder's home: name them neutrally,
   # so the binaries carry no username and rebuild the same anywhere
   export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo"
@@ -48,14 +48,14 @@ build() {
 check() {
   cd "$srcdir/$pkgname"
   export RUSTUP_TOOLCHAIN=stable
-  export CARGO_TARGET_DIR=target
+  export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}"
   cargo test --frozen --release -p omacloud-core --lib
 }
 
 package() {
   cd "$srcdir/$pkgname"
-  install -Dm755 target/release/omacloud "$pkgdir/usr/bin/omacloud"
-  install -Dm755 target/release/omacloud-app "$pkgdir/usr/bin/omacloud-app"
+  install -Dm755 "${CARGO_TARGET_DIR:-target}/release/omacloud" "$pkgdir/usr/bin/omacloud"
+  install -Dm755 "${CARGO_TARGET_DIR:-target}/release/omacloud-app" "$pkgdir/usr/bin/omacloud-app"
   install -Dm644 contrib/com.ferdousbhai.Omacloud.desktop \
     "$pkgdir/usr/share/applications/com.ferdousbhai.Omacloud.desktop"
   install -Dm644 contrib/omacloud.service "$pkgdir/usr/lib/systemd/user/omacloud.service"

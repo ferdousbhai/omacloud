@@ -54,7 +54,7 @@ print('recipe matches pkgbuild/PKGBUILD: passed')
 for old, new in (("'libsecret'", "'libsecret' 'openssl'"),
                  ("options=('!debug' '!lto')", "options=('!debug')"),
                  ('-p omacloud-core --lib', '-p omacloud-core'),
-                 ('target/release/omacloud-app', 'target/release/omacloud-gtk')):
+                 ('${CARGO_TARGET_DIR:-target}/release/omacloud-app', '${CARGO_TARGET_DIR:-target}/release/omacloud-gtk')):
     with tempfile.TemporaryDirectory() as directory:
         changed = Path(directory) / 'PKGBUILD'
         shutil.copy(RECIPE, changed)
