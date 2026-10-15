@@ -27,6 +27,9 @@ pub const DEFAULTS: &[&str] = &[
     ".#*",
     ".DS_Store",
     "Thumbs.db",
+    // Re-creatable local inference weights must not multiply across devices.
+    "embeddinggemma-*.gguf*",
+    "mmproj-embeddinggemma-*.gguf*",
     ".Trash-*/",
 ];
 
@@ -95,6 +98,9 @@ mod tests {
         let yes = |p: &str, d| assert!(ig.is_ignored(Path::new(p), d), "{p} should be ignored");
         let no = |p: &str, d| assert!(!ig.is_ignored(Path::new(p), d), "{p} should sync");
         yes(".~omacloud-notes.md", false);
+        yes("Models/embeddinggemma-2-300M-Q8_0.gguf", false);
+        yes("Models/mmproj-embeddinggemma-2-300M-f16.gguf.part", false);
+        no("notes/embeddinggemma-review.md", false);
         yes("docs/.notes.md.swp", false);
         yes("web/node_modules/react/index.js", false);
         yes("build", true);

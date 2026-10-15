@@ -1017,6 +1017,23 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
 
     let sync = group("Sync", "");
+    let search = row(
+        "Find files by meaning",
+        "Optional Recall · searches folders selected in Recall settings",
+    );
+    let launch = button("Open Recall", None);
+    let ui2 = ui.clone();
+    launch.connect_clicked(move |_| {
+        let ui = ui2.clone();
+        glib::spawn_future_local(async move {
+            let result = gio::spawn_blocking(|| std::process::Command::new("recall").arg("toggle").status()).await;
+            if !matches!(result, Ok(Ok(status)) if status.success()) {
+                ui.toast("Recall is unavailable. Use Open on a sync folder to browse files.");
+            }
+        });
+    });
+    search.add_suffix(&launch);
+    sync.add(&search);
     let open_button = |path: String| {
         let open = gtk::Button::builder()
             .icon_name("folder-open-symbolic")

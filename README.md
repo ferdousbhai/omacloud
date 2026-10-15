@@ -332,3 +332,9 @@ edits.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) covers building, testing and releases;
 the issues hold the work ahead.
+
+## Optional Recall search
+
+The Sync page offers **Open Recall** for semantic file search. Recall searches only roots selected in its own settings; Omacloud does not select or index roots automatically. EmbeddingGemma GGUF weights and partial downloads are excluded from sync by default; explicit ignore-file overrides remain possible.
+
+Recall is an optional extra. Normal operation never contacts it. Missing, incompatible, busy, or warming-up Recall leaves opening and browsing a sync folder available. Requests run in the background with a bounded wait. This project does not install Recall, download embedding weights, or start its own model runtime. When enabled, the owner-local Recall service owns one shared model cache and inference worker; records stay on this machine.
