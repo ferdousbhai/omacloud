@@ -22,6 +22,8 @@ use adw::prelude::*;
 use gtk::{gio, glib};
 use serde_json::Value;
 
+mod theme;
+
 const APP_ID: &str = "com.ferdousbhai.Omacloud";
 
 fn main() -> glib::ExitCode {
@@ -29,6 +31,7 @@ fn main() -> glib::ExitCode {
     let argv0 = args.next().unwrap_or_default();
     let page = args.next();
     let app = adw::Application::builder().application_id(APP_ID).build();
+    app.connect_startup(|_| theme::install(include_str!("desktop.css")));
     // one window: launching again brings it forward instead of opening another
     app.connect_activate(move |app| match app.active_window() {
         Some(window) => window.present(),
@@ -400,6 +403,7 @@ fn build(app: &adw::Application, page: Option<&str>) {
         .width_request(360)
         .height_request(400)
         .build();
+    window.add_css_class("cloud-desktop");
     let narrow =
         adw::Breakpoint::new(adw::BreakpointCondition::parse("max-width: 900sp").expect("a breakpoint condition"));
     narrow.add_setter(
