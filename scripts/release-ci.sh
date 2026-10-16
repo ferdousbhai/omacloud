@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 repository=ferdousbhai/omacloud
 version=${1:?Usage: scripts/release-ci.sh <version> [successful-ci-run-id]}
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid version." >&2; exit 1; }
-for command in gh gpg repo-add bsdtar python3; do
+for command in gh curl unzip gpg repo-add bsdtar python3; do
   command -v "$command" >/dev/null || { echo "$command is required." >&2; exit 1; }
 done
 # GitHub over a flaky connection: a read that's safe to repeat gets a
@@ -60,12 +60,34 @@ gpg --batch --list-secret-keys "$fingerprint" >/dev/null 2>&1 \
   || { echo "The pinned signing key is unavailable in the local keyring." >&2; exit 1; }
 export GPGKEY=$fingerprint
 
+# GitHub serves artifacts from Azure storage, where a connection often drops
+# partway; `gh run download` would start over each time. curl resumes the zip
+# where a try stopped, asking for a fresh short-lived URL each time.
+download_artifact() { # name directory
+  local id size url attempt zip=$staging/$1.zip
+  read -r id size < <(retry 60 gh api "repos/$repository/actions/runs/$run/artifacts" \
+    --jq ".artifacts[] | select(.name == \"$1\") | \"\\(.id) \\(.size_in_bytes)\"") || true
+  [[ ${id:-} =~ ^[0-9]+$ ]] || { echo "CI run $run has no $1 artifact." >&2; return 1; }
+  for attempt in $(seq 1 20); do
+    [[ $(stat -c %s "$zip" 2>/dev/null || echo 0) == "$size" ]] && break
+    # the token goes in a header read from a pipe, not on curl's command line
+    url=$(timeout 60 curl -fsS -o /dev/null -w '%{redirect_url}' \
+      -H @<(printf 'Authorization: Bearer %s\n' "$(gh auth token)") \
+      "https://api.github.com/repos/$repository/actions/artifacts/$id/zip") || url=
+    [[ -n $url ]] && timeout 120 curl -fsS -C - --connect-timeout 15 --speed-time 20 \
+      --speed-limit 1000 -o "$zip" "$url" && continue
+    echo "Download of $1 cut short at $(stat -c %s "$zip" 2>/dev/null || echo 0) of $size bytes; resuming" >&2
+    sleep 2
+  done
+  [[ $(stat -c %s "$zip" 2>/dev/null || echo 0) == "$size" ]] \
+    || { echo "Could not download $1." >&2; return 1; }
+  unzip -q -o "$zip" -d "$2"
+}
+
 # Validate both artifacts before signing either one.
 for architecture in x86_64 aarch64; do
   artifact=$staging/$architecture
-  # a try cut short leaves part of the artifact; each starts from nothing
-  retry 600 bash -c 'rm -rf "${1:?}" && exec gh run download "$2" --repo "$3" --name "$4" --dir "$1"' \
-    _ "$artifact" "$run" "$repository" "omacloud-$architecture"
+  download_artifact "omacloud-$architecture" "$artifact"
   [[ $(cat "$artifact/source-commit.txt") == "$source_commit" ]] \
     || { echo "$architecture was built from a different commit." >&2; exit 1; }
   package="omacloud-$version-1-$architecture.pkg.tar.zst"

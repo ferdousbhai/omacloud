@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import tarfile
 import tempfile
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 SHA = 'a' * 40
@@ -34,6 +35,10 @@ def check(failure=''):
                 entry = tarfile.TarInfo('.PKGINFO')
                 entry.size = len(metadata.encode())
                 archive.addfile(entry, io.BytesIO(metadata.encode()))
+        for number, architecture in enumerate(('x86_64', 'aarch64'), 1):
+            with zipfile.ZipFile(root / f'artifact-{number}.zip', 'w') as archive:
+                for path in (root / architecture).iterdir():
+                    archive.write(path, path.name)
         commands = {
             'gh': '''#!/usr/bin/python3
 import base64, os, pathlib, shutil, sys
@@ -49,7 +54,11 @@ if os.environ['FAILURE'] == 'flaky' and args[0] in ('api', 'run'):
             pathlib.Path(args[args.index('--dir') + 1]).mkdir(parents=True)
         sys.exit(1)
 if args[0] == 'api':
-    if '/commits/' in args[1]:
+    if args[1].endswith('/artifacts'):
+        name = args[args.index('--jq') + 1].split('"')[1]
+        number = 1 if name.endswith('x86_64') else 2
+        print(number, (root / f'artifact-{number}.zip').stat().st_size)
+    elif '/commits/' in args[1]:
         count = root / 'master-reads'
         value = int(count.read_text()) if count.exists() else 0
         count.write_text(str(value + 1))
@@ -63,9 +72,25 @@ elif args[:2] == ['run', 'watch']: sys.exit(1 if os.environ['FAILURE'] == 'ci' e
 elif args[:2] == ['run', 'view']:
     conclusion = 'failure' if os.environ['FAILURE'] == 'ci' else 'success'
     print('workflow_dispatch\\tmaster\\t' + 'a' * 40 + '\\tcompleted\\t' + conclusion)
-elif args[:2] == ['run', 'download']:
-    architecture = args[args.index('--name') + 1].removeprefix('omacloud-')
-    shutil.copytree(root / architecture, args[args.index('--dir') + 1])
+elif args[:2] == ['auth', 'token']: print('test-token')
+''',
+            'curl': '''#!/usr/bin/python3
+import os, pathlib, sys
+root = pathlib.Path(os.environ['FIXTURE'])
+args = sys.argv[1:]
+url = args[-1]
+with open(root / 'calls', 'a') as log: log.write('curl ' + url + '\\n')
+if '-w' in args:
+    assert any(a.startswith('@') for a in args) and 'test-token' not in ' '.join(args)
+    print('https://blob.test/' + url.split('/')[-2], end='')
+    sys.exit(0)
+data = (root / f'artifact-{url.rsplit("/", 1)[1]}.zip').read_bytes()
+out = pathlib.Path(args[args.index('-o') + 1])
+have = out.stat().st_size if out.exists() else 0
+# a flaky connection: the first try of each download stops halfway
+end = len(data) // 2 if os.environ['FAILURE'] == 'flaky' and have == 0 else len(data)
+with open(out, 'ab') as f: f.write(data[have:end])
+sys.exit(0 if end == len(data) else 18)
 ''',
             'gpg': '''#!/bin/bash
 echo "gpg $*" >> "$FIXTURE/calls"
@@ -119,6 +144,7 @@ done
             assert 'the Omarchy recipe was not updated' in result.stderr, result.stderr
             if failure == 'flaky':
                 assert "GitHub didn't answer" in result.stderr, result.stderr
+                assert 'resuming' in result.stderr, result.stderr
         print(f'{failure or "success"}: passed')
 
 
