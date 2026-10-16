@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.17 (2026-10-16)
 
 - Dropbox is one click: Connect Dropbox, allow Omacloud in the browser, and
   Dropbox sends the browser back to Omacloud. It uses Omacloud's own
