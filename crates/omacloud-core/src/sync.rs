@@ -60,6 +60,8 @@ const MAX_ROUNDS: usize = 8;
 const RACY_WINDOW: Duration = Duration::from_secs(2);
 /// Racy files larger than this are pushed again instead of compared.
 const MAX_COMPARE: u64 = 64 << 20;
+/// Extra buffer used to compare a repository blob with the local file.
+const COMPARE_BUFFER: usize = 64 * 1024;
 /// Where a file goes in a pull's queue: small before big, then by folder,
 /// then newest first.
 type PullOrder = (bool, u8, std::cmp::Reverse<Option<Timestamp>>);
@@ -2706,15 +2708,19 @@ impl<R: Read> SameAs<R> {
 
 impl<R: Read> io::Write for SameAs<R> {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        self.buf.resize(data.len(), 0);
-        let same = match self.r.read_exact(&mut self.buf) {
-            Ok(()) => self.buf == data,
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => false,
-            Err(e) => return Err(e),
-        };
-        if !same {
-            self.differs = true;
-            return Err(io::Error::other("content differs"));
+        // A repository blob can be several MiB; don't allocate or read all of it
+        // before noticing a difference near the beginning.
+        for chunk in data.chunks(COMPARE_BUFFER) {
+            self.buf.resize(chunk.len(), 0);
+            let same = match self.r.read_exact(&mut self.buf) {
+                Ok(()) => self.buf == chunk,
+                Err(e) if e.kind() == ErrorKind::UnexpectedEof => false,
+                Err(e) => return Err(e),
+            };
+            if !same {
+                self.differs = true;
+                return Err(io::Error::other("content differs"));
+            }
         }
         Ok(data.len())
     }
@@ -2842,24 +2848,38 @@ fn diff(
     prefix: &Path,
     out: &mut BTreeMap<PathBuf, Option<Node>>,
 ) -> Result<()> {
+    diff_trees(&|id| nodes(repo, id), a, b, prefix, out)?;
+    Ok(())
+}
+
+/// Return emptiness while the trees are already decoded; equal IDs need no reads.
+fn diff_trees(
+    read: &impl Fn(Option<TreeId>) -> Result<BTreeMap<String, Node>>,
+    a: Option<TreeId>,
+    b: Option<TreeId>,
+    prefix: &Path,
+    out: &mut BTreeMap<PathBuf, Option<Node>>,
+) -> Result<Option<(bool, bool)>> {
     if a == b {
-        return Ok(());
+        return Ok(None);
     }
-    let (an, bn) = (nodes(repo, a)?, nodes(repo, b)?);
+    let (an, bn) = (read(a)?, read(b)?);
     let names: BTreeSet<&String> = an.keys().chain(bn.keys()).collect();
     for name in names {
         let path = prefix.join(name);
         let (x, y) = (an.get(name), bn.get(name));
         let x_dir = x.filter(|n| n.is_dir()).and_then(|n| n.subtree);
         let y_dir = y.filter(|n| n.is_dir()).and_then(|n| n.subtree);
-        if x_dir.is_some() || y_dir.is_some() {
-            diff(repo, x_dir, y_dir, &path, out)?;
-        }
+        let empty = if x_dir.is_some() || y_dir.is_some() {
+            diff_trees(read, x_dir, y_dir, &path, out)?
+        } else {
+            None
+        };
         // empty directories are changes of their own
         let (x_is_dir, y_is_dir) = (x.is_some_and(Node::is_dir), y.is_some_and(Node::is_dir));
-        if y_is_dir && (!x_is_dir || x_dir != y_dir) && nodes(repo, y_dir)?.is_empty() {
+        if y_is_dir && (!x_is_dir || x_dir != y_dir) && empty.map_or(y_dir.is_none(), |(_, empty)| empty) {
             _ = out.insert(path.clone(), y.cloned());
-        } else if x_is_dir && !y_is_dir && nodes(repo, x_dir)?.is_empty() {
+        } else if x_is_dir && !y_is_dir && empty.map_or(x_dir.is_none(), |(empty, _)| empty) {
             _ = out.insert(path.clone(), None);
         }
         match (x.filter(|n| is_leaf(n)), y.filter(|n| is_leaf(n))) {
@@ -2877,7 +2897,7 @@ fn diff(
             _ => {}
         }
     }
-    Ok(())
+    Ok(Some((an.is_empty(), bn.is_empty())))
 }
 
 fn walk_local(root: &Path, rel: &Path, skip: &dyn Fn(&Path, bool) -> bool, out: &mut BTreeSet<PathBuf>) -> Result<()> {
@@ -2909,7 +2929,21 @@ fn walk_tree(
     skip: &dyn Fn(&Path, bool) -> bool,
     out: &mut BTreeSet<PathBuf>,
 ) -> Result<()> {
-    for (name, node) in nodes(repo, tree)? {
+    walk_tree_nodes(&|id| nodes(repo, id), tree, rel, skip, out)?;
+    Ok(())
+}
+
+/// Return whether the decoded tree is empty instead of reopening every child.
+fn walk_tree_nodes(
+    read: &impl Fn(Option<TreeId>) -> Result<BTreeMap<String, Node>>,
+    tree: Option<TreeId>,
+    rel: &Path,
+    skip: &dyn Fn(&Path, bool) -> bool,
+    out: &mut BTreeSet<PathBuf>,
+) -> Result<bool> {
+    let children = read(tree)?;
+    let empty = children.is_empty();
+    for (name, node) in children {
         let path = rel.join(name);
         // settings directories are walked for the files in them
         let settings_dir = node.is_dir()
@@ -2920,15 +2954,14 @@ fn walk_tree(
             continue;
         }
         if node.is_dir() {
-            if nodes(repo, node.subtree)?.is_empty() {
-                _ = out.insert(path.clone());
+            if walk_tree_nodes(read, node.subtree, &path, skip, out)? {
+                _ = out.insert(path);
             }
-            walk_tree(repo, node.subtree, &path, skip, out)?;
         } else {
             _ = out.insert(path);
         }
     }
-    Ok(())
+    Ok(empty)
 }
 
 /// `notes.md` -> `notes.sync-conflict-20260928-104512-laptop.md`, Syncthing's
@@ -2965,6 +2998,73 @@ mod tests {
     use super::*;
 
     #[test]
+    fn tree_traversals_reuse_emptiness_and_skip_equal_subtrees() -> Result<()> {
+        let id = |byte: u8| -> TreeId { TreeId::from(format!("{byte:02x}").repeat(32).parse::<Id>().unwrap()) };
+        let root = id(1);
+        let empty = id(2);
+        let full = id(3);
+        let node = |name: &str, kind| Node::new_node(std::ffi::OsStr::new(name), kind, Metadata::default());
+        let mut directory = node("empty", NodeType::Dir);
+        directory.subtree = Some(empty);
+        let mut populated = node("full", NodeType::Dir);
+        populated.subtree = Some(full);
+        let trees = BTreeMap::from([
+            (
+                root,
+                BTreeMap::from([("empty".into(), directory), ("full".into(), populated)]),
+            ),
+            (empty, BTreeMap::new()),
+            (full, BTreeMap::from([("file".into(), node("file", NodeType::File))])),
+        ]);
+        let reads = RefCell::new(BTreeMap::<TreeId, usize>::new());
+        let read = |id| -> Result<BTreeMap<String, Node>> {
+            match id {
+                None => Ok(BTreeMap::new()),
+                Some(id) => {
+                    *reads.borrow_mut().entry(id).or_default() += 1;
+                    Ok(trees[&id].clone())
+                }
+            }
+        };
+        let mut out = BTreeMap::new();
+        diff_trees(&read, None, Some(root), Path::new(""), &mut out)?;
+        assert_eq!(reads.borrow().values().copied().collect::<Vec<_>>(), [1, 1, 1]);
+        assert!(out[Path::new("empty")].as_ref().unwrap().is_dir());
+        assert!(out[Path::new("full/file")].as_ref().unwrap().is_file());
+        assert!(!out.contains_key(Path::new("full")));
+        reads.borrow_mut().clear();
+        out.clear();
+        diff_trees(&read, Some(root), None, Path::new(""), &mut out)?;
+        assert_eq!(reads.borrow().values().copied().collect::<Vec<_>>(), [1, 1, 1]);
+        assert!(out[Path::new("empty")].is_none());
+        assert!(out[Path::new("full/file")].is_none());
+        reads.borrow_mut().clear();
+        out.clear();
+        diff_trees(&read, Some(root), Some(root), Path::new(""), &mut out)?;
+        assert!(reads.borrow().is_empty());
+        assert!(out.is_empty());
+        let mut paths = BTreeSet::new();
+        walk_tree_nodes(&read, Some(root), Path::new(""), &|_, _| false, &mut paths)?;
+        assert_eq!(reads.borrow().values().copied().collect::<Vec<_>>(), [1, 1, 1]);
+        assert_eq!(
+            paths,
+            BTreeSet::from([PathBuf::from("empty"), PathBuf::from("full/file")])
+        );
+        reads.borrow_mut().clear();
+        paths.clear();
+        walk_tree_nodes(
+            &read,
+            Some(root),
+            Path::new(""),
+            &|p, _| p == Path::new("full"),
+            &mut paths,
+        )?;
+        assert_eq!(reads.borrow().len(), 2);
+        assert_eq!(paths, BTreeSet::from([PathBuf::from("empty")]));
+        Ok(())
+    }
+
+    #[test]
     fn same_as_finds_any_difference() {
         let same = |file: &[u8], blobs: &[&[u8]]| {
             let mut w = SameAs::new(file);
@@ -2975,6 +3075,30 @@ mod tests {
         assert!(!same(b"hello world", &[b"hello", b" there"]));
         assert!(!same(b"hello world", &[b"hello"])); // file is longer
         assert!(!same(b"hello", &[b"hello", b" world"])); // file is shorter
+    }
+
+    #[test]
+    fn content_comparison_bounds_memory_and_stops_reading_at_a_difference() {
+        let data = vec![7u8; 4 * 1024 * 1024];
+        let mut same = SameAs::new(io::Cursor::new(&data));
+        same.write_all(&data).unwrap();
+        assert!(same.buf.capacity() <= COMPARE_BUFFER);
+        assert!(same.at_end().unwrap());
+
+        let mut changed = data.clone();
+        changed[0] = 8;
+        let mut different = SameAs::new(io::Cursor::new(&changed));
+        assert!(different.write_all(&data).is_err());
+        assert_eq!(different.r.position(), COMPARE_BUFFER as u64);
+        assert!(different.differs);
+
+        // A mismatch or truncation after the first block is also detected.
+        changed[0] = 7;
+        changed[COMPARE_BUFFER + 1] = 8;
+        let mut later = SameAs::new(&changed[..]);
+        assert!(later.write_all(&data).is_err());
+        let mut short = SameAs::new(&data[..COMPARE_BUFFER + 1]);
+        assert!(short.write_all(&data).is_err());
     }
 
     #[test]

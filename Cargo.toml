@@ -11,7 +11,7 @@ repository = "https://github.com/ferdousbhai/omacloud"
 [workspace.dependencies]
 omacloud-core = { path = "crates/omacloud-core" }
 rustic_core = "0.13"
-rustic_backend = "0.7"
+rustic_backend = { version = "0.7", default-features = false, features = ["opendal"] }
 opendal = { version = "0.58", default-features = false, features = ["blocking", "services-s3", "services-fs", "services-dropbox"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread"] }
 anyhow = "1"
@@ -37,3 +37,4 @@ tempfile = "3"
 # rustic_core 0.13 plus pack padding and splice_tree, see vendor/rustic_core/OMACLOUD.md
 [patch.crates-io]
 rustic_core = { path = "vendor/rustic_core" }
+rustic_backend = { path = "vendor/rustic_backend" }

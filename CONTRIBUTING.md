@@ -15,6 +15,14 @@ The GTK app needs `gtk4` and `libadwaita` (CI installs `libgtk-4-dev
 libadwaita-1-dev`). After changing `server/`, run `npm run check` there
 (types and unit tests). Deploy with `server/deploy.sh`.
 
+## Storage backend features
+
+Default builds include local files, S3-compatible storage and Dropbox. For an
+existing repository using another OpenDAL provider, REST or rclone, build with
+`cargo build --release -p omacloud --features full-backends`. These optional
+backends are kept out of normal builds to avoid their unused protocol stacks.
+The manifest-only patch is documented in `vendor/rustic_backend/OMACLOUD.md`.
+
 ## End to end scripts
 
 - `scripts/s3-sync.sh` and `scripts/bucket-key.sh` run against SeaweedFS:
