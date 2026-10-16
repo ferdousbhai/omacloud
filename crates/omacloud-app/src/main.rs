@@ -480,6 +480,10 @@ fn entry(title: &str) -> adw::EntryRow {
     adw::EntryRow::builder().title(title).build()
 }
 
+/// Omacloud's Dropbox app (the CLI's `dropbox::APP_KEY`).
+const DROPBOX_APP_KEY: &str = "k8jkvsr48k2fvio";
+
+/// Authorize a user's own Dropbox app, whose code is pasted.
 fn open_dropbox_authorization(ui: &Rc<Ui>, id: &str) {
     if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
         ui.toast("Enter the Dropbox app key first");
@@ -490,6 +494,48 @@ fn open_dropbox_authorization(ui: &Rc<Ui>, id: &str) {
     gtk::UriLauncher::new(&url).launch(Some(&ui.window), None::<&gio::Cancellable>, |_| {});
 }
 
+/// A dialog that stays up while `omacloud init` runs, so the wait (the
+/// browser, then the account being made) doesn't look like nothing
+/// happening. Closed by the caller when init is done.
+fn setting_up(ui: &Rc<Ui>, browser: bool) -> adw::Dialog {
+    let text = if browser {
+        "Finish in your browser: Omacloud opened it for you to sign in or allow access. \
+         Then it sets up this computer, which can take a minute."
+    } else {
+        "Omacloud is setting up this computer, which can take a minute."
+    };
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 18);
+    body.set_margin_top(12);
+    body.set_margin_bottom(24);
+    body.set_margin_start(24);
+    body.set_margin_end(24);
+    body.append(
+        &gtk::Spinner::builder()
+            .spinning(true)
+            .width_request(32)
+            .height_request(32)
+            .build(),
+    );
+    body.append(
+        &gtk::Label::builder()
+            .label(text)
+            .wrap(true)
+            .justify(gtk::Justification::Center)
+            .max_width_chars(40)
+            .build(),
+    );
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::builder().show_end_title_buttons(false).build());
+    view.set_content(Some(&body));
+    let dialog = adw::Dialog::builder()
+        .title("Setting Up")
+        .can_close(false)
+        .child(&view)
+        .build();
+    dialog.present(Some(&ui.window));
+    dialog
+}
+
 /// Run `omacloud init` with `args` (and secrets in `env`, never on the
 /// command line), then show what came of it.
 fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
@@ -497,11 +543,17 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
     argv.extend(args);
     let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
     let ui2 = ui.clone();
-    ui.toast("Setting up…");
+    // signing in with Google or allowing Dropbox happens in the browser
+    let browser = argv.iter().any(|a| a == "--hosted" || a == "opendal:dropbox");
+    let busy = setting_up(ui, browser);
     // creating an account prints its recovery code: only to a terminal
     tty_then(&argv_ref, env, move |r| match r {
-        Err(e) => ui2.toast(&e.shown()),
+        Err(e) => {
+            busy.force_close();
+            ui2.toast(&e.shown());
+        }
         Ok(out) => {
+            busy.force_close();
             // set up: keep it syncing from now on, not from the next login
             run_then(&["systemctl", "--user", "start", "omacloud"], |_| {});
             let code = out
@@ -599,7 +651,7 @@ struct Provider {
     makes_bucket: bool,
 }
 
-const PROVIDERS: [Provider; 4] = [
+const PROVIDERS: [Provider; 3] = [
     Provider {
         name: "Hetzner Object Storage",
         steps: "1. Click Get a Key, open your project, then Security, S3 credentials, and \
@@ -617,17 +669,10 @@ const PROVIDERS: [Provider; 4] = [
         makes_bucket: false,
     },
     Provider {
-        name: "Backblaze B2",
-        steps: "1. In Backblaze, create a bucket (Files in Bucket: Private) and note its S3 endpoint, like \
-                s3.eu-central-003.backblazeb2.com.\n2. Under Application Keys, add a key with read \
-                and write access to that bucket only, and copy its keyID and applicationKey.",
-        link: "https://secure.backblaze.com/b2_buckets.htm",
-        makes_bucket: false,
-    },
-    Provider {
         name: "Other S3 storage",
-        steps: "Any S3-compatible storage works, such as MinIO. You need its endpoint, its region \
-                and a key that can read and write. Omacloud makes a bucket, or uses one you name.",
+        steps: "S3 storage that has create-only writes works, such as AWS S3 or MinIO. You need its \
+                endpoint, its region and a key that can read and write. Omacloud makes a bucket, or \
+                uses one you name.",
         link: "",
         makes_bucket: true,
     },
@@ -664,15 +709,6 @@ fn s3_location(
             ),
             "auto".into(),
         )),
-        2 => {
-            // s3.<region>.backblazeb2.com
-            let host = endpoint.trim_start_matches("https://").trim_start_matches("http://");
-            let region = host
-                .strip_prefix("s3.")
-                .and_then(|r| r.strip_suffix(".backblazeb2.com"))
-                .ok_or("The endpoint looks like s3.eu-central-003.backblazeb2.com")?;
-            Ok((with_scheme(host), region.into()))
-        }
         _ if endpoint.is_empty() => Err("Fill in the endpoint"),
         _ => Ok((
             with_scheme(endpoint),
@@ -759,7 +795,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     let eu = adw::SwitchRow::builder()
         .title("The bucket is in the EU jurisdiction")
         .build();
-    let endpoint = entry("Endpoint");
+    let endpoint = entry("Endpoint, like https://minio.example.com");
     let region = entry("Region (blank for auto)");
     let existing = adw::SwitchRow::builder().title("Use a bucket I already have").build();
     let bucket = entry("Bucket name");
@@ -814,13 +850,8 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
             location.set_visible(i == 0);
             account.set_visible(i == 1);
             eu.set_visible(i == 1);
-            endpoint.set_visible(i >= 2);
-            endpoint.set_title(if i == 2 {
-                "S3 endpoint, like s3.eu-central-003.backblazeb2.com"
-            } else {
-                "Endpoint, like https://minio.example.com"
-            });
-            region.set_visible(i == 3);
+            endpoint.set_visible(i == 2);
+            region.set_visible(i == 2);
         }
     };
     let show = Rc::new(show);
@@ -907,71 +938,25 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     own.add(&create_own);
     page.add(&own);
 
+    // Dropbox: Omacloud's app, allowed in the browser
     let dropbox = group(
         "Or use Dropbox",
-        "Create a Dropbox app with App folder access and the four files.metadata \
-         and files.content read/write permissions. Omacloud keeps encrypted data inside \
-         that app folder.",
+        "Keep your files in your own Dropbox, in its Apps/Omacloud folder. Dropbox asks you \
+         to allow Omacloud in your browser. Everything is encrypted on this computer before it \
+         leaves, so Dropbox can't read it.",
     );
-    let console = button("Open Dropbox App Console", Some("flat"));
-    console.set_halign(gtk::Align::End);
-    let window = ui.window.clone();
-    console.connect_clicked(move |_| {
-        gtk::UriLauncher::new("https://www.dropbox.com/developers/apps").launch(
-            Some(&window),
-            None::<&gio::Cancellable>,
-            |_| {},
-        );
-    });
-    dropbox.add(&console);
-    let app_key = entry("Dropbox app key");
-    let app_secret = adw::PasswordEntryRow::builder().title("Dropbox app secret").build();
-    let auth_code = adw::PasswordEntryRow::builder()
-        .title("Authorization code from Dropbox")
-        .build();
-    dropbox.add(&app_key);
-    dropbox.add(&app_secret);
-    let authorize = button("Authorize with Dropbox", Some("flat"));
-    authorize.set_halign(gtk::Align::End);
-    {
-        let (ui, app_key) = (ui.clone(), app_key.clone());
-        authorize.connect_clicked(move |_| {
-            open_dropbox_authorization(&ui, app_key.text().trim());
-        });
-    }
-    dropbox.add(&authorize);
-    dropbox.add(&auth_code);
-    let create_dropbox = button("Create Dropbox Account", None);
-    create_dropbox.set_halign(gtk::Align::End);
-    create_dropbox.set_margin_top(12);
+    let connect = button("Connect Dropbox", None);
+    connect.set_halign(gtk::Align::End);
+    connect.set_margin_top(12);
     {
         let (ui, sync_args) = (ui.clone(), sync_args.clone());
-        create_dropbox.connect_clicked(move |_| {
-            let id = app_key.text().trim().to_string();
-            let secret = app_secret.text().to_string();
-            let code = auth_code.text().trim().to_string();
-            if id.is_empty() || secret.is_empty() || code.is_empty() {
-                ui.toast("Enter the app key, app secret and authorization code");
-                return;
-            }
-            let mut args = vec![
-                "--repo".to_string(),
-                "opendal:dropbox".to_string(),
-                "--opt".to_string(),
-                format!("client_id={id}"),
-            ];
+        connect.connect_clicked(move |_| {
+            let mut args = vec!["--repo".to_string(), "opendal:dropbox".to_string()];
             args.extend(sync_args());
-            run_init(
-                &ui,
-                args,
-                vec![
-                    ("OMACLOUD_DROPBOX_CLIENT_SECRET".to_string(), secret),
-                    ("OMACLOUD_DROPBOX_AUTH_CODE".to_string(), code),
-                ],
-            );
+            run_init(&ui, args, vec![]);
         });
     }
-    dropbox.add(&create_dropbox);
+    dropbox.add(&connect);
     page.add(&dropbox);
 
     // join
@@ -1663,6 +1648,14 @@ fn change_bucket_key(ui: &Rc<Ui>, hosted: bool, dropbox_id: Option<String>) {
         );
         return;
     }
+    if dropbox_id.as_deref() == Some(DROPBOX_APP_KEY) {
+        // Omacloud's app: the browser comes back with the authorization
+        ui.act(
+            &["omacloud", "bucket", "set-key"],
+            "Dropbox token changed: the other computers switch on their next sync",
+        );
+        return;
+    }
     if let Some(id) = dropbox_id {
         let code = adw::PasswordEntryRow::builder().title("New authorization code").build();
         let list = gtk::ListBox::new();
@@ -2294,31 +2287,14 @@ mod tests {
     }
 
     #[test]
-    fn b2_takes_the_region_from_the_endpoint() {
-        for given in [
-            "s3.eu-central-003.backblazeb2.com",
-            "https://s3.eu-central-003.backblazeb2.com",
-        ] {
-            assert_eq!(
-                loc(2, 0, "", false, given, ""),
-                (
-                    "https://s3.eu-central-003.backblazeb2.com".into(),
-                    "eu-central-003".into()
-                )
-            );
-        }
-        assert!(s3_location(2, 0, "", false, "backblaze.com", "").is_err());
-    }
-
-    #[test]
     fn other_s3_keeps_what_it_is_given() {
-        assert!(s3_location(3, 0, "", false, "", "").is_err());
+        assert!(s3_location(2, 0, "", false, "", "").is_err());
         assert_eq!(
-            loc(3, 0, "", false, "http://127.0.0.1:9000", ""),
+            loc(2, 0, "", false, "http://127.0.0.1:9000", ""),
             ("http://127.0.0.1:9000".into(), "auto".into())
         );
         assert_eq!(
-            loc(3, 0, "", false, "minio.example.com", "us-east-1"),
+            loc(2, 0, "", false, "minio.example.com", "us-east-1"),
             ("https://minio.example.com".into(), "us-east-1".into())
         );
     }

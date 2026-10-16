@@ -7,7 +7,7 @@ settings, package lists and ssh and gpg keys follow; every version is kept.
 Sign in with Google and your files are kept on Omacloud storage
 ([omacloud.computer](https://omacloud.computer), in the EU, by invitation for
 now), or keep them in a storage bucket you rent yourself from a provider
-such as Hetzner, Cloudflare R2 or Backblaze B2, or use your own Dropbox app.
+such as Hetzner or Cloudflare R2, or in your own Dropbox.
 Either way everything is
 encrypted on your computer before it leaves it: the storage only ever holds
 what it can't read. Underneath it's plain restic, so you can always restore
@@ -62,11 +62,10 @@ Open **Omacloud** from the app launcher (Super + Space).
 and you're done but for writing down your recovery code (below). Or, to use
 your own storage, pick your provider and follow the steps the app shows. With Hetzner that's one page: click Get a Key, generate
 credentials there, and paste both keys back; Omacloud makes its own private
-bucket. With R2 or B2, make a bucket and a key just for it, and paste the
+bucket. With R2, make a bucket and a key just for it, and paste the
 bucket name and both keys. Then click Create Account. The app
 then shows your **recovery code** once: write it down and keep it offline.
-With Dropbox, create an App folder scoped app, enable the four file read and
-write scopes, then enter its app key and secret and authorize it from setup.
+With Dropbox, click Connect Dropbox and allow Omacloud in the browser.
 With it you can add a computer when no other is at hand and recover
 everything; without it and without a computer, nobody can. [docs/providers.md](docs/providers.md) has the
 steps and notes for each storage provider.
@@ -85,7 +84,7 @@ From the command line, the same is:
 omacloud init --hosted                              # Omacloud storage: sign in with Google
 omacloud init --repo opendal:s3 --opt endpoint=https://fsn1.your-objectstorage.com \
   --opt region=fsn1 --opt bucket=<bucket> --opt access_key_id=<key id>   # asks for the secret key
-omacloud init --repo opendal:dropbox --opt client_id=<app key>  # asks for the app secret and authorization code
+omacloud init --repo opendal:dropbox                # allow Omacloud in the browser
 omacloud join-code                                  # on a computer you have
 omacloud init --join-code <code>                    # on the new one (or OMACLOUD_JOIN_CODE)
 omacloud devices approve <fingerprint>              # back on the first
@@ -180,7 +179,7 @@ asks first; `--yes` where nobody can be asked). It
 can't sync anymore, but it still holds a key to your storage, so the app
 goes on to change that key.
 
-With Dropbox, authorize your app again when the device is removed. The other
+With Dropbox, allow Omacloud again when the device is removed. The other
 computers switch to the new token; Omacloud then revokes the old one. Keep
 the computer that started the change available until `omacloud bucket status`
 shows the old token is revoked.
@@ -324,6 +323,7 @@ edits.
 | `crates/omacloud` | CLI and `watch` daemon |
 | `crates/omacloud-app` | the Omacloud app (GTK4, libadwaita), driving the CLI |
 | `vendor/rustic_core` | rustic_core 0.13 plus pack padding and `splice_tree` (upstream PRs in `vendor/upstream-patches`) |
+| `vendor/opendal-service-dropbox` | opendal-service-dropbox 0.58.2, refreshing without an app secret for Omacloud's public (PKCE) Dropbox app |
 | `scripts/` | end to end checks (see CONTRIBUTING.md) and the release scripts |
 | `server/` | Omacloud storage: the Cloudflare Worker behind Sign In with Google (see its README) |
 | `contrib/` | the systemd user unit and the desktop entry |

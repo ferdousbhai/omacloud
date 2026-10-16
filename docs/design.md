@@ -10,7 +10,7 @@ can't do. The source files named here hold the details.
 
 Everything lives in one storage location: the files, and the records that keep
 your computers in step. It is either your own S3 bucket, rented from a provider
-(Hetzner, R2, B2, MinIO), and then your computers talk to it and to nothing
+(Hetzner, R2, AWS, MinIO), and then your computers talk to it and to nothing
 else; an App folder in your own Dropbox, reached directly through its API; or
 a folder of Omacloud storage, reached through the gateway at
 storage.omacloud.computer (`server/`) with the key your computer got when
@@ -93,9 +93,13 @@ so, and once all have, you delete the old key at your provider. A computer
 that was away through the whole change catches up with `omacloud bucket
 set-key --here-only`.
 
-With Dropbox, the shared key is an offline OAuth refresh token for an App
-folder scoped app. To remove a computer's storage access, one member
-authorizes the app again. The new token is sealed to the remaining members
+With Dropbox, the shared key is an offline OAuth refresh token for
+Omacloud's Dropbox app, which reaches only its App folder. The app is a
+public client: authorizing uses PKCE, so no app secret ships, and the code
+the browser brings back to this computer's loopback port is useless
+without the verifier that never leaves the process (`crates/omacloud/src/dropbox.rs`).
+A user's own Dropbox app, with its secret, works too. To remove a
+computer's storage access, one member authorizes the app again. The new token is sealed to the remaining members
 as above. The initiating computer temporarily keeps the old token in a
 private local file and revokes it with Dropbox's API after every remaining
 computer acknowledges the new one. It must stay available until then.

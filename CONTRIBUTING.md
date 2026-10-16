@@ -22,6 +22,8 @@ existing repository using another OpenDAL provider, REST or rclone, build with
 `cargo build --release -p omacloud --features full-backends`. These optional
 backends are kept out of normal builds to avoid their unused protocol stacks.
 The manifest-only patch is documented in `vendor/rustic_backend/OMACLOUD.md`.
+`vendor/opendal-service-dropbox` lets a refresh token work without an app
+secret, for Omacloud's public (PKCE) Dropbox app; see its `OMACLOUD.md`.
 
 ## End to end scripts
 

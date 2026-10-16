@@ -31,17 +31,23 @@ fn is_conflict(summary: &str, kind: &str) -> bool {
 
 /// The create-only part of a Dropbox coordinator. The refresh token and app
 /// secret stay in the same keyring entry as the repository's credentials.
+/// Omacloud's own app is a public (PKCE) client and has no secret.
 pub struct DropboxCreate {
     root: String,
     client_id: String,
-    client_secret: String,
+    client_secret: Option<String>,
     refresh_token: String,
     token: Mutex<Option<(String, Instant)>>,
     directories: Mutex<HashSet<String>>,
     agent: ureq::Agent,
     api: String,
     content: String,
+    first_pause: Duration,
 }
+
+/// Pauses for a write Dropbox turns down as too fast, before the last try:
+/// 1, 2, 4, 8, 16 and 30 seconds, about a minute in all.
+const RETRIES: usize = 6;
 
 impl DropboxCreate {
     /// Build a Dropbox writer from OpenDAL options. Long-running sync needs
@@ -60,7 +66,7 @@ impl DropboxCreate {
         Ok(Self {
             root: root.to_string(),
             client_id: get("client_id").context("Dropbox needs --opt client_id=...")?,
-            client_secret: get("client_secret").context("Dropbox needs an app secret")?,
+            client_secret: get("client_secret"),
             refresh_token: get("refresh_token").context("Dropbox needs an offline refresh token")?,
             token: Mutex::new(None),
             directories: Mutex::new(HashSet::new()),
@@ -71,6 +77,7 @@ impl DropboxCreate {
                 .into(),
             api: API.into(),
             content: CONTENT.into(),
+            first_pause: Duration::from_secs(1),
         })
     }
 
@@ -93,15 +100,19 @@ impl DropboxCreate {
         {
             return Ok(token.clone());
         }
+        let mut form = vec![
+            ("grant_type", "refresh_token"),
+            ("refresh_token", self.refresh_token.as_str()),
+            ("client_id", self.client_id.as_str()),
+        ];
+        // Dropbox refuses an empty secret: a public app sends none
+        if let Some(secret) = &self.client_secret {
+            form.push(("client_secret", secret.as_str()));
+        }
         let mut response = self
             .agent
             .post(&format!("{}/oauth2/token", self.api))
-            .send_form([
-                ("grant_type", "refresh_token"),
-                ("refresh_token", self.refresh_token.as_str()),
-                ("client_id", self.client_id.as_str()),
-                ("client_secret", self.client_secret.as_str()),
-            ])
+            .send_form(form)
             .context("refreshing Dropbox access")?;
         ensure!(
             response.status().is_success(),
@@ -119,13 +130,13 @@ impl DropboxCreate {
         if self.directories.lock().unwrap().contains(path) {
             return Ok(());
         }
-        let token = self.access_token()?;
-        let mut response = self
-            .agent
-            .post(&format!("{}/2/files/create_folder_v2", self.api))
-            .header("authorization", &format!("Bearer {token}"))
-            .send_json(serde_json::json!({ "path": path, "autorename": false }))
-            .with_context(|| format!("creating Dropbox folder {path}"))?;
+        let mut response = self.retrying(|token| {
+            self.agent
+                .post(&format!("{}/2/files/create_folder_v2", self.api))
+                .header("authorization", &format!("Bearer {token}"))
+                .send_json(serde_json::json!({ "path": path, "autorename": false }))
+                .with_context(|| format!("creating Dropbox folder {path}"))
+        })?;
         match response.status().as_u16() {
             200 => {}
             409 => {
@@ -142,8 +153,36 @@ impl DropboxCreate {
         Ok(())
     }
 
-    /// Create the root and each parent folder. Dropbox does not create
-    /// missing parents when uploading a file.
+    /// Send `request` (given an access token), again after a pause while
+    /// Dropbox answers 429 or 503: it limits how fast an account is written
+    /// to, and a write it turned down that way wasn't made, so sending it
+    /// again can't add a record twice.
+    fn retrying(
+        &self,
+        request: impl Fn(&str) -> Result<ureq::http::Response<ureq::Body>>,
+    ) -> Result<ureq::http::Response<ureq::Body>> {
+        let mut pause = self.first_pause;
+        for _ in 0..RETRIES {
+            let response = request(&self.access_token()?)?;
+            if !matches!(response.status().as_u16(), 429 | 503) {
+                return Ok(response);
+            }
+            // Dropbox says how long, in whole seconds, or 0 for "soon"
+            let asked = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(Duration::from_secs)
+                .unwrap_or_default();
+            std::thread::sleep(asked.max(pause));
+            pause = (pause * 2).min(Duration::from_secs(30));
+        }
+        request(&self.access_token()?)
+    }
+
+    /// Create the root and each parent folder, so listing them works
+    /// before anything is uploaded (an upload makes missing parents too).
     pub fn prepare_root(&self) -> Result<()> {
         self.prepare_dir(&self.root)
     }
@@ -175,19 +214,19 @@ impl DropboxCreate {
     pub fn create(&self, key: &str, bytes: &[u8]) -> Result<bool> {
         let path = self.path(key)?;
         self.prepare_parent(&path)?;
-        let token = self.access_token()?;
         let args = serde_json::json!({
             "path": path, "mode": "add", "autorename": false,
             "mute": true, "strict_conflict": true,
         });
-        let mut response = self
-            .agent
-            .post(&format!("{}/2/files/upload", self.content))
-            .header("authorization", &format!("Bearer {token}"))
-            .header("content-type", "application/octet-stream")
-            .header("Dropbox-API-Arg", &args.to_string())
-            .send(bytes)
-            .with_context(|| format!("adding Dropbox record {key}"))?;
+        let mut response = self.retrying(|token| {
+            self.agent
+                .post(&format!("{}/2/files/upload", self.content))
+                .header("authorization", &format!("Bearer {token}"))
+                .header("content-type", "application/octet-stream")
+                .header("Dropbox-API-Arg", &args.to_string())
+                .send(bytes)
+                .with_context(|| format!("adding Dropbox record {key}"))
+        })?;
         match response.status().as_u16() {
             200 => Ok(true),
             409 => {
@@ -277,6 +316,106 @@ mod tests {
         assert!(writer.create("heads/0001.json", b"first")?);
         assert!(!writer.create("heads/0001.json", b"second")?);
         server.join().expect("mock Dropbox server")?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_public_app_refreshes_without_a_secret() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}", listener.local_addr()?);
+        let server = std::thread::spawn(move || -> Result<String> {
+            let (mut stream, _) = listener.accept()?;
+            stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+            let mut reader = BufReader::new(stream.try_clone()?);
+            let (mut line, mut len) = (String::new(), 0);
+            loop {
+                line.clear();
+                reader.read_line(&mut line)?;
+                if line == "\r\n" {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = value.trim().parse()?;
+                }
+            }
+            let mut body = vec![0; len];
+            reader.read_exact(&mut body)?;
+            let answer = r#"{"access_token":"temporary","expires_in":14400}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{answer}",
+                answer.len()
+            )?;
+            Ok(String::from_utf8(body)?)
+        });
+        let opts = [
+            ("client_id".into(), "app".into()),
+            ("refresh_token".into(), "refresh".into()),
+        ]
+        .into();
+        let mut writer = DropboxCreate::new(&opts)?;
+        writer.api = url;
+        assert_eq!(writer.access_token()?, "temporary");
+        let body = server.join().expect("mock Dropbox server")?;
+        assert!(body.contains("client_id=app"), "{body}");
+        assert!(!body.contains("client_secret"), "{body}");
+        Ok(())
+    }
+
+    #[test]
+    fn a_write_turned_down_as_too_fast_is_sent_again() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}", listener.local_addr()?);
+        let server = std::thread::spawn(move || -> Result<Vec<String>> {
+            let mut seen = Vec::new();
+            for step in 0..3 {
+                let (mut stream, _) = listener.accept()?;
+                stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+                let mut reader = BufReader::new(stream.try_clone()?);
+                let (mut line, mut len) = (String::new(), 0);
+                reader.read_line(&mut line)?;
+                seen.push(line.split_whitespace().nth(1).unwrap_or_default().to_string());
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line)?;
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        len = value.trim().parse()?;
+                    }
+                }
+                reader.read_exact(&mut vec![0; len])?;
+                let (status, answer) = match step {
+                    0 => ("200 OK", r#"{"access_token":"temporary","expires_in":14400}"#),
+                    1 => (
+                        "429 Too Many Requests",
+                        r#"{"error_summary":"too_many_write_operations/..."}"#,
+                    ),
+                    _ => ("200 OK", "{}"),
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\nretry-after: 0\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{answer}",
+                    answer.len()
+                )?;
+            }
+            Ok(seen)
+        });
+        let opts = [
+            ("client_id".into(), "app".into()),
+            ("refresh_token".into(), "refresh".into()),
+        ]
+        .into();
+        let mut writer = DropboxCreate::new(&opts)?;
+        writer.api = url.clone();
+        writer.content = url;
+        writer.first_pause = Duration::from_millis(10);
+        // the root folder exists: only the record's upload is sent
+        writer.directories.lock().unwrap().insert("/heads".into());
+        assert!(writer.create("heads/0001.json", b"first")?);
+        let seen = server.join().expect("mock Dropbox server")?;
+        assert_eq!(seen, ["/oauth2/token", "/2/files/upload", "/2/files/upload"]);
         Ok(())
     }
 }

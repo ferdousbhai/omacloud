@@ -9,7 +9,7 @@
 //! |---|---|
 //! | `error` (anything unrecognised), `verification_failed`, `pending`, `command_failed`, `cancelled` | 1 |
 //! | `usage`, `confirmation_required`, `terminal_required`, `ambiguous`, `already_set_up`, `exists`, `unsupported`, `same_key` | 2 |
-//! | `not_set_up`, `not_approved`, `removed`, `key_refused`, `recovery_code_rejected`, `join_code_rejected`, `card_rejected`, `shares_rejected`, `settings_off`, `not_signed_in`, `wrong_account`, `dropbox_code_rejected`, `keyring_off` | 3 |
+//! | `not_set_up`, `not_approved`, `removed`, `key_refused`, `recovery_code_rejected`, `join_code_rejected`, `card_rejected`, `shares_rejected`, `settings_off`, `not_signed_in`, `wrong_account`, `dropbox_code_rejected`, `dropbox_not_allowed`, `keyring_off` | 3 |
 //! | `not_found`, `no_account` | 4 |
 //! | `unavailable`, `keyring_unavailable` | 5 |
 

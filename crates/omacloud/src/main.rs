@@ -109,8 +109,9 @@ enum Cmd {
         #[arg(long)]
         folder: Option<PathBuf>,
         /// Where the files live: an opendal URL like `opendal:s3` or
-        /// `opendal:dropbox` (with an app key as `--opt client_id=...`; the
-        /// app secret and authorization code are asked for), or a path.
+        /// `opendal:dropbox` (Omacloud's Dropbox app, allowed in the browser;
+        /// or your own app with `--opt client_id=...`, whose secret and
+        /// authorization code are asked for), or a path.
         /// For S3 use
         /// `--opt endpoint=... --opt bucket=... --opt access_key_id=...`; the
         /// secret key is asked for. Joining with a join code needs none
@@ -909,11 +910,10 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>,
         config.root = account::request(coord.as_ref(), &signing, &config.device)?;
         say!(
             out,
-            "asked to join {}\n\n\
+            "asked to join the account\n\n\
              this device's fingerprint: {me}\n\n\
              On a device that already syncs, run `omacloud devices` and check that it\n\
-             shows the same fingerprint, then `omacloud devices approve {me}`.",
-            config.repo.repository
+             shows the same fingerprint, then `omacloud devices approve {me}`."
         );
         "asked_to_join"
     };
@@ -1304,11 +1304,12 @@ fn main() -> std::process::ExitCode {
     let mode = if daemon { cli.out.asked_mode() } else { cli.out.mode() };
     _ = MODE.set(mode);
     // a program reading the output gets warnings, not progress; the
-    // daemon's journal gets both
+    // daemon's journal gets both. OpenDAL's retries (Dropbox asking it to
+    // slow down, say) are left out: one that finally fails is an error
     let filter = if mode.is_machine() && !daemon {
-        "warn"
+        "warn,opendal::layers::retry=error"
     } else {
-        "info,rustic_core=warn"
+        "info,rustic_core=warn,opendal::layers::retry=error"
     };
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(filter)).init();
     if let Some(home) = agent_skill::home() {
@@ -1505,20 +1506,24 @@ fn run(cli: Cli) -> Out {
                             );
                         }
                         if repo == "opendal:dropbox" {
-                            let id = o.get("client_id").cloned().unwrap_or_default();
-                            let url = dropbox::authorize_url(&id)?;
                             o.entry("root".into()).or_insert("/Omacloud".into());
+                            // Omacloud's app unless another is given; a
+                            // user's own app has a secret
+                            let id = o.entry("client_id".into()).or_insert(dropbox::APP_KEY.into()).clone();
                             let secret = match o.get("client_secret") {
-                                Some(secret) => secret.clone(),
-                                None => read_secret("OMACLOUD_DROPBOX_CLIENT_SECRET", "Dropbox app secret")?,
-                            };
-                            o.insert("client_secret".into(), secret.clone());
-                            if !o.contains_key("refresh_token") {
-                                if std::env::var_os("OMACLOUD_DROPBOX_AUTH_CODE").is_none() {
-                                    eprintln!("Open this Dropbox authorization URL and paste its code:\n\n  {url}\n");
+                                Some(secret) => Some(secret.clone()),
+                                None if id != dropbox::APP_KEY => {
+                                    Some(read_secret("OMACLOUD_DROPBOX_CLIENT_SECRET", "Dropbox app secret")?)
                                 }
-                                let code = read_secret("OMACLOUD_DROPBOX_AUTH_CODE", "Dropbox authorization code")?;
-                                let refresh = dropbox::exchange(&id, &secret, &code)?;
+                                None => None,
+                            };
+                            if let Some(secret) = &secret {
+                                o.insert("client_secret".into(), secret.clone());
+                            }
+                            if !o.contains_key("refresh_token") {
+                                let refresh = dropbox::authorize(&id, secret.as_deref(), || {
+                                    read_secret("OMACLOUD_DROPBOX_AUTH_CODE", "Dropbox authorization code")
+                                })?;
                                 o.insert("refresh_token".into(), refresh);
                             }
                         }
@@ -3111,7 +3116,11 @@ fn retire_old_keys(paths: &Paths, e: &mut Engine) -> Result<bool> {
                 .map(String::as_str)
                 .with_context(|| format!("Dropbox location has no {key}"))
         };
-        dropbox::revoke(get("client_id")?, get("client_secret")?, &old)?;
+        dropbox::revoke(
+            get("client_id")?,
+            current.get("client_secret").map(String::as_str),
+            &old,
+        )?;
         config.bucket_key_retired = seq;
         save(paths, &config)?;
         fs::remove_file(pending)?;
@@ -3221,17 +3230,17 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Out {
                 (None, None) if is_dropbox(&config) => {
                     let c = config.coordination.as_ref().context("no Dropbox location")?;
                     let id = c.get("client_id").context("no Dropbox app key")?;
-                    let secret = if here_only || !c.contains_key("client_secret") {
-                        read_secret("OMACLOUD_DROPBOX_CLIENT_SECRET", "Dropbox app secret")?
-                    } else {
-                        c["client_secret"].clone()
+                    // a user's own app has a secret; Omacloud's (PKCE) none
+                    let secret = match c.get("client_secret") {
+                        Some(secret) if !here_only => Some(secret.clone()),
+                        _ if id != dropbox::APP_KEY => {
+                            Some(read_secret("OMACLOUD_DROPBOX_CLIENT_SECRET", "Dropbox app secret")?)
+                        }
+                        _ => None,
                     };
-                    let url = dropbox::authorize_url(id)?;
-                    if std::env::var_os("OMACLOUD_DROPBOX_AUTH_CODE").is_none() {
-                        eprintln!("Open this Dropbox authorization URL and paste its code:\n\n  {url}\n");
-                    }
-                    let code = read_secret("OMACLOUD_DROPBOX_AUTH_CODE", "Dropbox authorization code")?;
-                    let refresh = dropbox::exchange(id, &secret, &code)?;
+                    let refresh = dropbox::authorize(id, secret.as_deref(), || {
+                        read_secret("OMACLOUD_DROPBOX_AUTH_CODE", "Dropbox authorization code")
+                    })?;
                     if !here_only && c.get("refresh_token") == Some(&refresh) {
                         return Err(CliError::new(
                             "same_key",
@@ -3241,11 +3250,11 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Out {
                         .hint("authorize the app again for a new code")
                         .into());
                     }
-                    [
-                        ("client_secret".to_string(), secret.clone()),
-                        ("refresh_token".to_string(), refresh),
-                    ]
-                    .into()
+                    let mut key: BTreeMap<String, String> = [("refresh_token".to_string(), refresh)].into();
+                    if let Some(secret) = secret {
+                        key.insert("client_secret".to_string(), secret);
+                    }
+                    key
                 }
                 (None, None) => {
                     return Err(fail::usage("give the new key")

@@ -492,6 +492,11 @@ impl WriteBackend for OpenDALBackend {
                     .attach_context("type", tpe.to_string())
                 )?;
         }
+        // Omacloud: Dropbox makes a file's folders when it's uploaded, and
+        // rate-limits 256 folders made at once until a retry gives up
+        if self.operator.info().scheme() == "dropbox" {
+            return Ok(());
+        }
         // creating 256 dirs can be slow on remote backends, hence we parallelize it.
         (0u8..=255)
             .into_par_iter()

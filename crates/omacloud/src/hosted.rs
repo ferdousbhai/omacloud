@@ -59,7 +59,7 @@ fn random_hex(bytes: usize) -> String {
 }
 
 /// The decoded value of `name` in a query string of hex and short words.
-fn param<'a>(query: &'a str, name: &str) -> Option<&'a str> {
+pub fn param<'a>(query: &'a str, name: &str) -> Option<&'a str> {
     query
         .split('&')
         .filter_map(|p| p.split_once('='))
@@ -67,7 +67,7 @@ fn param<'a>(query: &'a str, name: &str) -> Option<&'a str> {
         .map(|(_, v)| v)
 }
 
-fn reply(mut stream: &TcpStream, status: &str, title: &str, text: &str) {
+pub fn reply(mut stream: &TcpStream, status: &str, title: &str, text: &str) {
     let body = format!(
         "<!doctype html><meta charset=utf-8><title>Omacloud</title>\
          <body style=\"font:16px system-ui;max-width:32em;margin:4em auto;padding:0 1em\">\
@@ -161,6 +161,22 @@ fn credentials(service: &str, grant: &Grant, contact: bool) -> Result<Storage> {
     response.body_mut().read_json().context("reading the key from Omacloud")
 }
 
+/// Open `url` in the browser. The browser it may start keeps none of this
+/// process's secrets: not the ones in the environment, nor the terminal a
+/// secret prints to.
+pub fn open_browser(url: &str) {
+    let mut open = std::process::Command::new("xdg-open");
+    for var in SECRET_VARS {
+        open.env_remove(var);
+    }
+    _ = open
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
 /// Sign in with Google in the browser.
 fn browser(service: &str) -> Result<Grant> {
     let service = service.trim_end_matches('/');
@@ -170,18 +186,7 @@ fn browser(service: &str) -> Result<Grant> {
     let challenge = hex::encode(Sha256::digest(verifier.as_bytes()));
     let url = format!("{service}/signin?port={port}&state={state}&challenge={challenge}");
     eprintln!("Sign in with Google in your browser. If it didn't open, go to:\n\n  {url}\n");
-    // the browser it may start keeps none of this process's secrets: not
-    // the ones in the environment, nor the terminal a secret prints to
-    let mut open = std::process::Command::new("xdg-open");
-    for var in SECRET_VARS {
-        open.env_remove(var);
-    }
-    _ = open
-        .arg(&url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    open_browser(&url);
 
     listener.set_nonblocking(true)?;
     let deadline = Instant::now() + Duration::from_secs(600);

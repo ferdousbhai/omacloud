@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- Dropbox is one click: Connect Dropbox, allow Omacloud in the browser, and
+  Dropbox sends the browser back to Omacloud. It uses Omacloud's own
+  Dropbox app with PKCE, so there's no app to create and no key, secret or
+  code to paste; changing the token after removing a computer works the
+  same way. Without a desktop the command line prints the link and asks for
+  the code. Your own Dropbox app (`--opt client_id=...`) still works.
+- Setting up Dropbox no longer fails with "Creating directory `data/..`
+  failed" or "HTTP 429": it skips making restic's 256 data folders, which
+  Dropbox makes on upload anyway, and the coordination records wait and
+  try again when Dropbox says it's being written to too fast.
+- The Omacloud app shows that setup is under way, from Create Account,
+  Connect Dropbox, Sign In with Google or Join until it's done, instead of a
+  brief "Setting up…" and then a long quiet wait.
+- Joining with a join code says "asked to join the account" instead of
+  leaving out what it asked to join.
+- Setup no longer offers Backblaze B2: it's reported to refuse the
+  create-only writes that keep computers in step, and it was never tested
+  end to end. Other S3 storage (AWS, MinIO and others) is still there.
+
 ## 0.0.16 (2026-10-14)
 
 - The `omacloud` command line follows the output contract the other

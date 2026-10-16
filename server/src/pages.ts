@@ -165,7 +165,7 @@ export const llms = (env: Env) => {
 > Your files and settings on every Omarchy computer, end to end encrypted. Desktop, Documents
 > and Pictures sync in place; Omarchy settings, AI agent settings, Chromium, Wi-Fi, package lists
 > and ssh and gpg keys follow; every version is kept. Storage is Omacloud storage (sign in with
-> Google, by invitation), a bucket of your own (Hetzner, R2, B2, any S3) or a Dropbox app.
+> Google, by invitation), a bucket of your own (Hetzner, R2, any S3 with create-only writes) or your Dropbox.
 > Underneath it is plain restic, so restic or rustic restore everything without Omacloud.
 
 Everything is encrypted on the computer before upload: the storage, Omacloud's included, holds
@@ -177,7 +177,7 @@ and the \`omacloud\` command line tool that drives it. Install with
 
 - [README](${repo}/blob/master/README.md): install, setup, what syncs, versions, lost computers, trusted contacts, configuration
 - [How Omacloud works](${repo}/blob/master/docs/design.md): the encryption, device approval and threat model
-- [Storage providers](${repo}/blob/master/docs/providers.md): setting up Hetzner, Cloudflare R2, Backblaze B2 and Dropbox
+- [Storage providers](${repo}/blob/master/docs/providers.md): setting up Hetzner, Cloudflare R2, other S3 storage and Dropbox
 - [Changelog](${repo}/blob/master/CHANGELOG.md): what each release changed
 
 ## Command line

@@ -38,3 +38,5 @@ tempfile = "3"
 [patch.crates-io]
 rustic_core = { path = "vendor/rustic_core" }
 rustic_backend = { path = "vendor/rustic_backend" }
+# a refresh token without an app secret, see vendor/opendal-service-dropbox/OMACLOUD.md
+opendal-service-dropbox = { path = "vendor/opendal-service-dropbox" }
