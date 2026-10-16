@@ -12,6 +12,8 @@
   failed" or "HTTP 429": it skips making restic's 256 data folders, which
   Dropbox makes on upload anyway, and the coordination records wait and
   try again when Dropbox says it's being written to too fast.
+- A new computer pulls from Dropbox about three times faster: up to 16
+  requests at once instead of 4 (1,506 small files: 99 s instead of 302 s).
 - The Omacloud app shows that setup is under way, from Create Account,
   Connect Dropbox, Sign In with Google or Join until it's done, instead of a
   brief "Setting up…" and then a long quiet wait.

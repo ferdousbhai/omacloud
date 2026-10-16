@@ -87,9 +87,11 @@ impl RepoSpec {
         let mut options = self.options.clone();
         _ = options.remove("bandwidth");
         if self.repository == "opendal:dropbox" {
-            // Rustic creates 256 data directories in parallel. Limit API
-            // calls during that setup and during later pack uploads.
-            options.entry("connections".into()).or_insert("4".into());
+            // Dropbox is slow per request (a pull reads each file with at
+            // least one), and limits writes more than reads: enough at once
+            // that a pull of many small files doesn't crawl, few enough that
+            // pack uploads mostly don't need retrying
+            options.entry("connections".into()).or_insert("16".into());
         }
         if !self.is_bucket() {
             options.retain(|k, _| !LOCAL_OPTIONS.contains(&k.as_str()));
