@@ -9,13 +9,26 @@ version=${1:?Usage: scripts/release-ci.sh <version> [successful-ci-run-id]}
 for command in gh gpg repo-add bsdtar python3; do
   command -v "$command" >/dev/null || { echo "$command is required." >&2; exit 1; }
 done
-source_commit=$(gh api "repos/$repository/commits/master" --jq .sha)
+# GitHub over a flaky connection: a read that's safe to repeat gets a
+# deadline and up to five tries. Publishing itself runs once.
+retry() { # seconds command...
+  local seconds=$1 attempt
+  shift
+  for attempt in 1 2 3 4 5; do
+    timeout "$seconds" "$@" && return
+    ((attempt < 5)) || break
+    echo "GitHub didn't answer; trying again ($attempt of 4)" >&2
+    sleep "$attempt"
+  done
+  return 1
+}
+source_commit=$(retry 60 gh api "repos/$repository/commits/master" --jq .sha)
 # CI runs only when a release starts it: build master's commit now unless a run is named.
 run=${2:-}
 if [[ -z $run ]]; then
   gh workflow run ci.yml --repo "$repository" --ref master
   for _ in $(seq 1 30); do
-    run=$(gh run list --repo "$repository" --workflow ci.yml --event workflow_dispatch --commit "$source_commit" \
+    run=$(retry 60 gh run list --repo "$repository" --workflow ci.yml --event workflow_dispatch --commit "$source_commit" \
       --limit 1 --json databaseId --jq '.[0].databaseId // empty')
     [[ -n $run ]] && break
     sleep 5
@@ -24,7 +37,7 @@ fi
 [[ $run =~ ^[0-9]+$ ]] || { echo "No CI run started for master; run this command again." >&2; exit 1; }
 echo "Waiting for CI run $run"
 gh run watch "$run" --repo "$repository" --exit-status >/dev/null || true
-run_info=$(gh run view "$run" --repo "$repository" --json event,headBranch,headSha,status,conclusion --jq '[.event,.headBranch,.headSha,.status,.conclusion] | @tsv')
+run_info=$(retry 60 gh run view "$run" --repo "$repository" --json event,headBranch,headSha,status,conclusion --jq '[.event,.headBranch,.headSha,.status,.conclusion] | @tsv')
 [[ $run_info == $'workflow_dispatch\tmaster\t'"$source_commit"$'\tcompleted\tsuccess' ]] \
   || { echo "The run must be a successful CI build of the current master commit." >&2; exit 1; }
 
@@ -34,8 +47,8 @@ assets=$staging/assets
 mkdir "$assets"
 echo "Preparing release assets in $assets"
 for path in Cargo.toml CHANGELOG.md install.sh; do
-  gh api "repos/$repository/contents/$path?ref=$source_commit" --jq .content |
-    base64 --decode > "$staging/$path"
+  content=$(retry 60 gh api "repos/$repository/contents/$path?ref=$source_commit" --jq .content)
+  base64 --decode <<< "$content" > "$staging/$path"
 done
 grep -qxF "version = \"$version\"" "$staging/Cargo.toml" \
   || { echo "The requested version does not match master." >&2; exit 1; }
@@ -50,7 +63,9 @@ export GPGKEY=$fingerprint
 # Validate both artifacts before signing either one.
 for architecture in x86_64 aarch64; do
   artifact=$staging/$architecture
-  gh run download "$run" --repo "$repository" --name "omacloud-$architecture" --dir "$artifact"
+  # a try cut short leaves part of the artifact; each starts from nothing
+  retry 600 bash -c 'rm -rf "${1:?}" && exec gh run download "$2" --repo "$3" --name "$4" --dir "$1"' \
+    _ "$artifact" "$run" "$repository" "omacloud-$architecture"
   [[ $(cat "$artifact/source-commit.txt") == "$source_commit" ]] \
     || { echo "$architecture was built from a different commit." >&2; exit 1; }
   package="omacloud-$version-1-$architecture.pkg.tar.zst"
@@ -94,7 +109,7 @@ curl -fsSL https://github.com/ferdousbhai/omacloud/releases/latest/download/inst
 NOTES
 # Recheck master after download/signing so a concurrent change cannot be
 # mistaken for the tested source. No release exists until this point.
-[[ $(gh api "repos/$repository/commits/master" --jq .sha) == "$source_commit" ]] \
+[[ $(retry 60 gh api "repos/$repository/commits/master" --jq .sha) == "$source_commit" ]] \
   || { echo "Master moved; use its new successful CI build before publishing." >&2; exit 1; }
 gh release create "v$version" "$assets/"* --repo "$repository" --target "$source_commit" \
   --title "Omacloud $version" --notes-file "$staging/notes.md" --latest

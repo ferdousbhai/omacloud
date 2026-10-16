@@ -40,6 +40,14 @@ import base64, os, pathlib, shutil, sys
 root = pathlib.Path(os.environ['FIXTURE'])
 args = sys.argv[1:]
 with open(root / 'calls', 'a') as log: log.write('gh ' + ' '.join(args) + '\\n')
+# a flaky connection: the first try of each read and download fails
+if os.environ['FAILURE'] == 'flaky' and args[0] in ('api', 'run'):
+    tried = root / ('tried-' + base64.urlsafe_b64encode(' '.join(args).encode()).decode()[:200])
+    if not tried.exists():
+        tried.touch()
+        if args[:2] == ['run', 'download']:
+            pathlib.Path(args[args.index('--dir') + 1]).mkdir(parents=True)
+        sys.exit(1)
 if args[0] == 'api':
     if '/commits/' in args[1]:
         count = root / 'master-reads'
@@ -91,7 +99,7 @@ done
             'FIXTURE': str(root), 'FAILURE': failure,
         }, capture_output=True, text=True)
         calls = (root / 'calls').read_text()
-        if failure:
+        if failure and failure != 'flaky':
             assert result.returncode != 0, result
             assert 'gh release create' not in calls, calls
             if failure in ('ci', 'manifest', 'metadata'):
@@ -109,8 +117,10 @@ done
             assert (assets / 'install.sh').exists()
             assert calls.index('gh release create') < calls.index('contents/packaging/omarchy-pkgs'), calls
             assert 'the Omarchy recipe was not updated' in result.stderr, result.stderr
+            if failure == 'flaky':
+                assert "GitHub didn't answer" in result.stderr, result.stderr
         print(f'{failure or "success"}: passed')
 
 
-for failure in ('', 'ci', 'manifest', 'metadata', 'signing', 'signature', 'database', 'master-moved'):
+for failure in ('', 'flaky', 'ci', 'manifest', 'metadata', 'signing', 'signature', 'database', 'master-moved'):
     check(failure)
