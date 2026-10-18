@@ -17,19 +17,12 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 step "cargo test"
 cargo test --locked --workspace
 
-# CI also syncs through a SeaweedFS S3 container (scripts/s3-sync.sh).
 cargo build --locked -q -p omacloud
 if command -v restic >/dev/null; then
   step "restore with plain restic"
   scripts/restic-compat.sh target/debug/omacloud
 else
   echo "note: skipping the plain-restic restore (install restic to run it)" >&2
-fi
-if docker info >/dev/null 2>&1; then
-  step "bucket key change, one computer offline"
-  scripts/bucket-key.sh target/debug/omacloud
-else
-  echo "note: skipping the bucket-key change test (needs a running Docker you can use)" >&2
 fi
 
 step "server"

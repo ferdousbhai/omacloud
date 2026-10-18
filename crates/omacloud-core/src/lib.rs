@@ -7,12 +7,8 @@
 
 pub mod account;
 pub mod agents;
-pub mod bucket;
-pub mod bucket_key;
 pub mod chromium;
-pub mod contact;
 pub mod devices;
-pub mod dropbox;
 pub mod epoch;
 pub mod head;
 pub mod ignore;
@@ -25,7 +21,6 @@ pub mod sync;
 pub mod throttle;
 pub mod wifi;
 
-pub use bucket::BucketCoordinator;
 pub use devices::{Anchor, DeviceChain, DeviceError, JoinRequest, fingerprint};
 pub use head::{Coordinator, DirCoordinator, Head, HeadError, HeadTracker};
 pub use ignore::Ignores;

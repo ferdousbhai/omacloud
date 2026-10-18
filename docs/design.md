@@ -8,16 +8,13 @@ can't do. The source files named here hold the details.
 
 ## Where it's stored
 
-Everything lives in one storage location: the files, and the records that keep
-your computers in step. It is either your own S3 bucket, rented from a provider
-(Hetzner, R2, AWS, MinIO), and then your computers talk to it and to nothing
-else; an App folder in your own Dropbox, reached directly through its API; or
-a folder of Omacloud storage, reached through the gateway at
-storage.omacloud.computer (`server/`) with the key your computer got when
-you signed in with Google. The gateway checks that key, keeps each account
-to its own folder of the bucket behind it, and enforces the account's
-quota. Either way the storage sees only encrypted objects, and nothing
-below depends on trusting it.
+Everything lives in two places: a restic repository with the files, and the
+records that keep your computers in step. Omacloud is between storages:
+the earlier storage choices (see `CHANGELOG.md`) are gone, and the Omacloud
+network that replaces them is being built (below). Until it's here, both
+live in directories you give `omacloud init` (`--repo`, `--coordinator`),
+for development and tests. Either way the storage sees only encrypted
+objects, and nothing below depends on trusting it.
 
 ## Storage: plain restic
 
@@ -40,15 +37,6 @@ without Omacloud.
   computer. With it you can add a computer when no other is at hand, and
   recover the account. It can be split among people you trust, any `k` of
   `n` shares rebuilding it (Shamir's secret sharing, `shamir.rs`).
-- **Trusted contact.** With Omacloud storage, the recovery code is split in
-  two (`contact.rs`): Omacloud keeps a random pad, and a person you trust
-  keeps a card, the code plus the pad character by character (a one-time
-  pad over the code's alphabet, with four check characters). Either half
-  alone is uniformly random. The pad goes only to a Google sign-in of the
-  account, never to a storage key, so a computer holding a key (a removed
-  one, say) can't fetch or replace it. A new card replaces the pad, which
-  voids earlier cards. Omacloud together with the card could rebuild the
-  code; neither can alone.
 - **Device keys.** Each computer has its own signing key. The account's
   computers form a signed, hash-chained device chain: the root signs the
   first computer, and after that a computer counts only if the root or an
@@ -70,63 +58,58 @@ Computers agree on the latest version through a chain of *heads*
 (`head.rs`). Each head names a snapshot, links to the previous one by hash,
 records the device chain position its signer saw, and is signed by the
 computer that pushed it. Every computer remembers the last head it verified,
-so whoever can write to the bucket can't roll history back, withhold it,
+so whoever can write to the storage can't roll history back, withhold it,
 fork it or forge it without the other computers noticing.
 
-The heads, device chain and epoch records are objects in your storage
-(`bucket.rs`). Appending is a create-only write (`If-None-Match: *` on S3,
-Dropbox `files/upload` with add mode and strict conflicts), which
-the storage refuses if another computer took that position first. S3, R2,
-MinIO and Hetzner support it on buckets without versioning; a bucket with
-object lock keeps these records in a second, plain bucket
-(`--coordination-bucket`). Every write also rewrites a small `changed`
-object; an idle computer checks that every few seconds, one request, and
-syncs when it moves, with a full sync every ten minutes regardless.
+The heads, device chain and epoch records are append-only logs
+(`head.rs`'s `Coordinator`). Appending is create-only: the write is refused
+if another computer took that position first. For development they are
+files in a shared directory (`DirCoordinator`), each hard linked into place
+so a taken name fails. A coordinator may keep a change marker that every
+write moves; an idle computer checks it every few seconds and syncs when it
+moves, with a full sync every ten minutes regardless.
 
-## Bucket keys
+With the network, the Worker at omacloud.computer will order these records
+instead: a conflicting insert is the create-only append. It will hold them
+encrypted with a key derived from the epoch secret, under a random account
+id, and accept writes only with a bearer capability also derived from the
+epoch secret (it keeps only its hash). A new epoch replaces the capability,
+which shuts a removed computer out. Clients still verify every signature
+and the chain, so the Worker is trusted for ordering only.
 
-Every computer holds the bucket's key, kept in the
-desktop keyring rather than a file. With your own bucket, a lost computer is
-cut off by changing that key (`bucket_key.rs`): one computer publishes the new key sealed to the
-current members and the root, the others switch on their next sync and say
-so, and once all have, you delete the old key at your provider. A computer
-that was away through the whole change catches up with `omacloud bucket
-set-key --here-only`.
+## The Omacloud network (in progress)
 
-With Dropbox, the shared key is an offline OAuth refresh token for
-Omacloud's Dropbox app, which reaches only its App folder. The app is a
-public client: authorizing uses PKCE, so no app secret ships, and the code
-the browser brings back to this computer's loopback port is useless
-without the verifier that never leaves the process (`crates/omacloud/src/dropbox.rs`).
-A user's own Dropbox app, with its secret, works too. To remove a
-computer's storage access, one member authorizes the app again. The new token is sealed to the remaining members
-as above. The initiating computer temporarily keeps the old token in a
-private local file and revokes it with Dropbox's API after every remaining
-computer acknowledges the new one. It must stay available until then.
+None of this ships yet; it is the design being built.
 
-With Omacloud storage, Omacloud issues the keys, the new one too: a
-computer asks for it with its current key (`server/src/keys.ts`) and
-publishes it as above, and once every computer has switched, one of them
-retires the account's other keys, a removed computer's among them. A
-removed computer could ask for keys or retire others in the meantime, but
-whatever it makes is retired with the rest, and a computer whose key was
-retired signs in with Google again (`bucket set-key --here-only`): at worst
-it makes the account's computers sign in again. What any key deletes or
-overwrites meanwhile is kept: the gateway first copies it to a trash
-outside every account's folder, kept 14 days (`server/src/trash.ts`), from
-which Omacloud can put back what was deleted or overwritten after a given
-time. A single delete or put then goes ahead only if the object is still
-the version copied (`If-Match`), where the bucket checks that; one that
-turns the check down gets the request again without it. A batch delete, a
-finished multipart upload, and any delete or put on a bucket without the
-check, can lose a version another computer writes in the moment between
-the copy and the delete (milliseconds).
-The trash holds at most the account's quota: past that, deletes and
-overwrites are refused until some of it expires, rather than anything
-leaving it early.
-
-With delete protection on the bucket (object lock, R2 bucket locks), sync
-works as usual, and old epochs are deleted once their retention ends.
+- **Holders.** Objects live on Omarchy computers that run Omacloud, each
+  giving some disk space. Every node is untrusted. Each object is kept on
+  two holders, picked by the owner's computer from a public node directory:
+  on different networks (ASN and /24 or /48), never the account's own
+  computers, at least one with high uptime. New nodes count only as extra
+  copies while on probation.
+- **Scrambling.** Each holder gets its own copy, the restic object XORed
+  with a keystream from the epoch secret and the holder's id, so no two
+  holders store the same bytes and only the account's computers can make
+  or undo one. A read is checked against the object's hash after
+  unscrambling.
+- **Gateway.** Each Omacloud process serves a small S3 subset on localhost,
+  so restic writes and reads as before. An encrypted index, kept by the
+  Worker, says which holders have each object; the Worker can't read it.
+- **Credits.** Storage is paid in anonymous credits: blind-signed tokens
+  the Worker issues and redeems, so it can't link what an account spends
+  to the holder that earns it. Giving space earns what storing costs.
+- **Leases, audits, repair.** Owners renew each holder monthly with
+  payment; a blob that isn't renewed is dropped after a grace period, so
+  deletes are slow by design. Owners check random ranges of what holders
+  keep, stop paying one that fails, and place its objects again, as they
+  do for a holder gone for days.
+- **What stays central.** The Worker orders coordination records, keeps the
+  node directory and the encrypted index, and issues credits. There are no
+  accounts, emails or sign-ins: only ids and keys the computers make.
+  Omacloud runs seed nodes and relays while the network is small.
+- **Transport.** Computers talk over iroh. Traffic between accounts goes
+  through relays, so a holder doesn't learn an owner's address; an
+  account's own computers may connect directly.
 
 ## Settings
 
@@ -167,23 +150,31 @@ and every computer of the account can, Wi-Fi keys included.
 
 ## What each party can see
 
-- **Your storage provider** sees encrypted objects, their sizes (padded) and
-  when they're written.
-- **Omacloud storage**, when you use it, is that provider: it sees the same,
-  plus your Google account's id and email. With your own bucket, the
-  Omacloud project sees nothing: there is no Omacloud server in the way.
-- **A trusted contact** holds a card that is random without the pad
-  Omacloud keeps, and Omacloud's pad is random without the card.
-- **A removed computer** keeps what it had synced before removal, and can
-  reach storage until its bucket key changes or its old Dropbox token is
-  revoked.
+Today, with the development setup, whoever can read the shared
+directories sees encrypted objects, their sizes (padded) and when they're
+written. With the network, as designed:
+
+- **The Worker** sees random account ids, encrypted coordination records,
+  the number of index entries and when they change, node ids with their
+  network and uptime, credit tokens it can't link to who spent them, and
+  IP addresses and timing. It never links a node to an account, and can't
+  read object names, placements or heads.
+- **Holders** see scrambled blobs, their sizes and when they're fetched or
+  checked, and a relay's address rather than the owner's.
+- **Relays and seeds** see who connects to whom and how much, by address;
+  seeds are holders too.
+- **Cloudflare** sits in front of the Worker and sees what it sees.
+- **A removed computer** keeps what it had synced before removal, and with
+  a new epoch can't read what comes after or write coordination records.
+
+The remaining leaks are addresses and timing at the Worker and the relays.
 
 Nobody but your computers and your recovery code can read file contents,
 names, settings or keys.
 
 - **Programs you run, AI agents included,** can run `omacloud` as you. The
-  commands that print a secret (the recovery code, a join code, a
-  contact's card or shares, the repository password) print it only in text
+  commands that print a secret (the recovery code, a join code,
+  shares, the repository password) print it only in text
   mode with stdin and stdout on a terminal, and refuse as JSON or into a
   pipe, so it doesn't land in a script's output, a JSON consumer or an
   agent's captured output by accident. That is a guard against accidents,

@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- Every storage alternative is gone, in favour of one storage of Omacloud's
+  own, the Omacloud network, which is being built: encrypted objects held
+  by other Omarchy computers, with no accounts and no sign-in. Until it's
+  here, `omacloud init` and `join-code` say `unsupported`, and only the
+  development setup (`init --repo <path> --coordinator <directory>`) works.
+- Gone: your own S3 bucket (Hetzner, R2 and others) and its bucket keys
+  (`omacloud bucket`, the desktop keyring, `--coordination-bucket`,
+  `export --to-opt`); Dropbox; Omacloud storage with Google sign-in, its
+  S3 gateway and the waitlist; the trusted contact's recovery card
+  (`recovery contact`, `init --contact-card`). Shamir shares (`recovery
+  split` and `combine`) stay.
+- Gone with them: `OMACLOUD_SECRET_ACCESS_KEY`,
+  `OMACLOUD_DROPBOX_CLIENT_SECRET`, `OMACLOUD_DROPBOX_AUTH_CODE`,
+  `OMACLOUD_CONTACT_CARD`, `OMACLOUD_SERVICE_URL` and `OMACLOUD_KEYRING`.
+- Existing accounts don't carry over: once the network is here, create the
+  account again on it. Run `omacloud export` before upgrading: plain
+  restic restores everything from what it prints.
+
 ## 0.0.17 (2026-10-16)
 
 - Dropbox is one click: Connect Dropbox, allow Omacloud in the browser, and

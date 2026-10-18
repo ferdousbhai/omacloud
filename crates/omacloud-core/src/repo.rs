@@ -86,13 +86,6 @@ impl RepoSpec {
     fn raw_backends(&self) -> Result<RepositoryBackends> {
         let mut options = self.options.clone();
         _ = options.remove("bandwidth");
-        if self.repository == "opendal:dropbox" {
-            // Dropbox is slow per request (a pull reads each file with at
-            // least one), and limits writes more than reads: enough at once
-            // that a pull of many small files doesn't crawl, few enough that
-            // pack uploads mostly don't need retrying
-            options.entry("connections".into()).or_insert("16".into());
-        }
         if !self.is_bucket() {
             options.retain(|k, _| !LOCAL_OPTIONS.contains(&k.as_str()));
         }
@@ -103,9 +96,6 @@ impl RepoSpec {
     }
 
     pub fn init(&self, password: &str) -> Result<MasterKey> {
-        if self.repository == "opendal:dropbox" {
-            crate::dropbox::DropboxCreate::new(&self.options)?.prepare_root()?;
-        }
         let repo = Repository::new(&RepositoryOptions::default(), &self.backends()?)?.init(
             &Credentials::password(password),
             &KeyOptions::default(),
@@ -151,24 +141,14 @@ impl RepoSpec {
     }
 
     /// Delete every file of the repository it can, then (for a local path)
-    /// the directory itself. Returns how many files remain: a bucket with
-    /// delete protection (object lock, R2 bucket locks) refuses to delete
-    /// files still under retention, and those wait for a later try; the
-    /// first refusal ends this one. On
-    /// object storage, empty directory markers some servers keep may remain;
-    /// they hold nothing.
+    /// the directory itself. Returns how many files remain: the first
+    /// refused delete ends this try, and the rest wait for a later one.
     ///
     /// # Errors
     ///
     /// If listing fails.
     pub fn destroy(&self) -> Result<usize> {
-        // a protected object stays protected: retrying a refused delete only
-        // waits (OpenDAL takes R2's 409 for a temporary error and backs off)
-        let mut spec = self.clone();
-        if spec.repository.starts_with("opendal:") {
-            _ = spec.options.insert("retry".into(), "off".into());
-        }
-        let be = spec.backends()?.repository();
+        let be = self.backends()?.repository();
         let mut left = 0;
         for tpe in ALL_FILE_TYPES {
             for id in be.list(tpe)? {
@@ -199,9 +179,6 @@ impl RepoSpec {
     ///
     /// If `dest` already holds a repository, or reading or writing fails.
     pub fn copy_files_to(&self, dest: &Self) -> Result<usize> {
-        if dest.repository == "opendal:dropbox" {
-            crate::dropbox::DropboxCreate::new(&dest.options)?.prepare_root()?;
-        }
         let (from, to) = (self.backends()?.repository(), dest.backends()?.repository());
         anyhow::ensure!(
             to.list(FileType::Config)?.is_empty(),
@@ -287,27 +264,4 @@ pub(crate) fn hex(id: &Id) -> String {
 
 pub(crate) fn snapshot_hex(id: &SnapshotId) -> String {
     hex(id)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dropbox_secrets_are_not_left_in_config() {
-        let spec = RepoSpec {
-            repository: "opendal:dropbox".into(),
-            options: [
-                ("root".into(), "/Omacloud".into()),
-                ("client_id".into(), "public-id".into()),
-                ("client_secret".into(), "secret".into()),
-                ("refresh_token".into(), "token".into()),
-            ]
-            .into(),
-        };
-        let safe = spec.without_credentials();
-        assert_eq!(safe.options.len(), 2);
-        assert!(!safe.options.contains_key("client_secret"));
-        assert!(!safe.options.contains_key("refresh_token"));
-    }
 }

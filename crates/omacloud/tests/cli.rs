@@ -27,7 +27,7 @@ impl Home {
     }
 
     /// `omacloud --config <tmp>/<device>.toml` with everything the user's own
-    /// kept out: home, config and data directories, keyring, systemd.
+    /// kept out: home, config and data directories, systemd.
     fn cmd(&self, device: &str, args: &[&str]) -> Command {
         let home = self.path("home");
         std::fs::create_dir_all(&home).unwrap();
@@ -40,7 +40,6 @@ impl Home {
             .env("XDG_DATA_HOME", home.join(".local/share"))
             .env("XDG_RUNTIME_DIR", self.path("run"))
             .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent")
-            .env("OMACLOUD_KEYRING", "0")
             .env_remove("OMACLOUD_CONFIG")
             .env_remove("OMACLOUD_RECOVERY_CODE")
             .env_remove("OMACLOUD_JOIN_CODE")
@@ -110,12 +109,6 @@ fn pty() -> (File, OwnedFd) {
 fn on_tty(cmd: Command) -> (String, i32) {
     let (out, _, code) = tty(cmd, true, true);
     (out, code)
-}
-
-/// [`on_tty`] with stderr kept apart: what the terminal showed, stderr, and
-/// the exit code.
-fn on_tty_split(cmd: Command) -> (String, String, i32) {
-    tty(cmd, true, false)
 }
 
 /// `cmd` with stdout on a new pseudo-terminal, and stdin and stderr there
@@ -332,9 +325,7 @@ fn commands_that_print_a_secret_refuse_anywhere_but_a_terminal() {
 
     let recovery = h.create();
     for args in [
-        &["join-code"][..],
-        &["export"],
-        &["recovery", "contact"],
+        &["export"][..],
         &["recovery", "split", "--threshold", "2", "--shares", "3"],
         &["recovery", "combine"],
     ] {
@@ -413,27 +404,6 @@ fn exit_codes_say_what_went_wrong() {
 }
 
 #[test]
-fn unreachable_storage_is_exit_5() {
-    let h = Home::new();
-    let folder = h.path("N");
-    std::fs::write(
-        h.path("n.toml"),
-        format!(
-            "device = \"n\"\nfolder = {folder:?}\ncoordinator = \"bucket\"\nroot = \"00\"\n\
-             [repo]\nrepository = \"\"\n[repo.options]\n\
-             [coordination]\nscheme = \"s3\"\nendpoint = \"http://127.0.0.1:1\"\nbucket = \"b\"\n\
-             region = \"us-east-1\"\naccess_key_id = \"k\"\nsecret_access_key = \"s\"\nroot = \"/c\"\n"
-        ),
-    )
-    .unwrap();
-    let e = machine_error(&h.run("n", &["sync"]), "unavailable", 5);
-    assert!(e["hint"].as_str().is_some_and(|h| h.contains("network")));
-    let text = h.run("n", &["status", "--styled"]);
-    assert_eq!(code(&text), 5);
-    assert!(stderr(&text).contains("hint: "));
-}
-
-#[test]
 fn skill_prints_as_data_too() {
     let h = Home::new();
     let v = json(&h.run("a", &["skill"]));
@@ -441,24 +411,6 @@ fn skill_prints_as_data_too() {
     assert!(v["data"]["body"].as_str().unwrap().starts_with("---\nname: omacloud"));
     let text = h.run("a", &["skill", "--styled"]);
     assert!(stdout(&text).starts_with("---\nname: omacloud"));
-}
-
-#[test]
-fn a_bucket_key_kept_in_a_keyring_that_is_off_is_exit_3() {
-    let h = Home::new();
-    let folder = h.path("K");
-    std::fs::write(
-        h.path("k.toml"),
-        format!(
-            "device = \"k\"\nfolder = {folder:?}\ncoordinator = \"bucket\"\nroot = \"00\"\n\
-             [repo]\nrepository = \"\"\n[repo.options]\n\
-             [coordination]\nscheme = \"s3\"\nendpoint = \"http://127.0.0.1:1\"\nbucket = \"b\"\n\
-             region = \"us-east-1\"\nroot = \"/c\"\n"
-        ),
-    )
-    .unwrap();
-    let e = machine_error(&h.run("k", &["sync"]), "keyring_off", 3);
-    assert_eq!(e["hint"], "unset OMACLOUD_KEYRING");
 }
 
 /// `b` joined to `a`'s account with the recovery code; its fingerprint.
@@ -510,23 +462,6 @@ fn watch_exits_2_once_this_computer_is_removed() {
 }
 
 #[test]
-fn removing_the_trusted_contact_prints_no_secret_so_is_not_refused() {
-    let h = Home::new();
-    h.create();
-    // a local account has no contact to remove; the answer says that, not
-    // that a terminal is needed
-    let e = machine_error(&h.run("a", &["recovery", "contact", "--remove"]), "unsupported", 2);
-    assert!(e["message"].as_str().unwrap().contains("Omacloud storage"), "{e}");
-    let text = h.run("a", &["recovery", "contact", "--remove", "--styled"]);
-    assert_eq!(code(&text), 2);
-    assert!(
-        stderr(&text).starts_with("error: a trusted contact needs"),
-        "{}",
-        stderr(&text)
-    );
-}
-
-#[test]
 fn restore_over_an_existing_file_needs_yes() {
     let h = Home::new();
     h.create();
@@ -554,49 +489,4 @@ fn restore_over_an_existing_file_needs_yes() {
     let v = json(&h.run("a", &yes));
     assert_eq!(v["ok"], true, "{v}");
     assert_eq!(std::fs::read_to_string(&to).unwrap(), "one");
-}
-
-#[test]
-fn join_code_on_a_terminal_prints_the_code_on_stdout_and_notes_on_stderr() {
-    let h = Home::new();
-    // coordination in the "bucket" (a directory through opendal); with the
-    // keyring off, the bucket key stays in the config
-    let p = |s: &str| h.path(s).to_string_lossy().into_owned();
-    let root = format!("root={}", p("bucket"));
-    let args = [
-        "init",
-        "--folder",
-        &p("A"),
-        "--repo",
-        "opendal:fs",
-        "--opt",
-        &root,
-        "--opt",
-        "access_key_id=k",
-        "--device",
-        "a",
-    ];
-    let mut init = h.cmd("a", &args);
-    init.env("OMACLOUD_SECRET_ACCESS_KEY", "s");
-    let (out, exit) = on_tty(init);
-    assert_eq!(exit, 0, "{out}");
-
-    let (out, err, exit) = on_tty_split(h.cmd("a", &["join-code"]));
-    assert_eq!(exit, 0, "{out}{err}");
-    let lines: Vec<&str> = out.lines().filter(|l| !l.is_empty()).collect();
-    assert_eq!(lines.len(), 1, "only the code on stdout: {out}");
-    assert!(lines[0].starts_with("omacloud-join-"), "{out}");
-    assert!(err.contains("pass it privately"), "{err}");
-    assert!(!err.contains("omacloud-join-"), "{err}");
-
-    // and it joins another computer, from the environment
-    let args = ["init", "--folder", &p("B"), "--device", "b"];
-    let out = h.cmd("b", &args).env("OMACLOUD_JOIN_CODE", lines[0]).output().unwrap();
-    let v = json(&out);
-    assert_eq!(v["data"]["result"], "asked_to_join", "{v}");
-    // a damaged code is refused without being quoted
-    let damaged = format!("{}7b2261", &lines[0][..40]);
-    let out = h.cmd("c", &args).env("OMACLOUD_JOIN_CODE", &damaged).output().unwrap();
-    let e = machine_error(&out, "join_code_rejected", 3);
-    assert_eq!(e["message"], "that join code is damaged");
 }

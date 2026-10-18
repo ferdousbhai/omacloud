@@ -116,8 +116,7 @@ pub enum HeadError {
 }
 
 /// Orders and relays heads, device entries and join requests. Implementations:
-/// the account's bucket ([`crate::BucketCoordinator`]) and a directory (tests,
-/// development). It is trusted for availability only.
+/// a directory (tests, development). It is trusted for availability only.
 pub trait Coordinator: Send + Sync {
     /// The latest head, if any.
     fn head(&self) -> Result<Option<Head>>;
@@ -174,24 +173,6 @@ pub trait Coordinator: Send + Sync {
     fn request(&self, req: &JoinRequest) -> Result<()>;
     /// Drop a join request (after approving or declining it).
     fn remove_request(&self, device: &str) -> Result<()>;
-
-    /// Bucket key changes of a self-hosted account, in order (see
-    /// [`crate::bucket_key`]). Coordinators without own buckets have none.
-    fn key_records(&self) -> Result<Vec<crate::bucket_key::KeyRecord>> {
-        Ok(Vec::new())
-    }
-    /// Append a bucket key change if it is exactly the next one.
-    fn append_key_record(&self, _record: &crate::bucket_key::KeyRecord) -> Result<bool> {
-        anyhow::bail!("this account doesn't keep its own bucket key")
-    }
-    /// Note that `device` switched to key change `seq`.
-    fn ack_key(&self, _seq: u64, _device: &str) -> Result<()> {
-        Ok(())
-    }
-    /// The devices that switched to key change `seq`.
-    fn key_acks(&self, _seq: u64) -> Result<Vec<String>> {
-        Ok(Vec::new())
-    }
 
     /// A token that changes whenever anything here is written, for
     /// coordinators that keep one: an idle device checks it, one cheap
@@ -362,28 +343,6 @@ impl Coordinator for DirCoordinator {
         match fs::remove_file(self.dir.join("requests").join(format!("{device}.json"))) {
             Err(e) if e.kind() != ErrorKind::NotFound => Err(e.into()),
             _ => Ok(()),
-        }
-    }
-    fn key_records(&self) -> Result<Vec<crate::bucket_key::KeyRecord>> {
-        self.after("keys", 0)
-    }
-    fn append_key_record(&self, record: &crate::bucket_key::KeyRecord) -> Result<bool> {
-        self.append_seq("keys", record.seq, record)
-    }
-    fn ack_key(&self, seq: u64, device: &str) -> Result<()> {
-        let dir = self.dir.join("key-acks").join(seq.to_string());
-        fs::create_dir_all(&dir)?;
-        fs::write(dir.join(device), b"")?;
-        Ok(())
-    }
-    fn key_acks(&self, seq: u64) -> Result<Vec<String>> {
-        match fs::read_dir(self.dir.join("key-acks").join(seq.to_string())) {
-            Ok(it) => Ok(it
-                .flatten()
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .collect()),
-            Err(e) if e.kind() == ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(e.into()),
         }
     }
 }

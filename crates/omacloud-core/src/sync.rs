@@ -404,70 +404,6 @@ impl Engine {
         })
     }
 
-    /// Publish a new bucket key for a self-hosted account, sealed to every
-    /// member and the root; returns its number. The old key must still work:
-    /// the record is stored with it.
-    ///
-    /// # Errors
-    ///
-    /// If this device isn't a member, or another change landed at the same
-    /// time.
-    pub fn change_bucket_key(&mut self, creds: &crate::bucket_key::Credentials) -> Result<u64> {
-        self.refresh_devices()?;
-        let seq = self.coord.key_records()?.last().map_or(0, |r| r.seq) + 1;
-        let record = crate::bucket_key::KeyRecord::new(&self.signing, seq, &self.state.devices, creds)?;
-        anyhow::ensure!(
-            self.coord.append_key_record(&record)?,
-            "another computer changed the bucket key at the same time; look again"
-        );
-        self.coord.ack_key(seq, &self.device_key())?;
-        Ok(seq)
-    }
-
-    /// The latest bucket key change, checked against the device chain and
-    /// opened for this device: `(number, key)`. No key when this device
-    /// joined after the change: it came with a key at least as new.
-    ///
-    /// # Errors
-    ///
-    /// If a record doesn't verify, or wasn't sealed to this device although
-    /// it was a member then (it was removed before the change).
-    #[allow(clippy::type_complexity)]
-    pub fn latest_bucket_key(&mut self) -> Result<Option<(u64, Option<crate::bucket_key::Credentials>)>> {
-        let Some(record) = self.coord.key_records()?.pop() else {
-            return Ok(None);
-        };
-        self.state.devices.advance(self.coord.as_ref())?;
-        record.verify(&self.state.devices)?;
-        let me = self.device_key();
-        let then = self.state.devices.members_at(record.devices);
-        if !record.keys.contains_key(&me) && !then.valid.contains_key(&me) && !then.revoked.contains_key(&me) {
-            return Ok(Some((record.seq, None)));
-        }
-        Ok(Some((record.seq, Some(record.open(&self.signing)?))))
-    }
-
-    /// Say this device switched to key change `seq`.
-    ///
-    /// # Errors
-    ///
-    /// If the acknowledgment can't be stored.
-    pub fn ack_bucket_key(&self, seq: u64) -> Result<()> {
-        self.coord.ack_key(seq, &self.device_key())
-    }
-
-    /// The latest key change, and which members switched to it.
-    ///
-    /// # Errors
-    ///
-    /// On coordinator errors.
-    pub fn bucket_key_status(&mut self) -> Result<Option<(u64, Vec<String>)>> {
-        let Some(record) = self.coord.key_records()?.pop() else {
-            return Ok(None);
-        };
-        Ok(Some((record.seq, self.coord.key_acks(record.seq)?)))
-    }
-
     /// Change which folders sync here (after `omacloud folders` edited the
     /// config); takes effect on the next sync.
     pub fn set_folders(&mut self, add: BTreeSet<String>, skip: BTreeSet<String>) {
@@ -685,8 +621,7 @@ impl Engine {
             return self.repo.clone();
         };
         let mut spec = storage.clone();
-        // a self-hosted device keeps the bucket key in its own config, and a
-        // key change updates it there
+        // credentials this device keeps in its own config win over sealed ones
         for k in crate::repo::CREDENTIAL_OPTIONS {
             if let Some(v) = self.repo.options.get(*k) {
                 _ = spec.options.insert((*k).to_string(), v.clone());

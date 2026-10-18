@@ -1,10 +1,10 @@
-//! The Omacloud app: account, devices, settings sync, secrets and a
-//! trusted contact for recovery. It works through the `omacloud` CLI
-//! (`status` to read, the usual subcommands to act, all with `--json`: it
-//! reads the envelope's `data`, or its `error`), so it holds no keys or state
-//! of its own and never races the daemon over them. The commands that print a
-//! secret (`init`, `join-code`, `recovery contact`) print it only to a
-//! terminal: the app runs those on a pseudo-terminal of its own.
+//! The Omacloud app: account, devices, settings sync, secrets and
+//! recovery. It works through the `omacloud` CLI (`status` to read, the
+//! usual subcommands to act, all with `--json`: it reads the envelope's
+//! `data`, or its `error`), so it holds no keys or state of its own and never
+//! races the daemon over them. The commands that print a secret (`init`,
+//! `join-code`) print it only to a terminal: the app runs those on a
+//! pseudo-terminal of its own.
 //!
 //! `omacloud-app [overview|devices|settings|secrets|recovery]` opens on
 //! that page. `OMACLOUD_BIN` picks the CLI (default: `omacloud` on PATH) and
@@ -308,12 +308,11 @@ impl Ui {
                     ui.devices.set_child(Some(&devices(&ui, &s)));
                     ui.settings.set_child(Some(&settings(&ui, &s)));
                     ui.secrets.set_child(Some(&secrets(&ui, &s)));
-                    ui.recovery.set_child(Some(&recovery(&ui, &s)));
+                    ui.recovery.set_child(Some(&recovery()));
                 }
                 Err(e) => {
                     let why = match e.code.as_str() {
                         "unavailable" => format!("Can't reach your storage: {}", e.shown()),
-                        "keyring_unavailable" => format!("Unlock your keyring: {}", e.shown()),
                         _ => e.shown(),
                     };
                     for bin in [&ui.overview, &ui.devices, &ui.settings, &ui.secrets, &ui.recovery] {
@@ -475,35 +474,11 @@ fn not_set_up(why: &str) -> adw::StatusPage {
         .build()
 }
 
-/// A labelled field in a boxed list.
-fn entry(title: &str) -> adw::EntryRow {
-    adw::EntryRow::builder().title(title).build()
-}
-
-/// Omacloud's Dropbox app (the CLI's `dropbox::APP_KEY`).
-const DROPBOX_APP_KEY: &str = "k8jkvsr48k2fvio";
-
-/// Authorize a user's own Dropbox app, whose code is pasted.
-fn open_dropbox_authorization(ui: &Rc<Ui>, id: &str) {
-    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
-        ui.toast("Enter the Dropbox app key first");
-        return;
-    }
-    let url =
-        format!("https://www.dropbox.com/oauth2/authorize?client_id={id}&response_type=code&token_access_type=offline");
-    gtk::UriLauncher::new(&url).launch(Some(&ui.window), None::<&gio::Cancellable>, |_| {});
-}
-
 /// A dialog that stays up while `omacloud init` runs, so the wait (the
-/// browser, then the account being made) doesn't look like nothing
-/// happening. Closed by the caller when init is done.
-fn setting_up(ui: &Rc<Ui>, browser: bool) -> adw::Dialog {
-    let text = if browser {
-        "Finish in your browser: Omacloud opened it for you to sign in or allow access. \
-         Then it sets up this computer, which can take a minute."
-    } else {
-        "Omacloud is setting up this computer, which can take a minute."
-    };
+/// account being made) doesn't look like nothing happening. Closed by the
+/// caller when init is done.
+fn setting_up(ui: &Rc<Ui>) -> adw::Dialog {
+    let text = "Omacloud is setting up this computer, which can take a minute.";
     let body = gtk::Box::new(gtk::Orientation::Vertical, 18);
     body.set_margin_top(12);
     body.set_margin_bottom(24);
@@ -543,9 +518,7 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
     argv.extend(args);
     let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
     let ui2 = ui.clone();
-    // signing in with Google or allowing Dropbox happens in the browser
-    let browser = argv.iter().any(|a| a == "--hosted" || a == "opendal:dropbox");
-    let busy = setting_up(ui, browser);
+    let busy = setting_up(ui);
     // creating an account prints its recovery code: only to a terminal
     tty_then(&argv_ref, env, move |r| match r {
         Err(e) => {
@@ -641,327 +614,48 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
     });
 }
 
-/// Where a new self-hosted account's bucket lives: what to ask for and how
-/// to get it.
-struct Provider {
-    name: &'static str,
-    steps: &'static str,
-    link: &'static str,
-    /// Its keys can make the bucket: Omacloud does, unless told one to use.
-    makes_bucket: bool,
-}
-
-const PROVIDERS: [Provider; 3] = [
-    Provider {
-        name: "Hetzner Object Storage",
-        steps: "1. Click Get a Key, open your project, then Security, S3 credentials, and \
-                Generate credentials. Hetzner shows the secret key only once.\n\
-                2. Paste both keys below. Omacloud makes a private bucket for itself.",
-        link: "https://console.hetzner.com/projects",
-        makes_bucket: true,
-    },
-    Provider {
-        name: "Cloudflare R2",
-        steps: "1. In the Cloudflare dashboard, open R2 and create a bucket.\n2. Under API tokens, \
-                create a token with Object Read & Write on that bucket and copy its Access Key ID \
-                and Secret Access Key. Your account ID is on the R2 overview page.",
-        link: "https://dash.cloudflare.com/?to=/:account/r2/overview",
-        makes_bucket: false,
-    },
-    Provider {
-        name: "Other S3 storage",
-        steps: "S3 storage that has create-only writes works, such as AWS S3 or MinIO. You need its \
-                endpoint, its region and a key that can read and write. Omacloud makes a bucket, or \
-                uses one you name.",
-        link: "",
-        makes_bucket: true,
-    },
-];
-
-const HETZNER_LOCATIONS: [(&str, &str); 3] = [("Falkenstein", "fsn1"), ("Nuremberg", "nbg1"), ("Helsinki", "hel1")];
-
-/// The endpoint and region for a provider's answers, or what's missing.
-fn s3_location(
-    provider: usize,
-    location: usize,
-    account: &str,
-    eu: bool,
-    endpoint: &str,
-    region: &str,
-) -> Result<(String, String), &'static str> {
-    let with_scheme = |e: &str| {
-        if e.starts_with("https://") || e.starts_with("http://") {
-            e.to_string()
-        } else {
-            format!("https://{e}")
-        }
-    };
-    match provider {
-        0 => {
-            let loc = HETZNER_LOCATIONS[location.min(2)].1;
-            Ok((format!("https://{loc}.your-objectstorage.com"), loc.into()))
-        }
-        1 if account.is_empty() => Err("Fill in your Cloudflare account ID"),
-        1 => Ok((
-            format!(
-                "https://{account}.{}r2.cloudflarestorage.com",
-                if eu { "eu." } else { "" }
-            ),
-            "auto".into(),
-        )),
-        _ if endpoint.is_empty() => Err("Fill in the endpoint"),
-        _ => Ok((
-            with_scheme(endpoint),
-            if region.is_empty() { "auto" } else { region }.into(),
-        )),
-    }
-}
-
 /// First run: start an account, or add this computer to one.
 fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
     let (what, sync_args) = choose_what_syncs();
     page.add(&what);
 
-    // Omacloud storage: sign in, nothing to rent or paste
-    let hosted = group(
-        "Start with Omacloud storage",
-        "Sign in with Google and Omacloud keeps your files on its storage in the EU. \
-         Everything is encrypted on this computer before it leaves, so Omacloud can't read it. \
-         Signing in on another computer asks this one to approve it.",
+    // create: nothing to rent or paste
+    let create = group(
+        "Create an account",
+        "Start using Omacloud on this computer. Everything is encrypted on this computer \
+         before it leaves, so nobody else can read it.",
     );
-    // no computer left to approve this one: the recovery code, or the card
-    // a trusted contact keeps
+    // no computer left to approve this one: the recovery code lets it in
     let rescue = adw::PasswordEntryRow::builder()
-        .title("Lost every computer? Recovery code or recovery card")
+        .title("Lost every computer? Recovery code (optional)")
         .build();
-    hosted.add(&rescue);
-    let sign_in = button("Sign In with Google", Some("suggested-action"));
-    sign_in.set_halign(gtk::Align::End);
-    sign_in.set_margin_top(12);
+    create.add(&rescue);
+    let create_button = button("Create Account", Some("suggested-action"));
+    create_button.set_halign(gtk::Align::End);
+    create_button.set_margin_top(12);
     {
         let (ui, sync_args) = (ui.clone(), sync_args.clone());
-        sign_in.connect_clicked(move |_| {
-            let mut args = vec!["--hosted".to_string()];
+        create_button.connect_clicked(move |_| {
             let mut env = Vec::new();
             let typed = rescue.text().to_string();
             match typed.chars().filter(char::is_ascii_alphanumeric).count() {
                 0 => {}
                 28 => env.push(("OMACLOUD_RECOVERY_CODE".to_string(), typed)),
-                32 => {
-                    args.push("--contact-card".to_string());
-                    env.push(("OMACLOUD_CONTACT_CARD".to_string(), typed));
-                }
                 _ => {
-                    ui.toast("That's neither a recovery code (28 characters) nor a recovery card (32)");
+                    ui.toast("That's not a recovery code (28 characters)");
                     return;
                 }
             }
-            args.extend(sync_args());
-            run_init(&ui, args, env);
+            run_init(&ui, sync_args(), env);
         });
     }
-    hosted.add(&sign_in);
-    page.add(&hosted);
-
-    // create, own bucket
-    let own = group(
-        "Or use your own storage",
-        "Keep your files in a storage bucket you rent from a provider. You pay the provider \
-         for the space you use; Omacloud itself charges nothing. Everything is encrypted on \
-         this computer before it leaves, so the provider can't read it.",
-    );
-    let names: Vec<&str> = PROVIDERS.iter().map(|p| p.name).collect();
-    let provider = adw::ComboRow::builder()
-        .title("Provider")
-        .model(&gtk::StringList::new(&names))
-        .build();
-    own.add(&provider);
-    let steps = adw::ActionRow::builder()
-        .title("Before you start")
-        .subtitle(PROVIDERS[0].steps)
-        .subtitle_selectable(true)
-        .build();
-    let open = button("Get a Key", Some("flat"));
-    open.set_valign(gtk::Align::Center);
-    steps.add_suffix(&open);
-    own.add(&steps);
-    let locations: Vec<&str> = HETZNER_LOCATIONS.iter().map(|l| l.0).collect();
-    let location = adw::ComboRow::builder()
-        .title("Location of the bucket")
-        .model(&gtk::StringList::new(&locations))
-        .build();
-    let account = entry("Cloudflare account ID");
-    let eu = adw::SwitchRow::builder()
-        .title("The bucket is in the EU jurisdiction")
-        .build();
-    let endpoint = entry("Endpoint, like https://minio.example.com");
-    let region = entry("Region (blank for auto)");
-    let existing = adw::SwitchRow::builder().title("Use a bucket I already have").build();
-    let bucket = entry("Bucket name");
-    let key_id = entry("Access key ID");
-    let key = adw::PasswordEntryRow::builder().title("Secret access key").build();
-    // a bucket with object lock can't take the create-only writes
-    // coordination needs on some providers: it goes in a second bucket
-    let advanced = adw::ExpanderRow::builder()
-        .title("The bucket has object lock")
-        .subtitle("Then Omacloud needs a second, plain bucket for keeping your computers in step")
-        .show_enable_switch(true)
-        .enable_expansion(false)
-        .build();
-    let coord_bucket = entry("Second bucket's name");
-    advanced.add_row(&coord_bucket);
-    for w in [
-        &location.clone().upcast::<gtk::Widget>(),
-        account.upcast_ref(),
-        eu.upcast_ref(),
-        endpoint.upcast_ref(),
-        region.upcast_ref(),
-        key_id.upcast_ref(),
-    ] {
-        own.add(w);
-    }
-    own.add(&key);
-    own.add(&existing);
-    own.add(&bucket);
-    own.add(&advanced);
-    let show = {
-        let (steps, location, account, eu, endpoint, region, open) = (
-            steps.clone(),
-            location.clone(),
-            account.clone(),
-            eu.clone(),
-            endpoint.clone(),
-            region.clone(),
-            open.clone(),
-        );
-        let (existing, bucket, advanced) = (existing.clone(), bucket.clone(), advanced.clone());
-        move |i: usize| {
-            let p = &PROVIDERS[i.min(PROVIDERS.len() - 1)];
-            steps.set_subtitle(p.steps);
-            open.set_visible(!p.link.is_empty());
-            open.set_label(if p.makes_bucket { "Get a Key" } else { "Open" });
-            // a bucket to name: always where Omacloud can't make one,
-            // otherwise only when asked for
-            existing.set_visible(p.makes_bucket);
-            let named = !p.makes_bucket || existing.is_active();
-            bucket.set_visible(named);
-            advanced.set_visible(named);
-            location.set_visible(i == 0);
-            account.set_visible(i == 1);
-            eu.set_visible(i == 1);
-            endpoint.set_visible(i == 2);
-            region.set_visible(i == 2);
-        }
-    };
-    let show = Rc::new(show);
-    show(0);
-    {
-        let show = show.clone();
-        provider.connect_selected_notify(move |c| show(c.selected() as usize));
-    }
-    {
-        let provider = provider.clone();
-        existing.connect_active_notify(move |_| show(provider.selected() as usize));
-    }
-    {
-        let (provider, window) = (provider.clone(), ui.window.clone());
-        open.connect_clicked(move |_| {
-            let link = PROVIDERS[(provider.selected() as usize).min(PROVIDERS.len() - 1)].link;
-            gtk::UriLauncher::new(link).launch(Some(&window), None::<&gio::Cancellable>, |_| {});
-        });
-    }
-    let create_own = button("Create Account", None);
-    create_own.set_halign(gtk::Align::End);
-    create_own.set_margin_top(12);
-    {
-        let (ui, sync_args) = (ui.clone(), sync_args.clone());
-        create_own.connect_clicked(move |_| {
-            let location = s3_location(
-                provider.selected() as usize,
-                location.selected() as usize,
-                account.text().trim(),
-                eu.is_active(),
-                endpoint.text().trim(),
-                region.text().trim(),
-            );
-            let (e, r) = match location {
-                Ok(l) => l,
-                Err(why) => {
-                    ui.toast(why);
-                    return;
-                }
-            };
-            let (b, k, sk) = (
-                bucket.text().trim().to_string(),
-                key_id.text().trim().to_string(),
-                key.text().trim().to_string(),
-            );
-            if k.is_empty() || sk.is_empty() {
-                ui.toast("Paste both keys");
-                return;
-            }
-            // no bucket named: Omacloud makes one (`init` without one)
-            let named = bucket.is_visible();
-            if named && b.is_empty() {
-                ui.toast("Fill in the bucket's name");
-                return;
-            }
-            let mut args = vec!["--repo".to_string(), "opendal:s3".to_string()];
-            let mut opts = vec![("endpoint", e), ("region", r), ("access_key_id", k)];
-            if named {
-                opts.push(("bucket", b));
-            }
-            for (name, value) in opts {
-                args.push("--opt".into());
-                args.push(format!("{name}={value}"));
-            }
-            // self-hosted: coordination lives in the bucket too, or in a
-            // second one beside a bucket with object lock
-            args.push("--coordinator".into());
-            args.push("bucket".into());
-            let cb = coord_bucket.text().trim().to_string();
-            if named && advanced.enables_expansion() {
-                if cb.is_empty() {
-                    ui.toast("Fill in the second bucket's name, or turn off object lock");
-                    return;
-                }
-                args.push("--coordination-bucket".into());
-                args.push(cb);
-            }
-            args.extend(sync_args());
-            // the secret through the environment: a command line is readable
-            // by other processes
-            run_init(&ui, args, vec![("OMACLOUD_SECRET_ACCESS_KEY".to_string(), sk)]);
-        });
-    }
-    own.add(&create_own);
-    page.add(&own);
-
-    // Dropbox: Omacloud's app, allowed in the browser
-    let dropbox = group(
-        "Or use Dropbox",
-        "Keep your files in your own Dropbox, in its Apps/Omacloud folder. Dropbox asks you \
-         to allow Omacloud in your browser. Everything is encrypted on this computer before it \
-         leaves, so Dropbox can't read it.",
-    );
-    let connect = button("Connect Dropbox", None);
-    connect.set_halign(gtk::Align::End);
-    connect.set_margin_top(12);
-    {
-        let (ui, sync_args) = (ui.clone(), sync_args.clone());
-        connect.connect_clicked(move |_| {
-            let mut args = vec!["--repo".to_string(), "opendal:dropbox".to_string()];
-            args.extend(sync_args());
-            run_init(&ui, args, vec![]);
-        });
-    }
-    dropbox.add(&connect);
-    page.add(&dropbox);
+    create.add(&create_button);
+    page.add(&create);
 
     // join
     let join = group(
-        "Add this computer to your account",
+        "Or add this computer to your account",
         "Already use Omacloud on another computer? On that computer, open Omacloud, go to \
          Devices and click Show Join Code, then paste the code here. That computer approves \
          this one, or your recovery code lets it in right away.",
@@ -972,7 +666,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
         .build();
     join.add(&jcode);
     join.add(&code);
-    let join_button = button("Join", Some("suggested-action"));
+    let join_button = button("Add This Computer", None);
     join_button.set_halign(gtk::Align::End);
     join_button.set_margin_top(12);
     {
@@ -1079,16 +773,9 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     let storage = group("Storage", "");
     let repo = &s["repo"];
     let place = match repo["kind"].as_str() {
-        Some("dropbox") if !text(&repo["root"]).is_empty() => {
-            format!("Dropbox app folder {}", text(&repo["root"]))
-        }
-        Some("dropbox") => "Dropbox app folder".to_string(),
-        Some("bucket") => {
-            let host = text(&repo["endpoint"]);
-            let host = host.trim_start_matches("https://").trim_start_matches("http://");
-            format!("Your bucket {} at {host}", text(&repo["bucket"]))
-        }
-        _ => "A folder or server of your own".to_string(),
+        Some("network") => "Omacloud network".to_string(),
+        Some("path") => short_path(&text(&repo["repository"])),
+        _ => text(&repo["repository"]),
     };
     storage.add(&row("Where", place.trim()));
     page.add(&storage);
@@ -1419,10 +1106,6 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         page.add(&g);
     }
 
-    let self_hosted = s["self_hosted"].as_bool().unwrap_or(false);
-    // Omacloud storage: Omacloud makes the new key and retires the old ones
-    let hosted = s["hosted"].as_bool().unwrap_or(false);
-    let dropbox_id = (s["repo"]["kind"] == "dropbox").then(|| text(&s["repo"]["client_id"]));
     let me = &s["this_device"];
     let g = group(
         "Devices",
@@ -1432,7 +1115,7 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
             ""
         },
     );
-    if self_hosted && me["role"] == "member" {
+    if me["role"] == "member" {
         let add = button("Show Join Code", Some("flat"));
         let ui2 = ui.clone();
         add.connect_clicked(move |_| show_join_code(&ui2));
@@ -1445,52 +1128,6 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
             let tag = gtk::Label::new(Some("This device"));
             tag.add_css_class("dim-label");
             rw.add_suffix(&tag);
-        } else if self_hosted {
-            let remove = button("Remove…", Some("flat"));
-            let ui2 = ui.clone();
-            let dropbox_id = dropbox_id.clone();
-            remove.connect_clicked(move |_| {
-                let ui3 = ui2.clone();
-                let fp2 = fp.clone();
-                let dropbox_id = dropbox_id.clone();
-                ui2.confirm(
-                    &format!("Remove {name}?"),
-                    if hosted {
-                        "It can't sync anymore. Your other computers then switch to a new storage \
-                         key, and once they have, the old keys stop working: that locks it out of \
-                         your storage too."
-                    } else if dropbox_id.is_some() {
-                        "It can't sync anymore, but it still holds a Dropbox token. Authorize \
-                         Omacloud again, switch every computer to the new token, then revoke the \
-                         old token. Omacloud revokes it after all have switched."
-                    } else {
-                        "It can't sync anymore, but it still holds your bucket's key. To lock it out, \
-                         make a new key at your provider and switch every computer to it: that's the \
-                         next step."
-                    },
-                    &[(
-                        "remove",
-                        if hosted { "Remove" } else { "Remove and Change Key…" },
-                        adw::ResponseAppearance::Destructive,
-                    )],
-                    move |_| {
-                        let ui4 = ui3.clone();
-                        let dropbox_id = dropbox_id.clone();
-                        cli_then(
-                            &["omacloud", "devices", "revoke", &fp2, "--yes"],
-                            Vec::new(),
-                            move |r| match r {
-                                Err(e) => ui4.toast(&e.shown()),
-                                Ok(_) => {
-                                    ui4.refresh();
-                                    change_bucket_key(&ui4, hosted, dropbox_id.clone());
-                                }
-                            },
-                        );
-                    },
-                );
-            });
-            rw.add_suffix(&remove);
         } else {
             let remove = button("Remove…", Some("flat"));
             let ui2 = ui.clone();
@@ -1528,207 +1165,27 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         }
         page.add(&g);
     }
-    if self_hosted {
-        page.add(&bucket_key(ui, &s["bucket_key"], hosted, dropbox_id));
-    }
     page
 }
 
 /// A join code for adding another computer to this account.
 fn show_join_code(ui: &Rc<Ui>) {
     let ui2 = ui.clone();
-    // it holds the bucket's keys: printed only to a terminal
+    // it lets a computer into the account: printed only to a terminal
     tty_then(&["omacloud", "join-code"], Vec::new(), move |r| match r {
         Err(e) => ui2.toast(&e.shown()),
         Ok(out) => show_text(
             &ui2,
             "Join code",
             "On the new computer, install Omacloud, open it, and paste this under Add this \
-             computer to your account. Then approve it here. The code holds your bucket's key: \
-             pass it only to your own computers, and not through chat or email.",
+             computer to your account. Then approve it here. Pass the code only to your own computers, \
+             and not through chat or email.",
             out.lines()
                 .find(|l| l.starts_with("omacloud-join-"))
                 .unwrap_or_default()
                 .trim(),
         ),
     });
-}
-
-/// The account's bucket key: every computer holds it, so a lost one is
-/// locked out only by a new key, which the others switch to. With Omacloud
-/// storage, Omacloud makes the key and retires the old ones.
-fn bucket_key(ui: &Rc<Ui>, status: &Value, hosted: bool, dropbox_id: Option<String>) -> adw::PreferencesGroup {
-    let empty = Vec::new();
-    let computers = status["computers"].as_array().unwrap_or(&empty);
-    let waiting = computers
-        .iter()
-        .filter(|c| c["switched"].as_bool() != Some(true))
-        .count();
-    let description = if hosted {
-        if status.is_null() {
-            "Every computer holds a key to your Omacloud storage. Removing a computer switches \
-             the others to a new one and retires the old keys."
-                .to_string()
-        } else if waiting == 0 && status["retired"].as_bool() == Some(true) {
-            "Every computer is on the latest key, and the old keys are retired.".to_string()
-        } else if waiting == 0 {
-            "Every computer is on the latest key; the old keys are retired in a moment.".to_string()
-        } else {
-            format!(
-                "{waiting} of {} computers still to switch; each does on its next sync. The old \
-                 keys are retired once all have.",
-                computers.len()
-            )
-        }
-    } else if dropbox_id.is_some() && status.is_null() {
-        "Every computer holds a Dropbox refresh token. To lock out a removed computer, \
-         authorize again here; Omacloud revokes the old token after the others switch."
-            .to_string()
-    } else if dropbox_id.is_some() && waiting == 0 {
-        if status["retired"].as_bool() == Some(true) {
-            "Every computer is on the latest Dropbox token, and the old one is revoked."
-        } else {
-            "Every computer is on the latest Dropbox token. Check the computer that changed \
-             it to confirm the old token was revoked."
-        }
-        .to_string()
-    } else if dropbox_id.is_some() {
-        format!(
-            "{waiting} of {} computers still to switch. Keep the old Dropbox token active until then.",
-            computers.len()
-        )
-    } else if status.is_null() {
-        "Every computer holds your bucket's key. To lock out a lost one, make a new key at \
-         your provider and switch to it here."
-            .to_string()
-    } else if waiting == 0 {
-        "Every computer is on the latest key. Delete the old one at your provider if you \
-         haven't yet: until then, a removed computer can still reach the bucket."
-            .to_string()
-    } else {
-        format!(
-            "{waiting} of {} computers still to switch; each does on its next sync. Keep the \
-             old key at your provider until then.",
-            computers.len()
-        )
-    };
-    let g = group(
-        if dropbox_id.is_some() {
-            "Dropbox token"
-        } else {
-            "Bucket key"
-        },
-        &description,
-    );
-    // who has switched matters only while some haven't
-    for c in computers.iter().filter(|_| waiting > 0) {
-        let done = c["switched"].as_bool() == Some(true);
-        g.add(&row(&text(&c["name"]), if done { "On the new key" } else { "Not yet" }));
-    }
-    let change = button(
-        if dropbox_id.is_some() {
-            "Change Token…"
-        } else {
-            "Change Key…"
-        },
-        Some("flat"),
-    );
-    let ui2 = ui.clone();
-    change.connect_clicked(move |_| change_bucket_key(&ui2, hosted, dropbox_id.clone()));
-    g.set_header_suffix(Some(&change));
-    g
-}
-
-fn change_bucket_key(ui: &Rc<Ui>, hosted: bool, dropbox_id: Option<String>) {
-    if hosted {
-        // nothing to make or paste: Omacloud makes the key
-        ui.act(
-            &["omacloud", "bucket", "set-key"],
-            "Key changed: the other computers switch on their next sync",
-        );
-        return;
-    }
-    if dropbox_id.as_deref() == Some(DROPBOX_APP_KEY) {
-        // Omacloud's app: the browser comes back with the authorization
-        ui.act(
-            &["omacloud", "bucket", "set-key"],
-            "Dropbox token changed: the other computers switch on their next sync",
-        );
-        return;
-    }
-    if let Some(id) = dropbox_id {
-        let code = adw::PasswordEntryRow::builder().title("New authorization code").build();
-        let list = gtk::ListBox::new();
-        list.add_css_class("boxed-list");
-        list.set_selection_mode(gtk::SelectionMode::None);
-        list.append(&code);
-        let dialog = adw::AlertDialog::new(
-            Some("Change the Dropbox token"),
-            Some(
-                "Authorize the Dropbox app again and paste the code. Omacloud revokes the \
-                  old token after every remaining computer switches.",
-            ),
-        );
-        let open = button("Authorize with Dropbox", Some("flat"));
-        let ui_open = ui.clone();
-        open.connect_clicked(move |_| {
-            open_dropbox_authorization(&ui_open, &id);
-        });
-        list.append(&open);
-        dialog.set_extra_child(Some(&list));
-        dialog.add_response("cancel", "Cancel");
-        dialog.add_response("change", "Change Token");
-        dialog.set_close_response("cancel");
-        let ui2 = ui.clone();
-        dialog.connect_response(Some("change"), move |_, _| {
-            let value = code.text().trim().to_string();
-            if value.is_empty() {
-                ui2.toast("Paste the authorization code");
-                return;
-            }
-            ui2.act_env(
-                &["omacloud", "bucket", "set-key"],
-                vec![("OMACLOUD_DROPBOX_AUTH_CODE".to_string(), value)],
-                "Dropbox token changed: the other computers switch on their next sync",
-            );
-        });
-        dialog.present(Some(&ui.window));
-        return;
-    }
-    let id = adw::EntryRow::builder().title("New access key").build();
-    let secret = adw::PasswordEntryRow::builder().title("New secret key").build();
-    let list = gtk::ListBox::new();
-    list.add_css_class("boxed-list");
-    list.set_selection_mode(gtk::SelectionMode::None);
-    list.append(&id);
-    list.append(&secret);
-    let dialog = adw::AlertDialog::new(
-        Some("Change the bucket key"),
-        Some(
-            "Make a new key at your provider for this bucket, and enter it here. Every computer \
-             still on the account switches to it; removed ones get nothing. Keep the old key \
-             until all have switched.",
-        ),
-    );
-    dialog.set_extra_child(Some(&list));
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("change", "Change Key");
-    dialog.set_response_appearance("change", adw::ResponseAppearance::Suggested);
-    dialog.set_close_response("cancel");
-    let ui2 = ui.clone();
-    dialog.connect_response(Some("change"), move |_, _| {
-        let (id, secret) = (id.text().trim().to_string(), secret.text().to_string());
-        if id.is_empty() || secret.is_empty() {
-            ui2.toast("Enter the new key's id and secret");
-            return;
-        }
-        ui2.act_env(
-            &["omacloud", "bucket", "set-key", "--access-key-id", &id],
-            vec![("OMACLOUD_SECRET_ACCESS_KEY".to_string(), secret)],
-            "Key changed: the other computers switch on their next sync",
-        );
-    });
-    dialog.present(Some(&ui.window));
 }
 
 fn settings(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
@@ -2005,174 +1462,15 @@ fn restore_secrets(ui: &Rc<Ui>, device: &str) {
     dialog.present(Some(&ui.window));
 }
 
-fn recovery(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
+fn recovery() -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
-    if !s["hosted"].as_bool().unwrap_or(false) {
-        // no Omacloud storage to keep the other half
-        page.add(&group(
-            "Trusted contact",
-            "If you lose your recovery code and every computer, your files can't be recovered. \
-             With storage of your own, keep a copy of the recovery code with someone you trust, \
-             or split it among several people with `omacloud recovery split`.",
-        ));
-        return page;
-    }
-    let contact = group(
-        "Trusted contact",
-        "Someone you trust, like your partner, keeps a card that gets you back in if you lose \
-         your recovery code and every computer. The card works only together with your Google \
-         sign-in: on its own it opens nothing, and Omacloud can't use its half without the card.",
-    );
-    let code = adw::PasswordEntryRow::builder().title("Recovery code").build();
-    contact.add(&code);
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    buttons.set_halign(gtk::Align::End);
-    buttons.set_margin_top(12);
-    let remove = button("Remove Contact", Some("flat"));
-    let make = button("Create Recovery Card", Some("suggested-action"));
-    buttons.append(&remove);
-    buttons.append(&make);
-    {
-        let ui = ui.clone();
-        make.connect_clicked(move |_| {
-            let env = vec![("OMACLOUD_RECOVERY_CODE".to_string(), code.text().to_string())];
-            ui.toast("Sign in with Google in your browser to keep the card's other half");
-            let ui2 = ui.clone();
-            // the card prints only to a terminal
-            tty_then(&["omacloud", "recovery", "contact"], env, move |r| match r {
-                Err(e) => ui2.toast(&e.shown()),
-                Ok(out) => show_card(&ui2, card_in(&out)),
-            });
-        });
-    }
-    {
-        let ui = ui.clone();
-        remove.connect_clicked(move |_| {
-            let ui2 = ui.clone();
-            ui.confirm(
-                "Remove your trusted contact?",
-                "Their card stops working. You confirm with Google sign-in.",
-                &[("remove", "Remove", adw::ResponseAppearance::Destructive)],
-                move |_| {
-                    let ui3 = ui2.clone();
-                    cli_then(&["omacloud", "recovery", "contact", "--remove"], Vec::new(), move |r| {
-                        ui3.toast(&r.map_or_else(|e| e.shown(), |_| "Contact removed".into()))
-                    });
-                },
-            );
-        });
-    }
-    contact.add(&buttons);
-    page.add(&contact);
     page.add(&group(
         "If you lose everything",
-        "On a new computer, open Omacloud, enter the recovery card your contact keeps and sign in with Google. \
-         Making a new card replaces the last one.",
+        "If you lose your recovery code and every computer, your files can't be recovered. \
+         Keep a copy of the recovery code with someone you trust, or split it among several \
+         people with `omacloud recovery split`.",
     ));
     page
-}
-
-/// The card in what `recovery contact` printed on its terminal (its notes
-/// go to stderr).
-fn card_in(out: &str) -> &str {
-    out.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default()
-}
-
-/// The contact's card, to print or copy: shown once.
-fn show_card(ui: &Rc<Ui>, card: &str) {
-    let label = gtk::Label::builder()
-        .label(card)
-        .selectable(true)
-        .wrap(true)
-        .css_classes(["title-2", "monospace"])
-        .build();
-    let dialog = adw::AlertDialog::new(
-        Some("Recovery card"),
-        Some(
-            "Print it or write it down, and give it to the person you trust. It isn't shown \
-             again: if it's lost, make a new one.",
-        ),
-    );
-    dialog.set_extra_child(Some(&label));
-    dialog.add_response("copy", "Copy");
-    dialog.add_response("print", "Print");
-    dialog.add_response("done", "Done");
-    dialog.set_response_appearance("print", adw::ResponseAppearance::Suggested);
-    dialog.set_close_response("done");
-    let (window, card) = (ui.window.clone(), card.to_string());
-    dialog.connect_response(None, move |d, id| match id {
-        "copy" => {
-            window.clipboard().set_text(&card);
-            d.present(Some(&window));
-        }
-        "print" => {
-            print_card(&window, &card);
-            d.present(Some(&window));
-        }
-        _ => {}
-    });
-    dialog.present(Some(&ui.window));
-}
-
-/// Print the card as an index card (5 by 3 inches), with what it's for.
-fn print_card(window: &adw::ApplicationWindow, card: &str) {
-    let op = gtk::PrintOperation::new();
-    op.set_n_pages(1);
-    op.set_unit(gtk::Unit::Points);
-    op.set_job_name("Omacloud recovery card");
-    let groups: Vec<String> = card.split('-').map(str::to_string).collect();
-    op.connect_draw_page(move |_, ctx, _| {
-        let cr = ctx.cairo_context();
-        _ = draw_card(&cr, &groups);
-    });
-    if let Err(e) = op.run(gtk::PrintOperationAction::PrintDialog, Some(window)) {
-        eprintln!("printing: {e}");
-    }
-}
-
-fn draw_card(cr: &gtk::cairo::Context, groups: &[String]) -> Result<(), gtk::cairo::Error> {
-    use gtk::cairo::{FontSlant, FontWeight};
-    let (w, h) = (360.0, 216.0);
-    cr.set_source_rgb(0.0, 0.0, 0.0);
-    // a line to cut along
-    cr.set_line_width(0.5);
-    cr.set_dash(&[3.0, 3.0], 0.0);
-    cr.rectangle(0.5, 0.5, w, h);
-    cr.stroke()?;
-    cr.set_dash(&[], 0.0);
-    let line = |text: &str, x: f64, y: f64, face: &str, weight: FontWeight, size: f64| {
-        cr.select_font_face(face, FontSlant::Normal, weight);
-        cr.set_font_size(size);
-        cr.move_to(x, y);
-        cr.show_text(text)
-    };
-    line("Omacloud recovery card", 18.0, 30.0, "Sans", FontWeight::Bold, 14.0)?;
-    line(
-        "For: ________________________________",
-        18.0,
-        54.0,
-        "Sans",
-        FontWeight::Normal,
-        10.0,
-    )?;
-    let half = groups.len().div_ceil(2);
-    for (i, row) in groups.chunks(half.max(1)).enumerate() {
-        let y = 92.0 + 28.0 * f64::from(u8::try_from(i).unwrap_or(0));
-        line(&row.join("-"), 18.0, y, "Monospace", FontWeight::Bold, 20.0)?;
-    }
-    for (i, text) in [
-        "Keep this card safe. If the person named above loses access to their",
-        "Omacloud account, read these characters to them. On its own the card",
-        "opens nothing: it works only with their Google sign-in. A newer card",
-        "replaces this one.",
-    ]
-    .iter()
-    .enumerate()
-    {
-        let y = 156.0 + 12.0 * f64::from(u8::try_from(i).unwrap_or(0));
-        line(text, 18.0, y, "Sans", FontWeight::Normal, 8.0)?;
-    }
-    Ok(())
 }
 
 /// Show text to copy.
@@ -2253,49 +1551,5 @@ mod tests {
         );
         assert_eq!(super::state_label("wifi", "waiting"), "Waiting to apply");
         assert_eq!(super::state_label("wifi", "settled"), "Edits settled");
-    }
-
-    use super::s3_location;
-
-    fn loc(p: usize, l: usize, account: &str, eu: bool, endpoint: &str, region: &str) -> (String, String) {
-        s3_location(p, l, account, eu, endpoint, region).expect("a location")
-    }
-
-    #[test]
-    fn hetzner_follows_the_location() {
-        assert_eq!(
-            loc(0, 0, "", false, "", ""),
-            ("https://fsn1.your-objectstorage.com".into(), "fsn1".into())
-        );
-        assert_eq!(
-            loc(0, 2, "", false, "", ""),
-            ("https://hel1.your-objectstorage.com".into(), "hel1".into())
-        );
-    }
-
-    #[test]
-    fn r2_needs_the_account_and_knows_the_eu() {
-        assert!(s3_location(1, 0, "", false, "", "").is_err());
-        assert_eq!(
-            loc(1, 0, "abc123", false, "", ""),
-            ("https://abc123.r2.cloudflarestorage.com".into(), "auto".into())
-        );
-        assert_eq!(
-            loc(1, 0, "abc123", true, "", "").0,
-            "https://abc123.eu.r2.cloudflarestorage.com"
-        );
-    }
-
-    #[test]
-    fn other_s3_keeps_what_it_is_given() {
-        assert!(s3_location(2, 0, "", false, "", "").is_err());
-        assert_eq!(
-            loc(2, 0, "", false, "http://127.0.0.1:9000", ""),
-            ("http://127.0.0.1:9000".into(), "auto".into())
-        );
-        assert_eq!(
-            loc(2, 0, "", false, "minio.example.com", "us-east-1"),
-            ("https://minio.example.com".into(), "us-east-1".into())
-        );
     }
 }

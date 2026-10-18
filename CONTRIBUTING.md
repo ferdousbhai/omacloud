@@ -17,26 +17,19 @@ libadwaita-1-dev`). After changing `server/`, run `npm run check` there
 
 ## Storage backend features
 
-Default builds include local files, S3-compatible storage and Dropbox. For an
-existing repository using another OpenDAL provider, REST or rclone, build with
-`cargo build --release -p omacloud --features full-backends`. These optional
-backends are kept out of normal builds to avoid their unused protocol stacks.
-The manifest-only patch is documented in `vendor/rustic_backend/OMACLOUD.md`.
-`vendor/opendal-service-dropbox` lets a refresh token work without an app
-secret, for Omacloud's public (PKCE) Dropbox app; see its `OMACLOUD.md`.
+Default builds include local files and S3-compatible storage through
+OpenDAL; S3 stays for the local gateway the Omacloud network will serve.
+For an existing repository using another OpenDAL provider, REST or rclone,
+build with `cargo build --release -p omacloud --features full-backends`.
+These optional backends are kept out of normal builds to avoid their unused
+protocol stacks. The manifest-only patch is documented in
+`vendor/rustic_backend/OMACLOUD.md`.
 
 ## End to end scripts
 
-- `scripts/s3-sync.sh` and `scripts/bucket-key.sh` run against SeaweedFS:
-  `docker run -d -p 8333:8333 -v <s3.json>:/etc/s3.json chrislusf/seaweedfs
-  server -s3 -s3.config=/etc/s3.json -dir=/data`. Bucket names need at least
-  three characters. SeaweedFS supports the create-only writes coordination
-  needs (`If-None-Match: *`), and `bucket-key.sh` starts its own container,
-  with keys made through its admin shell so one can be deleted mid-test.
 - `scripts/restic-compat.sh` needs restic on PATH; a wrapper around the
   `restic/restic` image with paths mounted 1:1 works.
-- Where `/tmp` is small, put `CARGO_TARGET_DIR` and SeaweedFS data under
-  `~/.cache` (SeaweedFS preallocates volumes).
+- Where `/tmp` is small, put `CARGO_TARGET_DIR` under `~/.cache`.
 
 ## The app without a desktop
 
@@ -50,12 +43,8 @@ a test account and a local build.
 ## Secrets
 
 Secrets never go on a command line, where other processes can read them:
-`OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE`,
-`OMACLOUD_SECRET_ACCESS_KEY`, `OMACLOUD_DROPBOX_CLIENT_SECRET` and
-`OMACLOUD_DROPBOX_AUTH_CODE` come from the environment, or a prompt that
-doesn't echo. A computer's bucket key lives in the desktop
-keyring; scripts that make test accounts clear their keyring entries on exit
-(`OMACLOUD_KEYRING=0` keeps keys in the config file instead).
+`OMACLOUD_RECOVERY_CODE` and `OMACLOUD_JOIN_CODE` come from the
+environment, or a prompt that doesn't echo.
 
 ## Shell hygiene
 

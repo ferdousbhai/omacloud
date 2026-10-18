@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-# For existing repositories using providers beyond S3, Dropbox and local files.
+# For existing repositories using providers beyond S3 and local files.
 full-backends = ["omacloud-core/full-backends"]
 
 [dependencies]

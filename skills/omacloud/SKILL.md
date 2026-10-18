@@ -28,7 +28,6 @@ omacloud status          # data.set_up false: not set up yet
 omacloud folders list
 omacloud devices list
 omacloud settings status
-omacloud bucket status
 ```
 
 Piped (as in agent tools), every command prints a JSON envelope
@@ -37,25 +36,28 @@ Piped (as in agent tools), every command prints a JSON envelope
 `{"ok":false,"error":{"code","message","hint"?}}` on stdout: follow the hint.
 Exit codes: 1 other failure, 2 usage (incl. a missing `--yes` or a secret
 command off a terminal), 3 not set up/approved or a refused key/code, 4 not
-found, 5 storage, network or keyring out of reach. Inspection may contact the
+found, 5 storage or network out of reach. Inspection may contact the
 repository; report errors and offline state instead of implying everything is
 current. Consult `omacloud <command> --help`.
 
 ## Setup (only when requested)
 
-Agree on hosted storage versus the owner's bucket/Dropbox, device name, folders,
-and whether to sync settings. `omacloud init --hosted` opens Google sign-in for
-Omacloud storage; the owner completes it. Hosted storage is invitation-only in
-the current docs. Bring-your-own storage needs the provider's documented options;
-read the README/provider docs rather than inventing credentials or endpoints.
+Omacloud is between storages: its own storage, the Omacloud network, is being
+built, and the earlier storage options are gone. Until the network arrives, `omacloud init` without
+storage flags and `join-code` fail with `unsupported`; only the development
+setup works: `omacloud init --repo <path> --coordinator <directory>` (a joining
+computer gives the same `--repo` and `--coordinator`). Use it only when the owner asks for a
+development or test account, and agree on device name, folders, and whether to
+sync settings first. Point test accounts at `OMACLOUD_CONFIG`, never the
+owner's real `~/.config/omacloud`.
 
 The owner must retain the recovery code privately. Commands that print a
-secret (`init` creating an account or recovering with a card, `join-code`,
-`export`, `recovery contact|split|combine`) refuse with `terminal_required`
+secret (`init` creating an account, `join-code`, `export`,
+`recovery split|combine`) refuse with `terminal_required`
 off a terminal: have the owner run them in their own terminal. Never work
 around that refusal (no pseudo-terminals, no `script`), and never run them
 yourself, even where your shell has a terminal and nothing refuses. Joining with a join code or recovery code prints none.
-Never put recovery codes, join codes, passwords, or secret keys in chat or shell
+Never put recovery codes, join codes, or passwords in chat or shell
 arguments. The CLI accepts no-echo prompts or documented `OMACLOUD_*` environment
 variables; prefer the owner's terminal for those flows.
 

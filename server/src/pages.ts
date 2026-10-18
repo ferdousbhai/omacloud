@@ -1,10 +1,8 @@
 // The public pages of omacloud.computer: home, privacy, terms and llms.txt.
 
-import { escapeXml } from "./upstream.ts";
-
 const PRIVACY = "privacy@omacloud.computer";
 const LEGAL = "legal@omacloud.computer";
-const UPDATED = "7 October 2026";
+const UPDATED = "18 October 2026";
 
 function layout(title: string, body: string): Response {
 	return new Response(
@@ -31,12 +29,6 @@ a { color: var(--accent); }
 code, pre { font: 14px/1.5 ui-monospace, "JetBrains Mono", monospace; }
 pre { background: color-mix(in srgb, var(--fg) 6%, transparent); border: 1px solid var(--line);
   border-radius: 8px; padding: .8rem 1rem; overflow-x: auto; }
-form.ask { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin: 1rem 0; }
-form.ask input { flex: 1 1 14rem; font: inherit; padding: .5rem .7rem; color: var(--fg);
-  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
-form.ask button { font: inherit; padding: .5rem 1rem; border: 0; border-radius: 8px;
-  background: var(--accent); color: var(--bg); cursor: pointer; }
-form.ask .cf-turnstile { flex-basis: 100%; }
 footer { border-top: 1px solid var(--line); margin-top: 3rem; padding-top: 1rem;
   color: var(--muted); font-size: .9rem; }
 footer a { color: var(--muted); margin-right: 1rem; }
@@ -50,36 +42,19 @@ ${body}
 	);
 }
 
-/** The invitation form, when Turnstile is set up for it. */
-const ask = (siteKey: string) =>
-	siteKey
-		? `
-<h2>Ask for an invitation</h2>
-<p>Or leave your email here. You'll get a link to confirm it, and an invitation when there's
-room.</p>
-<form class="ask" method="post" action="/waitlist">
-<input type="email" name="email" required maxlength="254" autocomplete="email" placeholder="you@example.com" aria-label="Email address">
-<button>Request an invite</button>
-<div class="cf-turnstile" data-sitekey="${escapeXml(siteKey)}"></div>
-</form>
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>`
-		: "";
-
-export const home = (env: Env) =>
+export const home = () =>
 	layout(
 		"Omacloud",
 		`<h1>Omacloud</h1>
 <p class="lead">Your files and settings on every Omarchy computer, end to end encrypted.</p>
 <p>Desktop, Documents and Pictures sync in place, as iCloud does. Omarchy settings, package
 lists and ssh and gpg keys follow you to every computer, and every version is kept.</p>
-<p>Everything is encrypted on your computer before it leaves it. Omacloud stores only what it
-can't read: not your files, not their names, not your settings.</p>
+<p>Everything is encrypted on your computer before it leaves it. Its storage network, coming
+soon, is held by Omarchy computers themselves: they keep each other's encrypted data without
+being trusted with it, and can't read it. There are no accounts and no sign-in.</p>
 <h2>Get it</h2>
 <pre>curl -fsSL https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh | sudo bash</pre>
-<p>Then open Omacloud from the app launcher and sign in with Google. Omacloud storage is by
-invitation for now: signing in without one puts you on the waitlist, and you'll get an email
-when there's room. Until then, or instead, you can keep everything in a storage bucket of your
-own.</p>${ask(env.TURNSTILE_SITE_KEY)}`,
+<p>Then open Omacloud from the app launcher.</p>`,
 	);
 
 export const privacy = () =>
@@ -87,44 +62,11 @@ export const privacy = () =>
 		"Privacy · Omacloud",
 		`<h1>Privacy</h1>
 <p class="lead">Updated ${UPDATED}.</p>
-<p>Omacloud storage keeps your files for you without being able to read them. This page says
-what it does know.</p>
-<h2>What Omacloud can't see</h2>
-<p>Your files, their names, your folders, your settings and your keys are encrypted on your
-computer, with keys that never leave your computers and your recovery code, before anything is
-uploaded. Omacloud stores the encrypted result and can't decrypt it.</p>
-<h2>What Omacloud keeps</h2>
-<ul>
-<li>From Google sign-in: your Google account's id and email address. Nothing else is asked
-for. If you sign in without an invitation, they're kept on the waitlist until you're invited,
-or until you ask for them to be removed.</li>
-<li>If you ask for an invitation on this site: the email address you type. It's kept for two
-days while the link emailed to it works; follow the link and it stays on the waitlist like a
-sign-in, or don't and it's deleted when the link expires. Cloudflare Turnstile checks the form is sent by
-a person, and sees your browser and IP address to do it.</li>
-<li>Your account: when it was made, your storage quota and how much of it you use.</li>
-<li>Your encrypted data, and the sizes and times of what your computers upload.</li>
-<li>What your computers delete or replace: it's kept, encrypted as everything is, for 14 days,
-so a mistake or a break-in can be undone, and then removed. It doesn't count toward your
-quota, but up to as much as your quota is kept: past that, deleting or replacing files is
-paused until some of it expires. Undoing puts back what was deleted or replaced after a time
-you name; files added since stay.</li>
-<li>Service logs (which account made a request, what kind, and how it went), kept for a short
-time to run and debug the service.</li>
-</ul>
-<h2>Where it lives</h2>
-<p>Encrypted files are stored with Hetzner Online in Falkenstein, Germany. Account records are
-kept in Cloudflare D1 in the EU, and requests pass through Cloudflare, which handles your IP
-address to deliver them.</p>
-<h2>What Omacloud doesn't do</h2>
-<p>No ads, no tracking, no selling or sharing of your information. Your email is used only to
-run your account and to contact you about it: to confirm a waitlist request, to invite you,
-and about your account. Emails are sent through Cloudflare Email Sending.</p>
-<h2>Leaving</h2>
-<p>You can take your data out at any time (<code>omacloud export</code> gives you a standard
-restic repository). Ask at <a href="mailto:${PRIVACY}">${PRIVACY}</a> and your account and
-everything stored for it are deleted (what was kept of deleted files within 14 days), or your
-address taken off the waitlist.</p>
+<p>This site collects nothing. It sets no cookies, has no accounts and keeps no logs. Requests
+pass through Cloudflare, which handles your IP address to deliver them.</p>
+<p>Omacloud itself has no accounts or sign-in. Your files, their names, your settings and your
+keys are encrypted on your computer, with keys that never leave your computers and your
+recovery code, before anything is stored. Whoever holds the encrypted data can't read it.</p>
 <h2>Contact</h2>
 <p><a href="mailto:${PRIVACY}">${PRIVACY}</a></p>`,
 	);
@@ -132,25 +74,16 @@ address taken off the waitlist.</p>
 export const terms = () =>
 	layout(
 		"Terms · Omacloud",
-		`<h1>Terms of service</h1>
+		`<h1>Terms</h1>
 <p class="lead">Updated ${UPDATED}.</p>
-<h2>The service</h2>
-<p>Omacloud storage keeps the encrypted files and settings of the Omacloud app for you. It is
-an early service, offered by invitation, and may change as it grows.</p>
+<h2>The software</h2>
+<p>Omacloud is free software under the MIT license, provided as it is, without warranty. Keep
+other copies of anything you can't afford to lose. To the extent the law allows, Omacloud isn't
+liable for lost data.</p>
 <h2>Your recovery code</h2>
 <p>Only your computers and your recovery code can decrypt your data. If you lose the recovery
 code and all your computers, nobody, including Omacloud, can recover your files. Keep the code
 safe and offline.</p>
-<h2>Using it fairly</h2>
-<p>Use Omacloud storage for your own files, within your quota and the law. Accounts used to
-abuse the service or to harm others may be closed.</p>
-<h2>No guarantee</h2>
-<p>Omacloud storage is provided as it is, without warranty. Keep other copies of anything you
-can't afford to lose. To the extent the law allows, Omacloud isn't liable for lost data or for
-the service being unavailable.</p>
-<h2>Ending</h2>
-<p>You can stop using Omacloud storage and ask for your account to be deleted at any time.
-If the service ends, you'll be told in advance and given time to export your data.</p>
 <h2>Contact</h2>
 <p><a href="mailto:${LEGAL}">${LEGAL}</a></p>`,
 	);
@@ -164,36 +97,34 @@ export const llms = (env: Env) => {
 
 > Your files and settings on every Omarchy computer, end to end encrypted. Desktop, Documents
 > and Pictures sync in place; Omarchy settings, AI agent settings, Chromium, Wi-Fi, package lists
-> and ssh and gpg keys follow; every version is kept. Storage is Omacloud storage (sign in with
-> Google, by invitation), a bucket of your own (Hetzner, R2, any S3 with create-only writes) or your Dropbox.
-> Underneath it is plain restic, so restic or rustic restore everything without Omacloud.
+> and ssh and gpg keys follow; every version is kept. Its storage network (coming) is held by
+> Omarchy computers themselves, untrusted, with no accounts or sign-in. Underneath it is plain
+> restic, so restic or rustic restore everything without Omacloud.
 
-Everything is encrypted on the computer before upload: the storage, Omacloud's included, holds
-only what it can't read. Omacloud runs on Omarchy (Arch Linux, x86_64 and aarch64), as a GTK app
-and the \`omacloud\` command line tool that drives it. Install with
+Everything is encrypted on the computer before it is stored: whoever holds the data can't read
+it. Omacloud runs on Omarchy (Arch Linux, x86_64 and aarch64), as a GTK app and the
+\`omacloud\` command line tool that drives it. Install with
 \`curl -fsSL ${repo}/releases/latest/download/install.sh | sudo bash\` (or, where Omarchy's own repository carries it, \`omarchy pkg add omacloud\`).
 
 ## Docs
 
-- [README](${repo}/blob/master/README.md): install, setup, what syncs, versions, lost computers, trusted contacts, configuration
+- [README](${repo}/blob/master/README.md): install, setup, what syncs, versions and configuration
 - [How Omacloud works](${repo}/blob/master/docs/design.md): the encryption, device approval and threat model
-- [Storage providers](${repo}/blob/master/docs/providers.md): setting up Hetzner, Cloudflare R2, other S3 storage and Dropbox
 - [Changelog](${repo}/blob/master/CHANGELOG.md): what each release changed
 
 ## Command line
 
-- [omacloud CLI](${repo}/blob/master/README.md#set-up): \`omacloud --help\` lists every command. Piped, every command prints a JSON envelope ({ok, data, summary} or {ok: false, error: {code, message, hint}}; \`--quiet\` for the data alone) and exits 0, 1, 2 usage, 3 not set up, 4 not found or 5 unreachable; \`omacloud status\` reports state. Commands that print a secret (\`join-code\`, \`export\`, a new account's recovery code) print only to a terminal. Secrets come from environment variables (OMACLOUD_RECOVERY_CODE, OMACLOUD_JOIN_CODE, OMACLOUD_SECRET_ACCESS_KEY) or a prompt, never arguments
-- [Restoring without Omacloud](${repo}/blob/master/README.md#versions-and-leaving): \`omacloud export\` prints the restic repository location and password, in your terminal
+- [omacloud CLI](${repo}/blob/master/README.md): \`omacloud --help\` lists every command. Piped, every command prints a JSON envelope ({ok, data, summary} or {ok: false, error: {code, message, hint}}; \`--quiet\` for the data alone) and exits 0, 1, 2 usage, 3 not set up, 4 not found or 5 unreachable; \`omacloud status\` reports state. Commands that print a secret (\`join-code\`, \`export\`, a new account's recovery code) print only to a terminal. Secrets come from environment variables (OMACLOUD_RECOVERY_CODE, OMACLOUD_JOIN_CODE) or a prompt, never arguments
 
-## Omacloud storage
+## Site
 
-- [Home](${site}/): what Omacloud is and how to ask for an invitation
-- [Privacy](${site}/privacy): what Omacloud storage can and can't see, and where data lives
-- [Terms](${site}/terms): terms of service
+- [Home](${site}/): what Omacloud is and how to install it
+- [Privacy](${site}/privacy): the site collects nothing; Omacloud has no accounts
+- [Terms](${site}/terms): terms
 
 ## Optional
 
-- [Source](${repo}): MIT licensed Rust (sync engine, CLI, GTK app) and the Cloudflare Worker behind Omacloud storage
+- [Source](${repo}): MIT licensed Rust (sync engine, CLI, GTK app) and the Cloudflare Worker behind this site
 - [Contributing](${repo}/blob/master/CONTRIBUTING.md): building, testing and releases
 `,
 		{ headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "public, max-age=300" } },

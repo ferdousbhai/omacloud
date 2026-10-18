@@ -4,15 +4,17 @@ Your files and settings on every Omarchy computer, end to end encrypted.
 Desktop, Documents and Pictures sync in place, as iCloud does; Omarchy
 settings, package lists and ssh and gpg keys follow; every version is kept.
 
-Sign in with Google and your files are kept on Omacloud storage
-([omacloud.computer](https://omacloud.computer), in the EU, by invitation for
-now), or keep them in a storage bucket you rent yourself from a provider
-such as Hetzner or Cloudflare R2, or in your own Dropbox.
-Either way everything is
-encrypted on your computer before it leaves it: the storage only ever holds
-what it can't read. Underneath it's plain restic, so you can always restore
-without Omacloud. [docs/design.md](docs/design.md) explains how it protects
-your data.
+Everything is encrypted on your computer before it leaves it: the storage
+only ever holds what it can't read. Underneath it's plain restic, so you can
+always restore without Omacloud. [docs/design.md](docs/design.md) explains
+how it protects your data.
+
+**Between storages.** Omacloud is moving to one storage of its own, the
+Omacloud network: encrypted objects held by other Omarchy computers, with no
+accounts and no sign-in. It is being built. The earlier storage choices are
+gone (see [CHANGELOG.md](CHANGELOG.md)), so for now only the development
+setup below works, with the files and the records that keep computers in
+step in directories you share yourself.
 
 ## Install
 
@@ -56,46 +58,26 @@ new versions until you install the signed repository.
 
 ## Set up
 
-Open **Omacloud** from the app launcher (Super + Space).
-
-**Your first computer:** click Sign In with Google to use Omacloud storage,
-and you're done but for writing down your recovery code (below). Or, to use
-your own storage, pick your provider and follow the steps the app shows. With Hetzner that's one page: click Get a Key, generate
-credentials there, and paste both keys back; Omacloud makes its own private
-bucket. With R2, make a bucket and a key just for it, and paste the
-bucket name and both keys. Then click Create Account. The app
-then shows your **recovery code** once: write it down and keep it offline.
-With Dropbox, click Connect Dropbox and allow Omacloud in the browser.
-With it you can add a computer when no other is at hand and recover
-everything; without it and without a computer, nobody can. [docs/providers.md](docs/providers.md) has the
-steps and notes for each storage provider.
-
-**Each other computer:** install Omacloud, then on a computer that already
-has it, open Devices and click Show Join Code. Paste the code into the new
-computer's app, and approve the new computer by its fingerprint. The join
-code holds your bucket's key, so pass it only between your own computers.
-
-With Omacloud storage, signing in on another computer works too: it asks
-to join, and you approve it by its fingerprint as above.
-
-From the command line, the same is:
+Until the Omacloud network is here, `omacloud init` on its own says so
+(`unsupported`), and so do `omacloud join-code` and `init --join-code`. For
+development, give it a directory for the restic repository and one for the
+records that keep computers in step; both can be on a shared or synced
+filesystem:
 
 ```sh
-omacloud init --hosted                              # Omacloud storage: sign in with Google
-omacloud init --repo opendal:s3 --opt endpoint=https://fsn1.your-objectstorage.com \
-  --opt region=fsn1 --opt bucket=<bucket> --opt access_key_id=<key id>   # asks for the secret key
-omacloud init --repo opendal:dropbox                # allow Omacloud in the browser
-omacloud join-code                                  # on a computer you have
-omacloud init --join-code <code>                    # on the new one (or OMACLOUD_JOIN_CODE)
-omacloud devices approve <fingerprint>              # back on the first
+omacloud init --repo <path> --coordinator <directory>   # first computer: shows the recovery code
+omacloud init --repo <path> --coordinator <directory>   # another computer, same two: asks to join
+omacloud devices approve <fingerprint>                  # on the first, after comparing fingerprints
 ```
 
-Secrets never go on the command line: the secret key, recovery code and
-join code come from a prompt that doesn't echo, or from
-`OMACLOUD_SECRET_ACCESS_KEY`, `OMACLOUD_DROPBOX_CLIENT_SECRET`,
-`OMACLOUD_DROPBOX_AUTH_CODE`, `OMACLOUD_RECOVERY_CODE` and
-`OMACLOUD_JOIN_CODE`. Storage credentials are kept in the desktop keyring,
-or in a private config file when a keyring is unavailable.
+The first computer shows your **recovery code** once: write it down and
+keep it offline. With it you can add a computer when no other is at hand
+(`OMACLOUD_RECOVERY_CODE` set when joining) and recover everything;
+without it and without a computer, nobody can.
+
+Secrets never go on the command line: the recovery code (and, with the
+network, the join code) come from a prompt that doesn't echo, or from
+`OMACLOUD_RECOVERY_CODE` and `OMACLOUD_JOIN_CODE`.
 
 ## What syncs
 
@@ -175,64 +157,17 @@ somewhere of your own first.
 ## A lost computer
 
 Remove it under Devices (or `omacloud devices revoke <fingerprint>`, which
-asks first; `--yes` where nobody can be asked). It
-can't sync anymore, but it still holds a key to your storage, so the app
-goes on to change that key.
+asks first; `--yes` where nobody can be asked). It can't sync anymore, but
+it still holds the repository key it had: `omacloud rotate --yes` (or
+`devices revoke --rotate`) moves everything to a new encryption key that
+only the remaining computers get, so it can't read anything written after.
 
-With Dropbox, allow Omacloud again when the device is removed. The other
-computers switch to the new token; Omacloud then revokes the old one. Keep
-the computer that started the change available until `omacloud bucket status`
-shows the old token is revoked.
+## Keeping the recovery code
 
-With Omacloud storage that takes no more: your other computers switch to a
-new key Omacloud makes, and once all have, the old keys are retired and the
-removed computer's key no longer reaches your storage (`omacloud bucket
-set-key` from the terminal). Signing in with Google still gets any computer
-a new key, so anyone who can sign in to your Google account (on the lost
-computer, say) can reach your storage again: sign it out of Google too.
-Whatever is deleted or replaced on Omacloud storage, by a removed computer
-or anyone else, can be undone for 14 days: ask at
-privacy@omacloud.computer, saying when it started. Everything deleted or
-replaced since then is put back; files added since stay (they do no harm),
-and a computer already approved may show on Devices as asking to join
-again (don't approve one you removed). Once as much as your quota
-has been deleted in 14 days, more deleting and replacing is refused (a sync
-says `TooMuchDeleted`) until some of it expires.
-With your own bucket, make a new key at your provider and enter it; every
-other computer switches on its next sync, Devices shows when all have, and
-then you delete the old key at your provider.
-
-A computer that was away through the whole change catches up with
-`omacloud bucket set-key --access-key-id <id> --here-only`, or, with
-Omacloud storage, `omacloud bucket set-key --here-only`, which signs in
-again. `omacloud rotate --yes` also moves everything to a new encryption key.
-
-With your own bucket and delete protection on it (object lock), sync works
-as usual and old data is removed once its retention ends. Keep the bucket
-without object lock, or give Omacloud a second, plain bucket for keeping
-your computers in step (`--coordination-bucket`, or the switch in the app):
-some providers can't do the create-only writes it needs on a locked
-bucket.
-
-## A trusted contact
-
-Losing the recovery code with every computer locks you out. With Omacloud
-storage, someone you trust can keep a recovery card that gets you back in:
-under Recovery in the app, enter your recovery code and click Create
-Recovery Card (or `omacloud recovery contact`), sign in with Google, then
-print the card and give it to them. The card works only together with your Google sign-in,
-so on its own it opens nothing, and Omacloud can't use its half without
-the card. Making a new card replaces the last one, and Remove Contact
-(`--remove`) voids it.
-
-To recover, on a new computer enter the card in setup, beside Sign In with
-Google (or `omacloud init --hosted --contact-card`). The computer joins
-your account and shows your recovery code again.
-
-With storage of your own, keep a copy of the recovery code with someone you
-trust, or split it among several: `omacloud recovery split --threshold 3
---shares 5` makes five shares, any three of which rebuild it (`omacloud
-recovery combine`).
+Losing the recovery code with every computer locks you out. Keep a copy
+with someone you trust, or split it among several: `omacloud recovery split
+--threshold 3 --shares 5` makes five shares, any three of which rebuild it
+(`omacloud recovery combine`).
 
 ## Agent skill
 
@@ -269,9 +204,9 @@ omacloud devices --ids-only
 | 0 | done |
 | 1 | anything else failed |
 | 2 | invalid usage or request: a destructive command (`devices revoke`, `rotate`, `restore` over a file) without `--yes` where nobody can be asked, a secret asked for where no terminal shows it, an ambiguous fingerprint, already set up |
-| 3 | not set up, not approved, settings sync off, or a key, recovery code, join code or card refused |
+| 3 | not set up, not approved, settings sync off, or a key, recovery code, join code or shares refused |
 | 4 | not found: a device, a version, a package list, a secrets bundle |
-| 5 | out of reach: the storage, the network, Omacloud's sign-in, the keyring, or (for `restore-machine`, alongside its result) systemd |
+| 5 | out of reach: the storage, the network, or (for `restore-machine`, alongside its result) systemd |
 
 Commands only ask (a secret, a confirmation) in text mode with stdin and
 stdout on a terminal; elsewhere secrets come from the `OMACLOUD_*`
@@ -279,8 +214,8 @@ environment variables and confirmations from `--yes`.
 
 What prints a secret prints it only to your terminal, in text mode with
 stdin and stdout on it, and refuses (exit 2) as JSON or into a pipe: `init`
-when it creates an account or recovers with a card (the recovery code),
-`join-code`, `export`, and `recovery contact`, `split` and `combine`
+when it creates an account (the recovery code), `join-code`, `export`, and
+`recovery split` and `combine`
 (`combine` reads its shares from stdin, so only its stdout must be a
 terminal). Joining with a join code or the recovery code prints no secret
 and works anywhere. This guards against accidents, such as a secret landing
@@ -298,7 +233,7 @@ binary), 1 for anything else.
 # ~/.config/omacloud/config.toml (written by `omacloud init`)
 [limits]
 bandwidth = "5MiB"            # per second; see below
-connections = 4               # parallel requests to the bucket
+connections = 4               # parallel requests to the storage
 pause_on_battery_below = 20   # percent while discharging; 0 never pauses
 ```
 
@@ -319,13 +254,12 @@ edits.
 
 | path | what |
 |---|---|
-| `crates/omacloud-core` | sync engine (`sync.rs`), settings (`settings.rs`; Chromium and Wi-Fi as merged documents: `merged.rs`, `chromium/`, `wifi.rs`), signed heads (`head.rs`), device chain (`devices.rs`, `account.rs`), repository keys and rotation (`epoch.rs`), coordination in your bucket (`bucket.rs`, `bucket_key.rs`) |
+| `crates/omacloud-core` | sync engine (`sync.rs`), settings (`settings.rs`; Chromium and Wi-Fi as merged documents: `merged.rs`, `chromium/`, `wifi.rs`), signed heads (`head.rs`), device chain (`devices.rs`, `account.rs`), repository keys and rotation (`epoch.rs`), secrets bundle (`secrets.rs`), Shamir split (`shamir.rs`) |
 | `crates/omacloud` | CLI and `watch` daemon |
 | `crates/omacloud-app` | the Omacloud app (GTK4, libadwaita), driving the CLI |
 | `vendor/rustic_core` | rustic_core 0.13 plus pack padding and `splice_tree` (upstream PRs in `vendor/upstream-patches`) |
-| `vendor/opendal-service-dropbox` | opendal-service-dropbox 0.58.2, refreshing without an app secret for Omacloud's public (PKCE) Dropbox app |
-| `scripts/` | end to end checks (see CONTRIBUTING.md) and the release scripts |
-| `server/` | Omacloud storage: the Cloudflare Worker behind Sign In with Google (see its README) |
+| `scripts/` | an end to end check against upstream restic (see CONTRIBUTING.md) and the release scripts |
+| `server/` | the Cloudflare Worker behind omacloud.computer: the public pages now, the Omacloud network's coordination later (see its README) |
 | `contrib/` | the systemd user unit and the desktop entry |
 | `pkgbuild/PKGBUILD` | Arch package, built from the committed checkout |
 | `install.sh` | the installer each release ships |

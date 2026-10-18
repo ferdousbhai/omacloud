@@ -14,7 +14,6 @@ fn default_services_are_registered() {
                 ("secret_access_key", "test"),
             ],
         ),
-        ("dropbox", vec![("access_token", "test")]),
     ] {
         Operator::via_iter(
             scheme,

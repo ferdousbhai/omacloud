@@ -17,10 +17,7 @@ use std::{
 
 mod agent_skill;
 mod alerts;
-mod dropbox;
 mod fail;
-mod hosted;
-mod keyring;
 mod output;
 mod power;
 
@@ -30,7 +27,6 @@ use log::{info, warn};
 use notify::{RecursiveMode, Watcher};
 use omacloud_core::{
     Coordinator, DeviceError, DirCoordinator, Engine, HeadError, Membership, RepoSpec, SettingsSetup, Setup, account,
-    bucket::key_refused,
     devices::{fingerprint, public_hex},
     epoch::EpochError,
     head::load_or_create_key,
@@ -39,7 +35,7 @@ use omacloud_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::fail::{CliError, KEY_REFUSED_HINT};
+use crate::fail::CliError;
 use crate::output::{Mode, OutputFlags, Response};
 
 /// Appends a line to a command's text output.
@@ -71,16 +67,15 @@ piped. --json forces the envelope, --styled text, --quiet prints only the data,
 failure is {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, or
 error:/hint: lines on stderr in text mode.
 
-Commands that print a secret (init when it creates an account or recovers with
-a card, join-code, export, recovery contact, split and combine) print only to a
+Commands that print a secret (init when it creates an account, join-code,
+export, recovery split and combine) print only to a
 terminal, in text mode, with stdin a terminal too (combine excepted: its shares
 may come on stdin).
 
 Exit codes: 0 ok; 1 other failure; 2 invalid usage or request (a destructive
 command without --yes where nobody can be asked, a secret asked for where no
 terminal shows it, ambiguous, already set up); 3 not set up, not approved, or a
-key, code or card refused; 4 not found; 5 storage, network, sign-in service or
-keyring out of reach. `watch` (the daemon) exits 2 when this computer was
+key or code refused; 4 not found; 5 storage or network out of reach. `watch` (the daemon) exits 2 when this computer was
 removed and 75 after an upgrade.";
 
 #[derive(Parser)]
@@ -108,20 +103,13 @@ enum Cmd {
         /// Pictures in home, as iCloud does; `omacloud folders` changes them]
         #[arg(long)]
         folder: Option<PathBuf>,
-        /// Where the files live: an opendal URL like `opendal:s3` or
-        /// `opendal:dropbox` (Omacloud's Dropbox app, allowed in the browser;
-        /// or your own app with `--opt client_id=...`, whose secret and
-        /// authorization code are asked for), or a path.
-        /// For S3 use
-        /// `--opt endpoint=... --opt bucket=... --opt access_key_id=...`; the
-        /// secret key is asked for. Joining with a join code needs none
+        /// Where the files live, for development until the Omacloud network:
+        /// a path
         #[arg(long)]
         repo: Option<String>,
-        /// Backend option, repeatable: `--opt bucket=name`
-        #[arg(long = "opt", value_parser = parse_kv)]
-        opts: Vec<(String, String)>,
-        /// Where computers keep in step [default: `bucket`, beside the files]
-        #[arg(long, hide = true)]
+        /// Where computers keep in step, for development until the Omacloud
+        /// network: a shared directory
+        #[arg(long)]
         coordinator: Option<String>,
         /// Folders of home to sync on this computer, comma separated [default:
         /// Desktop,Documents,Pictures]. The usual folders left out (Music,
@@ -139,28 +127,13 @@ enum Cmd {
         /// device to approve
         #[arg(long, env = "OMACLOUD_RECOVERY_CODE", hide_env_values = true)]
         recovery_code: Option<String>,
-        /// With `--coordinator bucket`: keep coordination in this bucket
-        /// (same endpoint and keys) instead of beside the data. Needed when
-        /// the data bucket has object lock, as Hetzner doesn't do the
-        /// create-only writes coordination needs on versioned buckets
-        #[arg(long)]
-        coordination_bucket: Option<String>,
         /// Join your account with the code from `omacloud join-code` (or Show
         /// Join Code in the app) on one of your computers
         #[arg(long, env = "OMACLOUD_JOIN_CODE", hide_env_values = true)]
         join_code: Option<String>,
-        /// Keep your files on Omacloud storage instead of a bucket of your
-        /// own: sign in with Google in the browser
-        #[arg(long, conflicts_with_all = ["repo", "opts", "join_code", "coordination_bucket"])]
-        hosted: bool,
-        /// With `--hosted`, when you have neither the recovery code nor a
-        /// computer: recover with your trusted contact's card (asked for, or
-        /// from OMACLOUD_CONTACT_CARD) and your Google sign-in
-        #[arg(long, requires = "hosted", conflicts_with = "recovery_code")]
-        contact_card: bool,
     },
     /// Print a code another computer joins this account with (`omacloud
-    /// init --join-code`). It holds the bucket's key: pass it privately
+    /// init --join-code`)
     JoinCode,
     /// Sync once and exit
     Sync,
@@ -211,11 +184,6 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<PackagesCmd>,
     },
-    /// Your bucket's key: change it, to cut off a lost or removed computer
-    Bucket {
-        #[command(subcommand)]
-        action: Option<BucketCmd>,
-    },
     /// Which folders of home sync: Desktop, Documents and Pictures to start
     Folders {
         #[command(subcommand)]
@@ -227,8 +195,8 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<SecretsCmd>,
     },
-    /// Recovery with people you trust: a trusted contact's card, or the
-    /// recovery code split among several people
+    /// Recovery with people you trust: the recovery code split among
+    /// several people
     Recovery {
         #[command(subcommand)]
         action: RecoveryCmd,
@@ -251,13 +219,9 @@ enum Cmd {
     /// Print everything needed to restore without omacloud; with `--to`,
     /// first copy the repository somewhere of your own
     Export {
-        /// Copy the repository here (a path or opendal URL), then describe
-        /// the copy
+        /// Copy the repository to this path, then describe the copy
         #[arg(long)]
         to: Option<String>,
-        /// Backend option for `--to`, repeatable
-        #[arg(long = "to-opt", value_parser = parse_kv)]
-        to_opts: Vec<(String, String)>,
     },
     /// Print the agent skill (SKILL.md) built into omacloud, or install it
     /// for your coding agents
@@ -322,15 +286,6 @@ enum SecretsCmd {
 
 #[derive(Subcommand)]
 enum RecoveryCmd {
-    /// Make a card for someone you trust (with Omacloud storage). The card
-    /// and your Google sign-in together give back the recovery code (`init
-    /// --hosted --contact-card`); either alone opens nothing. Asks for the
-    /// recovery code; a new card replaces the last one
-    Contact {
-        /// Remove the trusted contact instead: their card stops working
-        #[arg(long)]
-        remove: bool,
-    },
     /// Split the recovery code into shares; any `threshold` of them rebuild
     /// it, fewer reveal nothing. Give each person one share
     Split {
@@ -372,27 +327,6 @@ enum Keep {
 }
 
 #[derive(Subcommand)]
-enum BucketCmd {
-    /// Show the latest key change and which computers switched to it
-    Status,
-    /// Switch every computer to a new key. With your own bucket, make it at
-    /// your provider first, and keep the old one until `bucket status` says
-    /// all switched, then delete it there; the secret comes from
-    /// OMACLOUD_SECRET_ACCESS_KEY, or is asked for. With Omacloud storage,
-    /// Omacloud makes the key, and retires the old ones once all switched.
-    /// With Dropbox, authorize the app again for a fresh refresh token.
-    SetKey {
-        /// The new key's id (your own bucket)
-        #[arg(long)]
-        access_key_id: Option<String>,
-        /// Only this computer: for one that missed the change because the old
-        /// key was already deleted (with Omacloud storage, signs in again)
-        #[arg(long)]
-        here_only: bool,
-    },
-}
-
-#[derive(Subcommand)]
 enum FoldersCmd {
     /// Show the folders syncing here, and the ones this device skips
     List,
@@ -427,18 +361,11 @@ enum DevicesCmd {
     },
 }
 
-fn parse_kv(s: &str) -> Result<(String, String), String> {
-    s.split_once('=')
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .ok_or_else(|| format!("expected key=value, got `{s}`"))
-}
-
 #[derive(Serialize, Deserialize, Clone)]
 struct Config {
     device: String,
     folder: PathBuf,
-    /// `bucket` (coordination in the bucket, see `coordination`), or a
-    /// shared directory
+    /// The shared directory computers keep in step through
     coordinator: String,
     repo: RepoSpec,
     /// The account root public key (hex), pinned at setup
@@ -456,25 +383,6 @@ struct Config {
     /// of `folder`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     folders: Option<FolderChoice>,
-    /// With `coordinator = "bucket"`: where in the user's own storage the
-    /// coordination lives (OpenDAL options, `scheme` among them, with the
-    /// bucket's keys: this device needs them before it has any account key)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    coordination: Option<BTreeMap<String, String>>,
-    /// The last bucket key change this device switched to
-    #[serde(default, skip_serializing_if = "is_zero")]
-    bucket_key_seq: u64,
-    /// Omacloud storage: where this account signed in (see `hosted`)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    service: Option<String>,
-    /// Omacloud storage or Dropbox: the last key change whose old keys were retired
-    #[serde(default, skip_serializing_if = "is_zero")]
-    bucket_key_retired: u64,
-}
-
-#[allow(clippy::trivially_copy_pass_by_ref)]
-fn is_zero(n: &u64) -> bool {
-    *n == 0
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -574,7 +482,7 @@ impl Default for Limits {
 
 impl Limits {
     /// Backend options that enforce these limits: `bandwidth` on any
-    /// backend, `connections` on opendal ones. Set on any repository: an own bucket's location may arrive later,
+    /// backend, `connections` on opendal ones. Set on any repository: its location may arrive later,
     /// sealed with the key, and the engine carries these over to it.
     fn apply(&self, repo: &mut RepoSpec) {
         if let Some(bw) = &self.bandwidth {
@@ -630,19 +538,6 @@ impl Paths {
 }
 
 fn load(paths: &Paths) -> Result<Config> {
-    let mut config = load_without_key(paths)?;
-    if config.coordinator == SELF_HOSTED
-        && let Some(c) = config.coordination.as_mut()
-        && !has_key(c)
-    {
-        c.extend(keyring::lookup(&paths.config)?);
-    }
-    Ok(config)
-}
-
-/// The config without its bucket key, for `bucket set-key --here-only`: the
-/// way back when the keyring lost it.
-fn load_without_key(paths: &Paths) -> Result<Config> {
     let text = match fs::read_to_string(&paths.config) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(fail::not_set_up().into()),
         other => other.with_context(|| format!("reading {}", paths.config.display()))?,
@@ -650,28 +545,10 @@ fn load_without_key(paths: &Paths) -> Result<Config> {
     Ok(toml::from_str(&text)?)
 }
 
-fn has_key(options: &BTreeMap<String, String>) -> bool {
-    options
-        .keys()
-        .any(|k| omacloud_core::repo::CREDENTIAL_OPTIONS.contains(&k.as_str()))
-}
-
 fn save(paths: &Paths, config: &Config) -> Result<()> {
-    // a self-hosted computer's bucket key goes to the keyring when there is
-    // one, and the file keeps the rest
-    let mut config = config.clone();
-    if config.coordinator == SELF_HOSTED
-        && let Some(c) = config.coordination.as_mut()
-        && has_key(c)
-        && keyring::store(&paths.config, &omacloud_core::bucket_key::credentials_of(c))?
-    {
-        c.retain(|k, _| !omacloud_core::repo::CREDENTIAL_OPTIONS.contains(&k.as_str()));
-    }
-    let config = &config;
     if let Some(dir) = paths.config.parent() {
         fs::create_dir_all(dir)?;
     }
-    // private: without a keyring, it holds the bucket's keys
     let tmp = paths.config.with_extension("toml.tmp");
     fs::OpenOptions::new()
         .write(true)
@@ -684,23 +561,9 @@ fn save(paths: &Paths, config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// `coordinator = "bucket"`: coordination lives in the account's bucket,
-/// beside the files (a bucket of the user's own, or Omacloud storage).
-const SELF_HOSTED: &str = "bucket";
-
-/// Where `config`'s computers keep in step: its bucket, or a shared
-/// directory.
+/// Where `config`'s computers keep in step.
 fn coordinator(config: &Config) -> Result<Arc<dyn Coordinator>> {
-    Ok(if config.coordinator == SELF_HOSTED {
-        let mut opts = config
-            .coordination
-            .clone()
-            .context("no coordination location in the config")?;
-        let scheme = opts.remove("scheme").unwrap_or_else(|| "s3".into());
-        Arc::new(omacloud_core::BucketCoordinator::new(&scheme, &opts)?)
-    } else {
-        Arc::new(DirCoordinator::new(&config.coordinator)?)
-    })
+    Ok(Arc::new(DirCoordinator::new(&config.coordinator)?))
 }
 
 fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
@@ -708,13 +571,6 @@ fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
     let coord = coordinator(config)?;
     let mut repo = config.repo.clone();
     config.limits.apply(&mut repo);
-    // self-hosted: the bucket key lives in this config, and key changes
-    // update it here; the data uses it too
-    if config.coordinator == SELF_HOSTED
-        && let Some(c) = &config.coordination
-    {
-        repo.options.extend(omacloud_core::bucket_key::credentials_of(c));
-    }
     let setup = Setup {
         device: config.device.clone(),
         folder: config.folder.clone(),
@@ -763,14 +619,6 @@ fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
     Ok(e)
 }
 
-/// How a recovering computer got the recovery code.
-#[derive(PartialEq, Eq)]
-enum Recovery {
-    Code,
-    /// From a trusted contact's card: shown again, as nobody has it now
-    Card,
-}
-
 fn already_set_up(paths: &Paths) -> CliError {
     CliError::new(
         "already_set_up",
@@ -780,85 +628,38 @@ fn already_set_up(paths: &Paths) -> CliError {
     .hint("give another --config to set up a second account here")
 }
 
-/// What `init` did before setting up the account: signed in, made a bucket.
-#[derive(Default)]
-struct InitNotes {
-    signed_in_as: Option<String>,
-    created_bucket: Option<String>,
-}
-
-fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>, notes: InitNotes) -> Out {
+fn init(paths: &Paths, mut config: Config, recovery: Option<String>) -> Out {
     if paths.config.exists() {
         return Err(already_set_up(paths).into());
     }
     // the refusals that need no account come before anything is made here:
     // no folder, device key or coordination skeleton is left behind. A
     // shared directory is only looked at, as opening it makes its skeleton
-    let bucket = if config.coordinator == SELF_HOSTED {
-        let c = coordinator(&config)?;
-        let anchor = c.anchor()?;
-        Some((c, anchor))
-    } else {
-        None
-    };
-    let creating = bucket.as_ref().map_or_else(
-        || !Path::new(&config.coordinator).join("account.json").exists(),
-        |(_, anchor)| anchor.is_none(),
-    );
-    if matches!(recovery, Some((_, Recovery::Card))) && !output::to_terminal(mode()) {
-        return Err(fail::terminal_required("your recovery code").into());
-    }
+    let creating = !Path::new(&config.coordinator).join("account.json").exists();
     if creating && !output::to_terminal(mode()) {
         if config.repo.repository.is_empty() {
             return Err(fail::usage("creating an account needs --repo")
                 .hint("run `omacloud init --help`")
                 .into());
         }
-        let refused = fail::terminal_required("the new account's recovery code");
-        // Omacloud storage: only the sign-in told there's no account yet
-        return Err(if notes.signed_in_as.is_some() {
-            refused.hint("there's no account for this Google account yet; create it in a terminal of your own")
-        } else {
-            refused
-        }
-        .into());
+        return Err(fail::terminal_required("the new account's recovery code").into());
     }
     fs::create_dir_all(&config.folder)?;
     fs::create_dir_all(&paths.data)?;
     let signing = load_or_create_key(&paths.device_key())?;
     let me = fingerprint(&public_hex(&signing));
-    let (coord, anchor) = match bucket {
-        Some(opened) => opened,
-        None => {
-            let c = coordinator(&config)?;
-            let anchor = c.anchor()?;
-            (c, anchor)
-        }
-    };
+    let coord = coordinator(&config)?;
+    let anchor = coord.anchor()?;
     let creating = anchor.is_none();
-    if creating && matches!(recovery, Some((_, Recovery::Card))) {
-        return Err(fail::not_found("there's no account here to recover")
-            .hint("sign in with the Google account you used")
-            .into());
-    }
-    if let (Some(anchor), Some((code, how))) = (&anchor, &recovery) {
+    if let (Some(anchor), Some(code)) = (&anchor, &recovery) {
         let root = omacloud_core::devices::root_key(code).ok().map(|k| public_hex(&k));
         if root.as_deref() != Some(anchor.root.as_str()) {
-            return Err(match how {
-                Recovery::Card => fail::setup(
-                    "card_rejected",
-                    "that card doesn't go with this account: it may be an earlier card, replaced by \
-                     a newer one, or another account's",
-                )
-                .hint("ask your trusted contact for their latest card"),
-                Recovery::Code => fail::recovery_code_rejected("that recovery code doesn't belong to this account"),
-            }
-            .into());
+            return Err(fail::recovery_code_rejected("that recovery code doesn't belong to this account").into());
         }
     }
-    // creating an account shows its recovery code and password once, and
-    // recovering with a card shows the code again: only to a terminal.
-    // Checked again here, as the account may have appeared or gone meanwhile
+    // creating an account shows its recovery code and password once: only
+    // to a terminal. Checked again here, as the account may have appeared
+    // meanwhile
     if creating && config.repo.repository.is_empty() {
         return Err(fail::usage("creating an account needs --repo")
             .hint("run `omacloud init --help`")
@@ -867,11 +668,7 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>,
     if creating && !output::to_terminal(mode()) {
         return Err(fail::terminal_required("the new account's recovery code").into());
     }
-    if matches!(recovery, Some((_, Recovery::Card))) && !output::to_terminal(mode()) {
-        return Err(fail::terminal_required("your recovery code").into());
-    }
 
-    // the sign-in and a new bucket were told as they happened (on stderr)
     let mut out = String::new();
     let how = if creating {
         let created = account::create(coord.as_ref(), &config.repo, &signing, &config.device)?;
@@ -892,20 +689,10 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>,
             created.password
         );
         "created"
-    } else if let Some((code, how)) = recovery {
+    } else if let Some(code) = recovery {
         config.root = account::join_with_recovery(coord.as_ref(), &code, &signing, &config.device)?;
-        if how == Recovery::Card {
-            say!(
-                out,
-                "joined the account with your trusted contact's card\n\n\
-                 recovery code: {code}\n\n\
-                 Write it down again and keep it offline. Your contact's card keeps working."
-            );
-            "recovered_with_card"
-        } else {
-            say!(out, "joined the account with the recovery code");
-            "joined_with_recovery_code"
-        }
+        say!(out, "joined the account with the recovery code");
+        "joined_with_recovery_code"
     } else {
         config.root = account::request(coord.as_ref(), &signing, &config.device)?;
         say!(
@@ -917,9 +704,6 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>,
         );
         "asked_to_join"
     };
-    // bucket credentials live sealed in the account's key records, not in
-    // the config file
-    config.repo = config.repo.without_credentials();
     save(paths, &config)?;
     say!(out, "\naccount root: {}", fingerprint(&config.root));
     if paths.is_default() {
@@ -939,8 +723,6 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<(String, Recovery)>,
         "account": config.root,
         "account_fingerprint": fingerprint(&config.root),
         "approved": how != "asked_to_join",
-        "signed_in_as": notes.signed_in_as,
-        "created_bucket": notes.created_bucket,
     });
     Ok(Response::new(data, summary).human(out.trim_end()))
 }
@@ -985,7 +767,6 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     let mut alerts = config
         .notifications
         .then(|| alerts::Alerts::new((!paths.is_default()).then_some(paths.config.as_path())));
-    let mut key_at: Option<Instant> = None;
     let config_mtime = || fs::metadata(&paths.config).and_then(|m| m.modified()).ok();
     let mut config_seen = config_mtime();
     let (mut seen_marker, mut full_at, mut folders_changed) = (None, None, false);
@@ -1084,18 +865,6 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
                     full_at = Some(Instant::now());
                 }
                 Synced::Failed => seen_marker = None,
-            }
-            // a self-hosted account's new bucket key: switch, reconnect
-            if key_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
-                key_at = Some(Instant::now());
-                match follow_bucket_key(paths, &mut engine) {
-                    Ok(true) => engine = crate::engine(paths, &load(paths)?)?,
-                    Ok(false) => {}
-                    Err(e) => warn!("checking for a new bucket key: {e:#}"),
-                }
-                if let Err(e) = retire_old_keys(paths, &mut engine) {
-                    warn!("retiring old storage keys: {e:#}");
-                }
             }
             if let Some(a) = alerts.as_mut() {
                 a.check(&mut engine);
@@ -1271,7 +1040,6 @@ fn run_sync(engine: &mut Engine, waiting: &mut bool, alerts: Option<&alerts::Ale
             }
             return Synced::Stop;
         }
-        Err(e) if key_refused(&e) => warn!("the storage refused this computer's key: {e:#}. {KEY_REFUSED_HINT}"),
         Err(e) => warn!("sync failed, will retry: {e:#}"),
     }
     Synced::Failed
@@ -1304,8 +1072,8 @@ fn main() -> std::process::ExitCode {
     let mode = if daemon { cli.out.asked_mode() } else { cli.out.mode() };
     _ = MODE.set(mode);
     // a program reading the output gets warnings, not progress; the
-    // daemon's journal gets both. OpenDAL's retries (Dropbox asking it to
-    // slow down, say) are left out: one that finally fails is an error
+    // daemon's journal gets both. OpenDAL's retries are left out: one that
+    // finally fails is an error
     let filter = if mode.is_machine() && !daemon {
         "warn,opendal::layers::retry=error"
     } else {
@@ -1392,180 +1160,34 @@ fn run(cli: Cli) -> Out {
         Cmd::Init {
             folder,
             repo,
-            opts,
             coordinator,
             folders: chosen,
             settings,
             device,
             recovery_code,
-            coordination_bucket,
             join_code,
-            hosted,
-            contact_card,
         } => {
-            let mut notes = InitNotes::default();
             if paths.config.exists() {
                 return Err(already_set_up(&paths).into());
             }
-            // a card gives back the recovery code, which is shown again
-            if contact_card && !output::to_terminal(mode()) {
-                return Err(fail::terminal_required("your recovery code").into());
+            if join_code.is_some() {
+                return Err(fail::unsupported("joining with a code comes with the Omacloud network")
+                    .hint("for now, join with the account's `--repo` and `--coordinator`, then approval or the recovery code")
+                    .into());
             }
-            let mut recovery = recovery_code.map(|c| (c, Recovery::Code));
-            // Omacloud storage: signing in gives the bucket and its key
-            let service =
-                hosted.then(|| std::env::var("OMACLOUD_SERVICE_URL").unwrap_or_else(|_| hosted::SERVICE.to_string()));
-            let (repo, opts) = if let Some(service) = &service {
-                let s = if contact_card {
-                    // checked before the browser opens: a typo is caught here
-                    let card = read_secret("OMACLOUD_CONTACT_CARD", "your contact's card")?;
-                    omacloud_core::contact::checked(&card).map_err(|e| {
-                        fail::setup("card_rejected", format!("{e:#}")).hint("check the card with your trusted contact")
-                    })?;
-                    let s = hosted::sign_in_with_pad(service)?;
-                    let pad = s.contact_pad.as_deref().ok_or_else(|| {
-                        fail::setup(
-                            "card_rejected",
-                            format!("{} has no trusted contact: no card opens it", s.email),
-                        )
-                        .hint("sign in with the Google account that made the card")
-                    })?;
-                    let code = omacloud_core::contact::open(&card, pad)
-                        .map_err(|e| fail::setup("card_rejected", format!("{e:#}")))?;
-                    recovery = Some((code, Recovery::Card));
-                    s
-                } else {
-                    hosted::sign_in(service)?
-                };
-                // told now: a later failure would hide it
-                eprintln!("signed in as {}", s.email);
-                notes.signed_in_as = Some(s.email.clone());
-                let opts = [
-                    ("endpoint", s.endpoint),
-                    ("region", s.region),
-                    ("bucket", s.bucket),
-                    ("access_key_id", s.access_key_id),
-                    ("secret_access_key", s.secret_access_key),
-                ];
-                (
-                    Some("opendal:s3".to_string()),
-                    opts.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
-                )
-            } else {
-                (repo, opts)
+            let Some(coordinator) = coordinator else {
+                return Err(fail::unsupported("the Omacloud network isn't here yet")
+                    .hint("for development: `omacloud init --repo <path> --coordinator <directory>`")
+                    .into());
             };
-            // a join code says where the account coordinates
-            let joined = join_code
-                .as_deref()
-                .map(|code| {
-                    // a fixed message: the parser's would quote parts of the code
-                    parse_join_code(code).map_err(|_| {
-                        fail::setup("join_code_rejected", "that join code is damaged")
-                            .hint("copy the whole code again from `omacloud join-code` (or Show Join Code in the app)")
-                    })
-                })
-                .transpose()?;
-            // in the bucket, unless a shared directory is given
-            let coordinator = match (coordinator, &joined, repo.as_deref()) {
-                (_, Some(_), _) => SELF_HOSTED.to_string(),
-                (Some(c), _, _) => c,
-                (None, None, Some(r)) if r.starts_with("opendal:") => SELF_HOSTED.to_string(),
-                (None, None, _) => {
-                    return Err(fail::usage("say where the files live")
-                        .hint(
-                            "sign in to Omacloud storage with `--hosted`, or give a bucket of your own with \
-                         `--repo opendal:s3 --opt endpoint=... --opt bucket=... --opt access_key_id=...` \
-                         (the secret key is asked for, or comes from OMACLOUD_SECRET_ACCESS_KEY), or join an \
-                         account with `--join-code` (from `omacloud join-code` on one of its computers). The \
-                         Omacloud app (omacloud-app) walks through the same.",
-                        )
-                        .into());
-                }
-            };
-            let coordinator = if coordinator == SELF_HOSTED {
-                coordinator
-            } else {
-                absolute(Path::new(&coordinator))?.to_string_lossy().into_owned()
-            };
-            let repo = match repo.as_deref() {
-                // joining an account whose bucket location comes sealed with
-                // its key
-                None => RepoSpec {
-                    repository: String::new(),
-                    options: opts.into_iter().collect::<BTreeMap<_, _>>(),
-                },
-                Some(repo) => RepoSpec {
-                    repository: repo.to_string(),
-                    options: {
-                        let mut o = opts.into_iter().collect::<BTreeMap<_, _>>();
-                        // an S3 key's secret half: never on the command line
-                        if o.contains_key("access_key_id") && !o.contains_key("secret_access_key") {
-                            o.insert(
-                                "secret_access_key".into(),
-                                read_secret("OMACLOUD_SECRET_ACCESS_KEY", "secret access key")?,
-                            );
-                        }
-                        if repo == "opendal:dropbox" {
-                            o.entry("root".into()).or_insert("/Omacloud".into());
-                            // Omacloud's app unless another is given; a
-                            // user's own app has a secret
-                            let id = o.entry("client_id".into()).or_insert(dropbox::APP_KEY.into()).clone();
-                            let secret = match o.get("client_secret") {
-                                Some(secret) => Some(secret.clone()),
-                                None if id != dropbox::APP_KEY => {
-                                    Some(read_secret("OMACLOUD_DROPBOX_CLIENT_SECRET", "Dropbox app secret")?)
-                                }
-                                None => None,
-                            };
-                            if let Some(secret) = &secret {
-                                o.insert("client_secret".into(), secret.clone());
-                            }
-                            if !o.contains_key("refresh_token") {
-                                let refresh = dropbox::authorize(&id, secret.as_deref(), || {
-                                    read_secret("OMACLOUD_DROPBOX_AUTH_CODE", "Dropbox authorization code")
-                                })?;
-                                o.insert("refresh_token".into(), refresh);
-                            }
-                        }
-                        o
-                    },
-                },
-            };
-            // no bucket given: make a private one with a random name, which
-            // creates an account and shows its recovery code
-            let mut repo = repo;
-            if repo.repository == "opendal:s3" && !repo.options.contains_key("bucket") {
-                if !output::to_terminal(mode()) {
-                    return Err(fail::terminal_required("the new account's recovery code").into());
-                }
-                let opt = |k: &str| repo.options.get(k).cloned().unwrap_or_default();
-                let (endpoint, region) = (opt("endpoint"), opt("region"));
-                if endpoint.is_empty() {
-                    return Err(fail::usage("give the storage's endpoint: --opt endpoint=...").into());
-                }
-                let region = if region.is_empty() { "auto".to_string() } else { region };
-                let mut made = None;
-                for _ in 0..3 {
-                    let name = omacloud_core::bucket::new_bucket_name();
-                    if omacloud_core::bucket::create_bucket(
-                        &endpoint,
-                        &region,
-                        &opt("access_key_id"),
-                        &opt("secret_access_key"),
-                        &name,
-                    )? == omacloud_core::bucket::Created::Ours
-                    {
-                        made = Some(name);
-                        break;
-                    }
-                }
-                let name = made.context("couldn't find a free bucket name; try again")?;
-                // told now: if setting up fails from here, the bucket still exists
-                eprintln!("created bucket {name}");
-                notes.created_bucket = Some(name.clone());
-                repo.options.insert("bucket".into(), name);
-                repo.options.entry("region".into()).or_insert(region);
+            if repo.as_deref().is_some_and(|r| r.starts_with("opendal:")) {
+                return Err(fail::usage("--repo takes a path").into());
             }
+            let coordinator = absolute(Path::new(&coordinator))?.to_string_lossy().into_owned();
+            let repo = RepoSpec {
+                repository: repo.unwrap_or_default(),
+                options: BTreeMap::new(),
+            };
             let (folder, folders) = match folder {
                 Some(f) => (absolute(&f)?, None),
                 None => {
@@ -1608,19 +1230,8 @@ fn run(cli: Cli) -> Out {
                 settings,
                 notifications: true,
                 folders,
-                coordination: None,
-                bucket_key_seq: 0,
-                service,
-                bucket_key_retired: 0,
             };
-            let mut config = config;
-            if config.coordinator == SELF_HOSTED {
-                config.coordination = Some(match joined {
-                    Some((opts, _)) => opts,
-                    None => coordination_beside(&config.repo, coordination_bucket.as_deref())?,
-                });
-            }
-            init(&paths, config, recovery, notes)
+            init(&paths, config, recovery_code)
         }
         Cmd::Sync => {
             let config = load(&paths)?;
@@ -1635,30 +1246,15 @@ fn run(cli: Cli) -> Out {
                             .into(),
                     );
                 }
-                Err(err) if config.coordinator == SELF_HOSTED && key_refused(&err) => {
-                    return Err(fail::setup(
-                        "key_refused",
-                        format!("the storage refused this computer's key: {err:#}"),
-                    )
-                    .hint(KEY_REFUSED_HINT)
-                    .into());
-                }
                 other => other?,
             };
             let summary = format!("pushed {}, pulled {}, conflicts {}", st.pushed, st.pulled, st.conflicts);
-            let mut out = summary.clone();
-            let switched = follow_bucket_key(&paths, &mut e)?;
-            if switched {
-                say!(out);
-                out.push_str("switched to the account's new bucket key");
-            }
             let data = json!({
                 "pushed": st.pushed,
                 "pulled": st.pulled,
                 "conflicts": st.conflicts,
-                "switched_bucket_key": switched,
             });
-            Ok(Response::new(data, summary).human(out))
+            Ok(Response::new(data, summary))
         }
         Cmd::Watch { .. } => unreachable!("handled before the other commands"),
         Cmd::Skill { .. } => unreachable!("handled before loading the config"),
@@ -1741,31 +1337,12 @@ fn run(cli: Cli) -> Out {
         }
         Cmd::Settings { action } => settings(&paths, action.unwrap_or(SettingsCmd::Status)),
         Cmd::Secrets { action } => secrets(&paths, action.unwrap_or(SecretsCmd::List)),
-        Cmd::JoinCode => {
-            if !output::to_terminal(mode()) {
-                return Err(fail::terminal_required("a join code (it holds your bucket's keys)").into());
-            }
-            let config = load(&paths)?;
-            let coordination = config
-                .coordination
-                .as_ref()
-                .filter(|_| config.coordinator == SELF_HOSTED)
-                .ok_or_else(|| {
-                    fail::unsupported("this account keeps in step through a shared directory, not its bucket")
-                        .hint("other computers join with `omacloud init --coordinator <that directory>`")
-                })?;
-            let blob = serde_json::to_vec(&json!({
-                "coordination": coordination,
-                "account": config.root,
-            }))?;
-            eprintln!(
-                "It holds your bucket's keys: pass it privately. The new device runs\n  \
-                 omacloud init --join-code <code>\nand then needs your approval (or your recovery code)."
-            );
-            Ok(Response::new(Value::Null, "join code").human(format!("omacloud-join-{}", hex::encode(blob))))
-        }
+        Cmd::JoinCode => Err(fail::unsupported("join codes come with the Omacloud network")
+            .hint(
+                "other computers join with `omacloud init --repo <path> --coordinator <directory>`, the account's own",
+            )
+            .into()),
         Cmd::Folders { action } => folders(&paths, action.unwrap_or(FoldersCmd::List)),
-        Cmd::Bucket { action } => bucket(&paths, action.unwrap_or(BucketCmd::Status)),
         Cmd::Recovery { action } => recovery(&paths, action),
         Cmd::Packages { action } => packages(&paths, action.unwrap_or(PackagesCmd::List)),
         Cmd::RestoreMachine { from, yes } => {
@@ -1841,7 +1418,7 @@ fn run(cli: Cli) -> Out {
             let data = json!({ "epoch": r.epoch, "snapshots": r.snapshots, "left": r.left });
             Ok(Response::new(data, summary.clone()).human(format!("{summary}\n{}", leftover_text(&r))))
         }
-        Cmd::Export { to, to_opts } => {
+        Cmd::Export { to } => {
             if !output::to_terminal(mode()) {
                 return Err(fail::terminal_required("the repository password").into());
             }
@@ -1853,7 +1430,7 @@ fn run(cli: Cli) -> Out {
             if let Some(to) = to {
                 let dest = RepoSpec {
                     repository: to,
-                    options: to_opts.into_iter().collect(),
+                    options: BTreeMap::new(),
                 };
                 let n = spec.copy_files_to(&dest)?;
                 eprintln!("copied {n} files to {}", dest.repository);
@@ -2409,8 +1986,7 @@ fn leftover_text(r: &omacloud_core::Rotated) -> String {
         "the old repository is deleted".to_string()
     } else {
         format!(
-            "the bucket's delete protection keeps {} or more files of the old repository; \
-             they are deleted once their retention ends",
+            "{} or more files of the old repository couldn't be deleted; a later rotation tries again",
             r.left
         )
     }
@@ -2572,63 +2148,23 @@ fn read_secret(var: &str, what: &str) -> Result<String> {
     Ok(secret)
 }
 
-/// Where a computer on Omacloud storage signs in, and its account (the
-/// bucket).
-fn hosted_account(config: &Config) -> Option<(String, String)> {
-    let service = hosted_service(config)?;
-    Some((service, config.repo.options.get("bucket")?.clone()))
-}
-
 fn recovery(paths: &Paths, action: RecoveryCmd) -> Out {
-    use omacloud_core::{contact, shamir};
-    // all but removing the contact print the recovery code or a part of it;
-    // combine reads its shares from stdin, which may be a pipe
+    use omacloud_core::shamir;
+    // both print the recovery code or a part of it; combine reads its
+    // shares from stdin, which may be a pipe
     let to_terminal = if matches!(action, RecoveryCmd::Combine) {
         output::stdout_to_terminal(mode())
     } else {
         output::to_terminal(mode())
     };
-    if !matches!(action, RecoveryCmd::Contact { remove: true }) && !to_terminal {
+    if !to_terminal {
         let what = match action {
-            RecoveryCmd::Contact { .. } => "a trusted contact's card",
             RecoveryCmd::Split { .. } => "shares of your recovery code",
             RecoveryCmd::Combine => "your recovery code",
         };
         return Err(fail::terminal_required(what).into());
     }
     match action {
-        RecoveryCmd::Contact { remove } => {
-            let config = load_without_key(paths)?;
-            let (service, account) = hosted_account(&config).ok_or_else(|| {
-                fail::unsupported("a trusted contact needs Omacloud storage").hint(
-                    "with storage of your own, give someone you trust a copy of your recovery code, or split \
-                     it among several (`omacloud recovery split`)",
-                )
-            })?;
-            if remove {
-                let email = hosted::set_contact(&service, &account, None)?;
-                return Ok(Response::new(
-                    json!({ "account": email, "contact": false }),
-                    format!("{email} has no trusted contact now: their card opens nothing"),
-                ));
-            }
-            let code = read_recovery_code()?;
-            let root =
-                omacloud_core::devices::root_key(&code).map_err(|e| fail::recovery_code_rejected(format!("{e:#}")))?;
-            if public_hex(&root) != config.root {
-                return Err(fail::recovery_code_rejected("that recovery code belongs to another account").into());
-            }
-            let pad = contact::new_pad();
-            let card = contact::card(&code, &pad)?;
-            let email = hosted::set_contact(&service, &account, Some(&pad))?;
-            eprintln!(
-                "Give this card to the person you trust. If you lose your recovery code and \
-                 every computer, they read it to you, and `omacloud init --hosted \
-                 --contact-card` with a sign-in as {email} brings your account back. On its \
-                 own the card opens nothing. Earlier cards stop working."
-            );
-            Ok(Response::new(Value::Null, "trusted contact's card").human(card))
-        }
         RecoveryCmd::Split { threshold, shares } => {
             let code = read_recovery_code()?;
             let root =
@@ -2695,29 +2231,9 @@ fn status(paths: &Paths) -> Out {
     let members = chain.members();
     let me = e.device_key();
     _ = e.load_folders();
-    // a self-hosted account's latest bucket key change, and who switched
-    let bucket_key = if config.coordinator == SELF_HOSTED {
-        e.bucket_key_status().ok().flatten().map(|(seq, acked)| {
-            let computers: Vec<_> = members
-                .valid
-                .iter()
-                .map(|(k, name)| json!({ "name": name, "fingerprint": fingerprint(k), "switched": acked.contains(k) }))
-                .collect();
-            json!({ "seq": seq, "computers": computers, "retired": config.bucket_key_retired >= seq })
-        })
-    } else {
-        None
-    };
     let st = e.state();
-    // an own bucket's location comes sealed with the key
     let repo = e.repository().map_or_else(|_| config.repo.clone(), |r| r.0);
-    let kind = if repo.repository == "opendal:dropbox" || is_dropbox(&config) {
-        "dropbox"
-    } else if repo.is_bucket() {
-        "bucket"
-    } else {
-        "path"
-    };
+    let kind = "path";
     let role = if members.valid.contains_key(&me) {
         "member"
     } else if members.revoked.contains_key(&me) {
@@ -2757,17 +2273,7 @@ fn status(paths: &Paths) -> Out {
     } else {
         say!(out, "folder   {}", config.folder.display());
     }
-    match repo.options.get("bucket") {
-        Some(bucket) if repo.is_bucket() => say!(
-            out,
-            "repo     {} bucket {bucket}{}",
-            repo.repository,
-            repo.options
-                .get("endpoint")
-                .map_or_else(String::new, |e| format!(" at {e}"))
-        ),
-        _ => say!(out, "repo     {}", repo.repository),
-    }
+    say!(out, "repo     {}", repo.repository);
     match &st.base {
         Some(b) => say!(out, "synced   head {} (snapshot {})", b.seq, &b.snapshot[..8]),
         None => say!(out, "synced   nothing yet"),
@@ -2835,16 +2341,9 @@ fn status(paths: &Paths) -> Out {
         "repo": {
             "kind": kind,
             "repository": repo.repository,
-            "bucket": repo.options.get("bucket"),
-            "endpoint": repo.options.get("endpoint"),
-            "root": repo.options.get("root"),
-            "client_id": repo.options.get("client_id").or_else(|| config.coordination.as_ref().and_then(|c| c.get("client_id"))),
         },
         "synced_head": st.base.as_ref().map(|b| b.seq),
         "synced_at": (st.synced_at > 0).then_some(st.synced_at),
-        "self_hosted": config.coordinator == SELF_HOSTED,
-        "hosted": hosted_service(&config).is_some(),
-        "bucket_key": bucket_key,
         "epoch": st.secret.as_ref().map(|s| s.0),
         "this_device": { "fingerprint": fingerprint(&me), "role": role },
         "devices": list(&members.valid),
@@ -2932,429 +2431,6 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
             .ids(ids)
             .count(synced.len()),
     )
-}
-
-/// Where coordination lives beside the data: the data's bucket (or
-/// `bucket`, with the same endpoint and keys), under `omacloud-coordination`.
-fn coordination_beside(repo: &RepoSpec, bucket: Option<&str>) -> Result<BTreeMap<String, String>> {
-    let scheme = repo
-        .repository
-        .strip_prefix("opendal:")
-        .context("coordinating in the bucket needs the repository to be one (`--repo opendal:s3 --opt ...`)")?;
-    let mut opts: BTreeMap<String, String> = repo
-        .options
-        .iter()
-        .filter(|(k, _)| !omacloud_core::repo::LOCAL_OPTIONS.contains(&k.as_str()))
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    let root = match bucket {
-        Some(b) => {
-            _ = opts.insert("bucket".into(), b.into());
-            "/omacloud-coordination".to_string()
-        }
-        None => format!(
-            "{}/omacloud-coordination",
-            opts.get("root").map_or("", |r| r.trim_end_matches('/'))
-        ),
-    };
-    _ = opts.insert("root".into(), root);
-    _ = opts.insert("scheme".into(), scheme.to_string());
-    Ok(opts)
-}
-
-/// A code from `omacloud join-code`: where the account coordinates, and
-/// its id.
-fn parse_join_code(code: &str) -> Result<(BTreeMap<String, String>, String)> {
-    let bytes = code
-        .trim()
-        .strip_prefix("omacloud-join-")
-        .and_then(|h| hex::decode(h).ok())
-        .context("that isn't a join code from `omacloud join-code`")?;
-    let v: serde_json::Value = serde_json::from_slice(&bytes)?;
-    let opts: BTreeMap<String, String> = serde_json::from_value(v["coordination"].clone())?;
-    let account = v["account"]
-        .as_str()
-        .context("the join code names no account")?
-        .to_string();
-    Ok((opts, account))
-}
-
-/// Switch this device to a newer bucket key, if one was published. True
-/// when it did: the caller reconnects with the new key.
-fn follow_bucket_key(paths: &Paths, e: &mut Engine) -> Result<bool> {
-    let mut config = load(paths)?;
-    if config.coordinator != SELF_HOSTED {
-        return Ok(false);
-    }
-    let Some((seq, key)) = e.latest_bucket_key()? else {
-        return Ok(false);
-    };
-    if seq <= config.bucket_key_seq {
-        return Ok(false);
-    }
-    let Some(key) = key else {
-        // joined after the change, with a key at least as new: nothing to
-        // switch to
-        config.bucket_key_seq = seq;
-        save(paths, &config)?;
-        e.ack_bucket_key(seq)?;
-        return Ok(false);
-    };
-    let coordination = config
-        .coordination
-        .as_mut()
-        .context("no coordination location in the config")?;
-    coordination.retain(|k, _| !omacloud_core::repo::CREDENTIAL_OPTIONS.contains(&k.as_str()));
-    coordination.extend(key);
-    config.bucket_key_seq = seq;
-    save(paths, &config)?;
-    e.ack_bucket_key(seq)?;
-    info!("switched to bucket key {seq}");
-    Ok(true)
-}
-
-/// Where an Omacloud storage account signs in and asks for keys; None for a
-/// bucket of the user's own. Accounts set up before 0.0.10 didn't record it,
-/// but their storage is at the service's.
-fn hosted_service(config: &Config) -> Option<String> {
-    if config.coordinator != SELF_HOSTED {
-        return None;
-    }
-    config.service.clone().or_else(|| {
-        let endpoint = config.coordination.as_ref()?.get("endpoint")?;
-        (endpoint.trim_end_matches('/') == "https://storage.omacloud.computer").then(|| hosted::SERVICE.to_string())
-    })
-}
-
-fn is_dropbox(config: &Config) -> bool {
-    config
-        .coordination
-        .as_ref()
-        .and_then(|c| c.get("scheme"))
-        .is_some_and(|scheme| scheme == "dropbox")
-}
-
-/// The key a coordination location uses.
-fn key_of(config: &Config) -> Result<(String, String, String)> {
-    let c = config
-        .coordination
-        .as_ref()
-        .context("no coordination location in the config")?;
-    let get = |k: &str| c.get(k).cloned().unwrap_or_default();
-    Ok((get("region"), get("access_key_id"), get("secret_access_key")))
-}
-
-/// A new Omacloud storage key: asked for with this computer's key, or, when
-/// that key was retired (this computer missed a key change, or a removed one
-/// retired the rest), by signing in with Google again.
-fn hosted_key(config: &Config, service: &str, here_only: bool) -> Result<omacloud_core::bucket_key::Credentials> {
-    let (region, id, secret) = key_of(config)?;
-    let asked = if here_only || id.is_empty() {
-        hosted::Asked::Refused
-    } else {
-        hosted::new_key(service, &region, (&id, &secret))?
-    };
-    let (id, secret) = match asked {
-        hosted::Asked::Done(key) => key,
-        hosted::Asked::Refused => {
-            eprintln!("this computer's key isn't in use anymore: sign in again");
-            let s = hosted::sign_in(service)?;
-            if config.coordination.as_ref().and_then(|c| c.get("bucket")) != Some(&s.bucket) {
-                return Err(fail::setup(
-                    "wrong_account",
-                    format!("{} is a different Omacloud account from this computer's", s.email),
-                )
-                .hint("sign in with the Google account this computer was set up with")
-                .into());
-            }
-            (s.access_key_id, s.secret_access_key)
-        }
-    };
-    Ok([
-        ("access_key_id".to_string(), id),
-        ("secret_access_key".to_string(), secret),
-    ]
-    .into())
-}
-
-/// Retire the previous hosted key or Dropbox token after every remaining
-/// computer acknowledges the change. True when this computer did it now.
-fn retire_old_keys(paths: &Paths, e: &mut Engine) -> Result<bool> {
-    let mut config = load(paths)?;
-    let dropbox = is_dropbox(&config);
-    let service = hosted_service(&config);
-    if !dropbox && service.is_none() {
-        return Ok(false);
-    }
-    let Some((seq, acked)) = e.bucket_key_status()? else {
-        return Ok(false);
-    };
-    let pending = paths.data.join(dropbox::OLD_TOKEN_FILE);
-    if config.bucket_key_retired >= seq {
-        if dropbox && pending.exists() {
-            fs::remove_file(pending)?;
-        }
-        return Ok(false);
-    }
-    if config.bucket_key_seq < seq {
-        return Ok(false);
-    }
-    let members = e.refresh_devices()?.members();
-    if !members.valid.keys().all(|k| acked.contains(k)) {
-        return Ok(false);
-    }
-    if dropbox {
-        let old = match fs::read_to_string(&pending) {
-            Ok(token) => token,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(err) => return Err(err.into()),
-        };
-        let current = config.coordination.as_ref().context("no Dropbox location")?;
-        let get = |key: &str| {
-            current
-                .get(key)
-                .map(String::as_str)
-                .with_context(|| format!("Dropbox location has no {key}"))
-        };
-        dropbox::revoke(
-            get("client_id")?,
-            current.get("client_secret").map(String::as_str),
-            &old,
-        )?;
-        config.bucket_key_retired = seq;
-        save(paths, &config)?;
-        fs::remove_file(pending)?;
-        info!("revoked old Dropbox token after key change {seq}");
-        return Ok(true);
-    }
-    // only a computer on the key the change shared keeps it: one that
-    // joined after has a key of its own
-    if !matches!(e.latest_bucket_key()?, Some((s, Some(_))) if s == seq) {
-        return Ok(false);
-    }
-    let (region, id, secret) = key_of(&config)?;
-    match hosted::retire_others(service.as_deref().expect("hosted storage"), &region, (&id, &secret))? {
-        hosted::Asked::Done(n) => {
-            info!("retired {n} old storage keys after key change {seq}");
-            config.bucket_key_retired = seq;
-            save(paths, &config)?;
-            Ok(true)
-        }
-        hosted::Asked::Refused => Err(fail::setup("key_refused", "the storage refused this computer's key")
-            .hint(KEY_REFUSED_HINT)
-            .into()),
-    }
-}
-
-fn bucket(paths: &Paths, action: BucketCmd) -> Out {
-    let mut config = if matches!(action, BucketCmd::SetKey { here_only: true, .. }) {
-        load_without_key(paths)?
-    } else {
-        load(paths)?
-    };
-    if config.coordinator != SELF_HOSTED {
-        return Err(fail::unsupported("only accounts that keep in step through their bucket have a bucket key").into());
-    }
-    match action {
-        BucketCmd::Status => {
-            let mut e = engine(paths, &config)?;
-            let members = e.refresh_devices()?.members();
-            let Some((seq, acked)) = e.bucket_key_status()? else {
-                return Ok(Response::new(
-                    json!({ "seq": null, "computers": [], "waiting": 0, "retired": false }),
-                    "the bucket key was never changed through omacloud",
-                ));
-            };
-            let mut out = String::new();
-            say!(out, "key change {seq}:");
-            let mut computers = Vec::new();
-            for (k, name) in &members.valid {
-                let done = acked.contains(k);
-                say!(
-                    out,
-                    "  {}  {name:<16} {}",
-                    fingerprint(k),
-                    if done { "switched" } else { "not yet" }
-                );
-                computers.push(json!({ "fingerprint": fingerprint(k), "name": name, "switched": done }));
-            }
-            let waiting = members.valid.keys().filter(|k| !acked.contains(*k)).count();
-            let mut retired = false;
-            let summary = if waiting == 0 && (hosted_service(&config).is_some() || is_dropbox(&config)) {
-                let config_now = load(paths)?;
-                retired = config_now.bucket_key_retired >= seq || retire_old_keys(paths, &mut e)?;
-                if retired {
-                    "every computer switched, and the old keys are retired: a removed or lost computer is cut off"
-                } else if is_dropbox(&config) {
-                    "every computer switched; check the computer that changed the Dropbox token to confirm the old token was revoked"
-                } else {
-                    "every computer switched; the old keys are retired by a computer on the new key"
-                }
-                .to_string()
-            } else if waiting == 0 {
-                "every computer switched: delete the old key at your provider; a removed or lost computer is then cut off"
-                    .to_string()
-            } else {
-                format!("{waiting} computers still to switch; they do on their next sync")
-            };
-            say!(out, "{summary}");
-            let data = json!({ "seq": seq, "computers": computers, "waiting": waiting, "retired": retired });
-            Ok(Response::new(data, summary).human(out.trim_end()))
-        }
-        BucketCmd::SetKey {
-            access_key_id,
-            here_only,
-        } => {
-            let key: omacloud_core::bucket_key::Credentials = match (access_key_id, hosted_service(&config)) {
-                (Some(access_key_id), _) => {
-                    // the same key again would cut nobody off
-                    if !here_only
-                        && config.coordination.as_ref().and_then(|c| c.get("access_key_id")) == Some(&access_key_id)
-                    {
-                        return Err(CliError::new(
-                            "same_key",
-                            output::EXIT_USAGE,
-                            format!("{access_key_id} is the key in use"),
-                        )
-                        .hint("make a new key at your provider first")
-                        .into());
-                    }
-                    let secret = read_secret("OMACLOUD_SECRET_ACCESS_KEY", "secret access key")?;
-                    [
-                        ("access_key_id".to_string(), access_key_id),
-                        ("secret_access_key".to_string(), secret),
-                    ]
-                    .into()
-                }
-                (None, Some(service)) => hosted_key(&config, &service, here_only)?,
-                (None, None) if is_dropbox(&config) => {
-                    let c = config.coordination.as_ref().context("no Dropbox location")?;
-                    let id = c.get("client_id").context("no Dropbox app key")?;
-                    // a user's own app has a secret; Omacloud's (PKCE) none
-                    let secret = match c.get("client_secret") {
-                        Some(secret) if !here_only => Some(secret.clone()),
-                        _ if id != dropbox::APP_KEY => {
-                            Some(read_secret("OMACLOUD_DROPBOX_CLIENT_SECRET", "Dropbox app secret")?)
-                        }
-                        _ => None,
-                    };
-                    let refresh = dropbox::authorize(id, secret.as_deref(), || {
-                        read_secret("OMACLOUD_DROPBOX_AUTH_CODE", "Dropbox authorization code")
-                    })?;
-                    if !here_only && c.get("refresh_token") == Some(&refresh) {
-                        return Err(CliError::new(
-                            "same_key",
-                            output::EXIT_USAGE,
-                            "Dropbox returned the token already in use; it would not lock out the removed computer",
-                        )
-                        .hint("authorize the app again for a new code")
-                        .into());
-                    }
-                    let mut key: BTreeMap<String, String> = [("refresh_token".to_string(), refresh)].into();
-                    if let Some(secret) = secret {
-                        key.insert("client_secret".to_string(), secret);
-                    }
-                    key
-                }
-                (None, None) => {
-                    return Err(fail::usage("give the new key")
-                        .hint("make it at your provider, then `--access-key-id <id>`")
-                        .into());
-                }
-            };
-            // does the new key reach the bucket?
-            let mut trial = config.clone();
-            if let Some(c) = trial.coordination.as_mut() {
-                c.retain(|k, _| !omacloud_core::repo::CREDENTIAL_OPTIONS.contains(&k.as_str()));
-                c.extend(key.clone());
-            }
-            match coordinator(&trial)?.anchor() {
-                Ok(Some(_)) => {}
-                Ok(None) => {
-                    return Err(CliError::new(
-                        "no_account",
-                        output::EXIT_NOT_FOUND,
-                        "the new key reaches a bucket with no account in it",
-                    )
-                    .into());
-                }
-                Err(e) if key_refused(&e) => {
-                    return Err(
-                        fail::setup("key_refused", format!("the new key doesn't reach the bucket: {e:#}"))
-                            .hint("check the key's id and secret, and that it may read and write this bucket")
-                            .into(),
-                    );
-                }
-                Err(e) => return Err(e.context("the new key doesn't reach the bucket")),
-            }
-            if here_only {
-                config = trial;
-                save(paths, &config)?;
-                return Ok(Response::new(
-                    json!({ "seq": null, "here_only": true }),
-                    "this computer uses the new key; it picks up the account's key change on the next sync",
-                ));
-            }
-            // published with the old key, which still works
-            let mut e = engine(paths, &config)?;
-            let pending = paths.data.join(dropbox::OLD_TOKEN_FILE);
-            if is_dropbox(&config) {
-                // A failed publish can leave the locally saved old token.
-                // Discard it only when the account has no newer key record.
-                let existing = match fs::read_to_string(&pending) {
-                    Ok(token) => Some(token),
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-                    Err(err) => return Err(err.into()),
-                };
-                if let Some(old) = existing {
-                    let current = config.coordination.as_ref().and_then(|c| c.get("refresh_token"));
-                    let latest = e.bucket_key_status()?.map_or(0, |(seq, _)| seq);
-                    if current == Some(&old) && latest <= config.bucket_key_seq {
-                        fs::remove_file(&pending)?;
-                    }
-                }
-                if pending.exists() {
-                    return Err(fail::usage("an earlier Dropbox token still awaits revocation")
-                        .hint("wait until every computer switched (`omacloud bucket status`), then try again")
-                        .into());
-                }
-                let old = config
-                    .coordination
-                    .as_ref()
-                    .and_then(|c| c.get("refresh_token"))
-                    .context("no old Dropbox token")?;
-                let mut file = fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .mode(0o600)
-                    .open(&pending)?;
-                file.write_all(old.as_bytes())?;
-                file.sync_all()?;
-            }
-            let seq = e.change_bucket_key(&key)?;
-            config = trial;
-            config.bucket_key_seq = seq;
-            save(paths, &config)?;
-            let text = if hosted_service(&config).is_some() || is_dropbox(&config) {
-                format!(
-                    "key change {seq} published, sealed to this account's computers. Each switches on \
-                     its next sync, and once all have, the old keys are retired: a removed computer is \
-                     then cut off. `omacloud bucket status` shows which have."
-                )
-            } else {
-                format!(
-                    "key change {seq} published, sealed to this account's computers. Each switches on its \
-                     next sync; `omacloud bucket status` shows which have. Keep the old key until all have, \
-                     then delete it at your provider."
-                )
-            };
-            Ok(Response::new(
-                json!({ "seq": seq, "here_only": false }),
-                format!("key change {seq} published"),
-            )
-            .human(text))
-        }
-    }
 }
 
 #[cfg(test)]

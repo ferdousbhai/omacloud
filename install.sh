@@ -173,9 +173,9 @@ fi
 
 cat <<EOT
 
-Done. Open "Omacloud" from the app launcher (Super + Space) to set up this
-computer: your own storage bucket, a join code from one of your computers,
-or, optionally, Omacloud storage with a Google sign-in (by invitation for
-now). Updates arrive with the rest of the system through:
+Done. Omacloud's storage, the Omacloud network, is still being built, so
+setting up an account isn't possible yet; "Omacloud" in the app launcher
+(Super + Space) will set up this computer once it is. Updates arrive with
+the rest of the system through:
 omarchy update
 EOT

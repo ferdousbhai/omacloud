@@ -1,23 +1,19 @@
 //! Failures as the output contract's error codes and exit codes. A command
 //! raises a [`CliError`] for what it knows (not set up, not found, a refused
 //! code); it travels in the `anyhow::Error` and [`classify`] finds it. The
-//! rest is recognised by type: the sync engine's membership errors, the
-//! storage refusing the key or being out of reach, a network failure. Anything
+//! rest is recognised by type: the sync engine's membership errors, a
+//! network failure. Anything
 //! else is `error`, exit 1.
 //!
 //! | code | exit |
 //! |---|---|
 //! | `error` (anything unrecognised), `verification_failed`, `pending`, `command_failed`, `cancelled` | 1 |
 //! | `usage`, `confirmation_required`, `terminal_required`, `ambiguous`, `already_set_up`, `exists`, `unsupported`, `same_key` | 2 |
-//! | `not_set_up`, `not_approved`, `removed`, `key_refused`, `recovery_code_rejected`, `join_code_rejected`, `card_rejected`, `shares_rejected`, `settings_off`, `not_signed_in`, `wrong_account`, `dropbox_code_rejected`, `dropbox_not_allowed`, `keyring_off` | 3 |
+//! | `not_set_up`, `not_approved`, `removed`, `recovery_code_rejected`, `shares_rejected`, `settings_off` | 3 |
 //! | `not_found`, `no_account` | 4 |
-//! | `unavailable`, `keyring_unavailable` | 5 |
+//! | `unavailable` | 5 |
 
-use omacloud_core::{
-    DeviceError, HeadError, Membership,
-    bucket::{key_refused, unreachable},
-    epoch::EpochError,
-};
+use omacloud_core::{DeviceError, HeadError, Membership, epoch::EpochError};
 
 pub use crate::output::CliError;
 use crate::output::{EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SETUP, EXIT_UNAVAILABLE, EXIT_USAGE};
@@ -78,12 +74,6 @@ pub fn confirmation_required(what: &str) -> CliError {
     CliError::new("confirmation_required", EXIT_USAGE, format!("{what} needs confirming")).hint("pass --yes")
 }
 
-/// The remediation for a computer whose bucket key the storage refuses.
-pub const KEY_REFUSED_HINT: &str = "if the account changed its key while this computer was away, get the \
-     new key from your provider and run `omacloud bucket set-key --access-key-id <id> --here-only` (with \
-     Omacloud storage, `omacloud bucket set-key --here-only` signs in again; with Dropbox, it asks you to \
-     authorize your app again)";
-
 /// The contract's error for `e`: a [`CliError`] it carries, else what its
 /// type says, else `error`, exit 1.
 pub fn classify(e: &anyhow::Error) -> CliError {
@@ -112,14 +102,7 @@ pub fn classify(e: &anyhow::Error) -> CliError {
         return CliError::new("verification_failed", EXIT_ERROR, message)
             .hint("the storage served a history this computer refuses; check the account from another computer");
     }
-    if key_refused(e) {
-        return setup(
-            "key_refused",
-            format!("the storage refused this computer's key: {message}"),
-        )
-        .hint(KEY_REFUSED_HINT);
-    }
-    if unreachable(e) || e.chain().any(network_failure) {
+    if e.chain().any(network_failure) {
         return unavailable(message).hint("check the network connection and that the storage is up, then try again");
     }
     CliError::new("error", EXIT_ERROR, message)
