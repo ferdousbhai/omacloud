@@ -9,7 +9,8 @@
 use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
-use iroh::{Endpoint, RelayMap, RelayMode, RelayUrl, SecretKey, endpoint::presets};
+pub use iroh::SecretKey;
+use iroh::{Endpoint, RelayMap, RelayMode, RelayUrl, endpoint::presets};
 use omacloud_core::RepoSpec;
 
 use crate::{

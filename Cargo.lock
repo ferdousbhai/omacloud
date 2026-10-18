@@ -4252,6 +4252,7 @@ dependencies = [
  "log",
  "notify",
  "omacloud-core",
+ "omacloud-net",
  "rand 0.8.8",
  "serde",
  "serde_json",

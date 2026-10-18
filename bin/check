@@ -25,6 +25,9 @@ else
   echo "note: skipping the plain-restic restore (install restic to run it)" >&2
 fi
 
+step "the network, on this machine"
+scripts/network.sh target/debug/omacloud
+
 step "server"
 (cd server && { [[ -d node_modules ]] || npm ci; } && npm run check)
 

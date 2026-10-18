@@ -123,7 +123,9 @@ impl DirStore {
     }
 
     fn bump(dir: &Path) -> Result<()> {
-        let v: u64 = read(&dir.join("version"))?.and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+        let v: u64 = read(&dir.join("version"))?
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
         fs::write(dir.join("version"), (v + 1).to_string())?;
         Ok(())
     }

@@ -12,6 +12,7 @@ full-backends = ["omacloud-core/full-backends"]
 
 [dependencies]
 omacloud-core.workspace = true
+omacloud-net.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 toml.workspace = true

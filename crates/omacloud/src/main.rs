@@ -18,6 +18,7 @@ use std::{
 mod agent_skill;
 mod alerts;
 mod fail;
+mod net;
 mod output;
 mod power;
 
@@ -223,11 +224,38 @@ enum Cmd {
         #[arg(long)]
         to: Option<String>,
     },
+    /// The space this computer gives the Omacloud network
+    Node {
+        #[command(subcommand)]
+        action: Option<NodeCmd>,
+    },
     /// Print the agent skill (SKILL.md) built into omacloud, or install it
     /// for your coding agents
     Skill {
         #[command(subcommand)]
         action: Option<SkillCmd>,
+    },
+}
+
+#[derive(Subcommand)]
+enum NodeCmd {
+    /// Show what this computer gives and keeps for others
+    Status,
+    /// Give this much space (200G, 512M; 0 for none); the daemon picks it
+    /// up when restarted
+    Give { size: String },
+    /// Run only a node, no account: a computer that gives space and syncs
+    /// nothing of its own (a seed)
+    Run {
+        /// Space to give [default: as set with `node give`, or 20G]
+        #[arg(long)]
+        give: Option<String>,
+        /// The network's Worker [default: OMACLOUD_NETWORK, or omacloud.computer]
+        #[arg(long)]
+        network: Option<String>,
+        /// Relay server, repeatable
+        #[arg(long = "relay")]
+        relays: Vec<String>,
     },
 }
 
@@ -365,7 +393,8 @@ enum DevicesCmd {
 struct Config {
     device: String,
     folder: PathBuf,
-    /// The shared directory computers keep in step through
+    /// `network` (the Omacloud network, see `network`), or the shared
+    /// directory computers keep in step through, for development
     coordinator: String,
     repo: RepoSpec,
     /// The account root public key (hex), pinned at setup
@@ -383,6 +412,76 @@ struct Config {
     /// of `folder`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     folders: Option<FolderChoice>,
+    /// On the Omacloud network: how this computer reaches it, and what it
+    /// gives
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    network: Option<NetConfig>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct NetConfig {
+    /// The network's Worker, or `dir:<path>` for a network on one machine
+    url: String,
+    /// Relay servers for reaching computers behind routers
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    relays: Vec<String>,
+    /// Bytes of this computer's disk kept for others; 0 gives none
+    #[serde(default = "default_give")]
+    give: u64,
+}
+
+/// What a computer gives unless told otherwise: 20 GiB.
+fn default_give() -> u64 {
+    20 << 30
+}
+
+/// `coordinator = "network"`: the account keeps in step on the Omacloud
+/// network.
+const NETWORK: &str = "network";
+
+/// The network's Worker, unless OMACLOUD_NETWORK says otherwise.
+fn network_url() -> String {
+    std::env::var("OMACLOUD_NETWORK").unwrap_or_else(|_| omacloud_net::worker::URL.to_string())
+}
+
+/// The network for this run, started the first time it's needed.
+static SESSION: OnceLock<omacloud_net::session::Session> = OnceLock::new();
+
+fn session(paths: &Paths, net: &NetConfig) -> Result<&'static omacloud_net::session::Session> {
+    if let Some(s) = SESSION.get() {
+        return Ok(s);
+    }
+    let own = omacloud_net::session::node_key(&paths.node_key())?.public();
+    let s = omacloud_net::session::Session::start(omacloud_net::session::Options {
+        url: net.url.clone(),
+        relays: net.relays.clone(),
+        copies: 2,
+        own: Some(*own.as_bytes()),
+    })?;
+    Ok(SESSION.get_or_init(|| s))
+}
+
+/// The account's key for its records on the network: what the recovery
+/// code gives, and a join code carries.
+fn read_seed(paths: &Paths) -> Result<[u8; 32]> {
+    let text = fs::read_to_string(paths.seed()).with_context(|| format!("reading {}", paths.seed().display()))?;
+    hex::decode(text.trim())?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("{} isn't an account key", paths.seed().display()))
+}
+
+fn write_seed(paths: &Paths, seed: &[u8; 32]) -> Result<()> {
+    fs::create_dir_all(&paths.data)?;
+    let tmp = paths.seed().with_extension("tmp");
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)?
+        .write_all(hex::encode(seed).as_bytes())?;
+    fs::rename(&tmp, paths.seed())?;
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -524,6 +623,13 @@ impl Paths {
     fn device_key(&self) -> PathBuf {
         self.data.join("device.key")
     }
+    /// This computer's node key: its identity as a holder.
+    fn node_key(&self) -> PathBuf {
+        self.data.join("node.key")
+    }
+    fn seed(&self) -> PathBuf {
+        self.data.join("account.seed")
+    }
     fn state(&self) -> PathBuf {
         self.data.join("state.json")
     }
@@ -562,14 +668,36 @@ fn save(paths: &Paths, config: &Config) -> Result<()> {
 }
 
 /// Where `config`'s computers keep in step.
-fn coordinator(config: &Config) -> Result<Arc<dyn Coordinator>> {
-    Ok(Arc::new(DirCoordinator::new(&config.coordinator)?))
+fn coordinator(paths: &Paths, config: &Config) -> Result<Arc<dyn Coordinator>> {
+    Ok(match network_coordinator(paths, config)? {
+        Some(c) => c,
+        None => Arc::new(DirCoordinator::new(&config.coordinator)?),
+    })
+}
+
+fn network_coordinator(paths: &Paths, config: &Config) -> Result<Option<Arc<omacloud_net::coord::NetworkCoordinator>>> {
+    let Some(net) = config.network.as_ref().filter(|_| config.coordinator == NETWORK) else {
+        return Ok(None);
+    };
+    let account = omacloud_net::coord::Account::from_seed(read_seed(paths)?);
+    Ok(Some(Arc::new(session(paths, net)?.coordinator(account))))
+}
+
+/// Where the files live: the network's bucket through this run's gateway,
+/// or the path set up with.
+fn repo_spec(paths: &Paths, config: &Config) -> Result<RepoSpec> {
+    Ok(
+        match config.network.as_ref().filter(|_| config.coordinator == NETWORK) {
+            Some(net) => session(paths, net)?.repo("/omacloud"),
+            None => config.repo.clone(),
+        },
+    )
 }
 
 fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
     let signing = load_or_create_key(&paths.device_key())?;
-    let coord = coordinator(config)?;
-    let mut repo = config.repo.clone();
+    let coord = coordinator(paths, config)?;
+    let mut repo = repo_spec(paths, config)?;
     config.limits.apply(&mut repo);
     let setup = Setup {
         device: config.device.clone(),
@@ -628,14 +756,21 @@ fn already_set_up(paths: &Paths) -> CliError {
     .hint("give another --config to set up a second account here")
 }
 
-fn init(paths: &Paths, mut config: Config, recovery: Option<String>) -> Out {
+/// `new_code`: on the network, the recovery code an account created here
+/// gets (the account is found by what it gives).
+fn init(paths: &Paths, mut config: Config, recovery: Option<String>, new_code: Option<String>) -> Out {
     if paths.config.exists() {
         return Err(already_set_up(paths).into());
     }
+    let network = config.coordinator == NETWORK;
     // the refusals that need no account come before anything is made here:
     // no folder, device key or coordination skeleton is left behind. A
     // shared directory is only looked at, as opening it makes its skeleton
-    let creating = !Path::new(&config.coordinator).join("account.json").exists();
+    let creating = if network {
+        new_code.is_some()
+    } else {
+        !Path::new(&config.coordinator).join("account.json").exists()
+    };
     if creating && !output::to_terminal(mode()) {
         if config.repo.repository.is_empty() {
             return Err(fail::usage("creating an account needs --repo")
@@ -648,7 +783,11 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<String>) -> Out {
     fs::create_dir_all(&paths.data)?;
     let signing = load_or_create_key(&paths.device_key())?;
     let me = fingerprint(&public_hex(&signing));
-    let coord = coordinator(&config)?;
+    let network_coord = network_coordinator(paths, &config)?;
+    let coord: Arc<dyn Coordinator> = match &network_coord {
+        Some(c) => c.clone(),
+        None => coordinator(paths, &config)?,
+    };
     let anchor = coord.anchor()?;
     let creating = anchor.is_none();
     if let (Some(anchor), Some(code)) = (&anchor, &recovery) {
@@ -671,8 +810,25 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<String>) -> Out {
 
     let mut out = String::new();
     let how = if creating {
-        let created = account::create(coord.as_ref(), &config.repo, &signing, &config.device)?;
+        let created = match (&network_coord, new_code) {
+            (Some(nc), Some(code)) => {
+                // writes need a capability before the epoch's exists: a
+                // first one, replaced as the account's first epoch begins
+                let first = hex::encode(rand::random::<[u8; 32]>());
+                if !nc.create(&first)? {
+                    return Err(fail::usage("an account with this recovery code exists already").into());
+                }
+                nc.set_cap(first);
+                account::create_with_code(nc.as_ref(), &repo_spec(paths, &config)?, &signing, &config.device, code)?
+            }
+            _ => account::create(coord.as_ref(), &config.repo, &signing, &config.device)?,
+        };
         config.root = created.root;
+        let place = if network {
+            "on the Omacloud network".to_string()
+        } else {
+            config.repo.repository.clone()
+        };
         say!(
             out,
             "created repository and account {}\n\n\
@@ -683,7 +839,7 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<String>) -> Out {
              it and without a device, the data is gone.\n\n\
              repository password (for leaving omacloud, also in `omacloud export`): {}\n\n\
              Other computers join with a code from `omacloud join-code`.",
-            config.repo.repository,
+            place,
             config.root,
             created.recovery_code,
             created.password
@@ -744,6 +900,20 @@ const UPGRADED: i32 = 75;
 fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     power::be_nice();
     let mut engine = engine(paths, config)?;
+    // on the network: the space given others, and this account's copies
+    let mut contribution = match config.network.as_ref().filter(|_| config.coordinator == NETWORK) {
+        Some(n) => {
+            let s = session(paths, n)?;
+            match net::Contribution::start(s, &paths.data, n.give) {
+                Ok(c) => Some((s, c)),
+                Err(e) => {
+                    warn!("not giving space to the network this run: {e:#}");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
     let exe = Exe::running();
     // a path changed, or `None`: events were lost, look at everything
     let (files, rx) = mpsc::channel();
@@ -869,6 +1039,9 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             if let Some(a) = alerts.as_mut() {
                 a.check(&mut engine);
             }
+        }
+        if let Some((s, c)) = contribution.as_mut() {
+            c.tick(s, Some(&engine));
         }
         let mut notice = |changed: Option<Vec<PathBuf>>| match changed {
             // what matters is pending now; the rest needs nothing
@@ -1075,9 +1248,9 @@ fn main() -> std::process::ExitCode {
     // daemon's journal gets both. OpenDAL's retries are left out: one that
     // finally fails is an error
     let filter = if mode.is_machine() && !daemon {
-        "warn,opendal::layers::retry=error"
+        "warn,opendal::layers::retry=error,iroh=error,iroh_blobs=error,noq=error,tracing=warn"
     } else {
-        "info,rustic_core=warn,opendal::layers::retry=error"
+        "info,rustic_core=warn,opendal::layers::retry=error,iroh=warn,iroh_blobs=warn,noq=warn,tracing=warn"
     };
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(filter)).init();
     if let Some(home) = agent_skill::home() {
@@ -1170,23 +1343,70 @@ fn run(cli: Cli) -> Out {
             if paths.config.exists() {
                 return Err(already_set_up(&paths).into());
             }
-            if join_code.is_some() {
-                return Err(fail::unsupported("joining with a code comes with the Omacloud network")
-                    .hint("for now, join with the account's `--repo` and `--coordinator`, then approval or the recovery code")
-                    .into());
-            }
-            let Some(coordinator) = coordinator else {
-                return Err(fail::unsupported("the Omacloud network isn't here yet")
-                    .hint("for development: `omacloud init --repo <path> --coordinator <directory>`")
-                    .into());
-            };
             if repo.as_deref().is_some_and(|r| r.starts_with("opendal:")) {
                 return Err(fail::usage("--repo takes a path").into());
             }
-            let coordinator = absolute(Path::new(&coordinator))?.to_string_lossy().into_owned();
-            let repo = RepoSpec {
-                repository: repo.unwrap_or_default(),
-                options: BTreeMap::new(),
+            // the network, unless a shared directory is given (development)
+            let (coordinator, repo, network, new_code) = match coordinator {
+                Some(c) => {
+                    if join_code.is_some() {
+                        return Err(
+                            fail::usage("a join code is for the Omacloud network, not a shared directory").into(),
+                        );
+                    }
+                    let dir = absolute(Path::new(&c))?.to_string_lossy().into_owned();
+                    let repo = RepoSpec {
+                        repository: repo.unwrap_or_default(),
+                        options: BTreeMap::new(),
+                    };
+                    (dir, repo, None, None)
+                }
+                None => {
+                    if repo.is_some() {
+                        return Err(fail::usage("--repo goes with --coordinator; the network needs neither").into());
+                    }
+                    // the account's key: from the join code, the recovery
+                    // code, or a new account's code
+                    let (seed, url, new_code) = match (&join_code, &recovery_code) {
+                        (Some(code), _) => {
+                            let (seed, url) = parse_join_code(code).map_err(|_| {
+                                fail::setup("join_code_rejected", "that join code is damaged").hint(
+                                    "copy the whole code again from `omacloud join-code` (or Show Join Code in the app)",
+                                )
+                            })?;
+                            (seed, url, None)
+                        }
+                        (None, Some(code)) => {
+                            let root = omacloud_core::devices::root_key(code)
+                                .map_err(|e| fail::recovery_code_rejected(format!("{e:#}")))?;
+                            (
+                                omacloud_net::coord::Account::from_root(&root.to_bytes()).seed(),
+                                network_url(),
+                                None,
+                            )
+                        }
+                        (None, None) => {
+                            if !output::to_terminal(mode()) {
+                                return Err(fail::terminal_required("the new account's recovery code").into());
+                            }
+                            let code = omacloud_core::devices::new_recovery_code();
+                            let root = omacloud_core::devices::root_key(&code)?;
+                            let seed = omacloud_net::coord::Account::from_root(&root.to_bytes()).seed();
+                            (seed, network_url(), Some(code))
+                        }
+                    };
+                    write_seed(&paths, &seed)?;
+                    let repo = RepoSpec {
+                        repository: NETWORK.into(),
+                        options: BTreeMap::new(),
+                    };
+                    let net = NetConfig {
+                        url,
+                        relays: Vec::new(),
+                        give: default_give(),
+                    };
+                    (NETWORK.to_string(), repo, Some(net), new_code)
+                }
             };
             let (folder, folders) = match folder {
                 Some(f) => (absolute(&f)?, None),
@@ -1230,8 +1450,9 @@ fn run(cli: Cli) -> Out {
                 settings,
                 notifications: true,
                 folders,
+                network,
             };
-            init(&paths, config, recovery_code)
+            init(&paths, config, recovery_code, new_code)
         }
         Cmd::Sync => {
             let config = load(&paths)?;
@@ -1337,12 +1558,31 @@ fn run(cli: Cli) -> Out {
         }
         Cmd::Settings { action } => settings(&paths, action.unwrap_or(SettingsCmd::Status)),
         Cmd::Secrets { action } => secrets(&paths, action.unwrap_or(SecretsCmd::List)),
-        Cmd::JoinCode => Err(fail::unsupported("join codes come with the Omacloud network")
-            .hint(
-                "other computers join with `omacloud init --repo <path> --coordinator <directory>`, the account's own",
-            )
-            .into()),
+        Cmd::JoinCode => {
+            if !output::to_terminal(mode()) {
+                return Err(fail::terminal_required("a join code (it opens your account's records)").into());
+            }
+            let config = load(&paths)?;
+            let net = config
+                .network
+                .as_ref()
+                .filter(|_| config.coordinator == NETWORK)
+                .ok_or_else(|| {
+                    fail::unsupported("this account keeps in step through a shared directory, not the network")
+                        .hint("other computers join with `omacloud init --repo <path> --coordinator <directory>`")
+                })?;
+            let blob = serde_json::to_vec(&json!({
+                "seed": hex::encode(read_seed(&paths)?),
+                "url": net.url,
+            }))?;
+            eprintln!(
+                "Pass it privately: it opens your account's records (not your files). The new\n\
+                 computer runs\n  omacloud init --join-code <code>\nand then needs your approval (or your recovery code)."
+            );
+            Ok(Response::new(Value::Null, "join code").human(format!("omacloud-join-{}", hex::encode(blob))))
+        }
         Cmd::Folders { action } => folders(&paths, action.unwrap_or(FoldersCmd::List)),
+        Cmd::Node { action } => node(&paths, action.unwrap_or(NodeCmd::Status)),
         Cmd::Recovery { action } => recovery(&paths, action),
         Cmd::Packages { action } => packages(&paths, action.unwrap_or(PackagesCmd::List)),
         Cmd::RestoreMachine { from, yes } => {
@@ -2233,7 +2473,8 @@ fn status(paths: &Paths) -> Out {
     _ = e.load_folders();
     let st = e.state();
     let repo = e.repository().map_or_else(|_| config.repo.clone(), |r| r.0);
-    let kind = "path";
+    let network = config.network.as_ref().filter(|_| config.coordinator == NETWORK);
+    let kind = if network.is_some() { "network" } else { "path" };
     let role = if members.valid.contains_key(&me) {
         "member"
     } else if members.revoked.contains_key(&me) {
@@ -2273,7 +2514,10 @@ fn status(paths: &Paths) -> Out {
     } else {
         say!(out, "folder   {}", config.folder.display());
     }
-    say!(out, "repo     {}", repo.repository);
+    match network {
+        Some(n) => say!(out, "storage  the Omacloud network, giving {}", net::human(n.give)),
+        None => say!(out, "repo     {}", repo.repository),
+    }
     match &st.base {
         Some(b) => say!(out, "synced   head {} (snapshot {})", b.seq, &b.snapshot[..8]),
         None => say!(out, "synced   nothing yet"),
@@ -2340,8 +2584,9 @@ fn status(paths: &Paths) -> Out {
         }),
         "repo": {
             "kind": kind,
-            "repository": repo.repository,
+            "repository": if network.is_some() { "Omacloud network".to_string() } else { repo.repository.clone() },
         },
+        "network": network.map(|n| json!({ "url": n.url, "give": n.give })),
         "synced_head": st.base.as_ref().map(|b| b.seq),
         "synced_at": (st.synced_at > 0).then_some(st.synced_at),
         "epoch": st.secret.as_ref().map(|s| s.0),
@@ -2431,6 +2676,78 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
             .ids(ids)
             .count(synced.len()),
     )
+}
+
+fn node(paths: &Paths, action: NodeCmd) -> Out {
+    match action {
+        NodeCmd::Status => {
+            let config = load(paths)?;
+            let net = config
+                .network
+                .as_ref()
+                .filter(|_| config.coordinator == NETWORK)
+                .ok_or_else(|| fail::unsupported("this account isn't on the Omacloud network"))?;
+            let key = omacloud_net::session::node_key(&paths.node_key())?;
+            let id = hex::encode(key.public().as_bytes());
+            let summary = format!("giving {}", net::human(net.give));
+            Ok(Response::new(
+                json!({ "id": id, "give": net.give, "network": net.url }),
+                summary.clone(),
+            )
+            .human(format!("{summary}\nnode {}", &id[..16])))
+        }
+        NodeCmd::Give { size } => {
+            let give = net::parse_size(&size).map_err(|e| fail::usage(format!("{e:#}")))?;
+            let mut config = load(paths)?;
+            let net = config
+                .network
+                .as_mut()
+                .ok_or_else(|| fail::unsupported("this account isn't on the Omacloud network"))?;
+            net.give = give;
+            save(paths, &config)?;
+            Ok(
+                Response::new(json!({ "give": give }), format!("giving {}", net::human(give))).human(format!(
+                    "giving {} (a running daemon picks this up when restarted: systemctl --user restart omacloud)",
+                    net::human(give)
+                )),
+            )
+        }
+        NodeCmd::Run { give, network, relays } => {
+            let give = match give {
+                Some(g) => net::parse_size(&g).map_err(|e| fail::usage(format!("{e:#}")))?,
+                None => load(paths)
+                    .ok()
+                    .and_then(|c| c.network)
+                    .map_or_else(default_give, |n| n.give),
+            };
+            let s = omacloud_net::session::Session::start(omacloud_net::session::Options {
+                url: network.unwrap_or_else(network_url),
+                relays,
+                copies: 2,
+                own: None,
+            })?;
+            fs::create_dir_all(&paths.data)?;
+            let mut c = net::Contribution::start(&s, &paths.data, give)?;
+            loop {
+                c.tick(&s, None);
+                std::thread::sleep(Duration::from_secs(30));
+            }
+        }
+    }
+}
+
+/// A code from `omacloud join-code`: the account's key, and its network.
+fn parse_join_code(code: &str) -> Result<([u8; 32], String)> {
+    let bytes = code
+        .trim()
+        .strip_prefix("omacloud-join-")
+        .and_then(|h| hex::decode(h).ok())
+        .context("that isn't a join code from `omacloud join-code`")?;
+    let v: Value = serde_json::from_slice(&bytes)?;
+    let seed: [u8; 32] = hex::decode(v["seed"].as_str().context("no account key")?)?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("not an account key"))?;
+    Ok((seed, v["url"].as_str().context("no network")?.to_string()))
 }
 
 #[cfg(test)]
