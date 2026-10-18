@@ -15,7 +15,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use omacloud_core::{
     Anchor, Coordinator, Head, JoinRequest,
     devices::DeviceEntry,
-    epoch::{EpochRecord, Grant},
+    epoch::{EpochRecord, EpochSecret, Grant},
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -236,6 +236,15 @@ impl Coordinator for NetworkCoordinator {
     fn remove_request(&self, device: &str) -> Result<()> {
         self.records
             .delete_named(&self.account.id, &self.cap()?, "requests", device)
+    }
+    fn epoch_started(&self, previous: Option<&EpochSecret>, secret: &EpochSecret) -> Result<()> {
+        if let Some(previous) = previous {
+            self.set_cap(capability(&previous.password));
+        }
+        self.replace_cap(&capability(&secret.password))
+    }
+    fn epoch_known(&self, secret: &EpochSecret) {
+        self.set_cap(capability(&secret.password));
     }
     fn marker(&self) -> Result<Option<String>> {
         Ok(Some(self.records.marker(&self.account.id)?.to_string()))

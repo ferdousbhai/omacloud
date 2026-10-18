@@ -8,14 +8,12 @@ use ed25519_dalek::SigningKey;
 use iroh::{Endpoint, RelayMode, endpoint::presets};
 use omacloud_core::{Coordinator, Engine, RepoSpec, Setup, account};
 use omacloud_net::{
-    bucket::Bucket,
-    coord::{Account, NetworkCoordinator, capability},
+    coord::{Account, NetworkCoordinator},
     gateway::{BUCKET, Gateway},
     node::{Config, Node},
     place,
     records::MemRecords,
     registry::{Listed, MemRegistry},
-    seal::Keys,
 };
 
 async fn endpoint() -> Result<Endpoint> {
@@ -54,16 +52,7 @@ fn two_computers_sync_through_the_network() -> Result<()> {
             });
             nodes.push(node);
         }
-        // the gateway's keys would come from the epoch's secret; any
-        // fixed password stands in for it here
-        let bucket = Bucket::new(
-            endpoint().await?,
-            registry,
-            Keys::from_secret("epoch"),
-            BTreeSet::new(),
-            2,
-        );
-        let gateway = Gateway::start(Arc::new(bucket)).await?;
+        let gateway = Gateway::start(endpoint().await?, registry, BTreeSet::new(), 2).await?;
         anyhow::Ok((nodes, gateway))
     })?;
 
@@ -73,9 +62,9 @@ fn two_computers_sync_through_the_network() -> Result<()> {
             ("endpoint", gateway.endpoint()),
             ("bucket", BUCKET.to_string()),
             ("region", "auto".to_string()),
-            ("access_key_id", gateway.access_key.clone()),
-            ("secret_access_key", gateway.secret_key.clone()),
             ("root", "/account".to_string()),
+            // the key comes from each epoch's password
+            ("network", "1".to_string()),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))
@@ -96,13 +85,11 @@ fn two_computers_sync_through_the_network() -> Result<()> {
         Some(provisional.clone()),
     ));
     assert!(coord_a.create(&provisional)?);
+    // creating it moves writes to the epoch's capability
     let created = account::create(coord_a.as_ref(), &repo, &a, "a")?;
-    // from now on, writes need the epoch's capability
-    let cap = capability(&created.password);
-    coord_a.replace_cap(&cap)?;
+    // b has nothing but the recovery code: the root opens the epoch's key,
+    // which gives the capability to write
     let coord_b = Arc::new(NetworkCoordinator::new(records.clone(), Account::from_seed(seed), None));
-    assert!(account::join_with_recovery(coord_b.as_ref(), &created.recovery_code, &b, "b").is_err());
-    coord_b.set_cap(cap.clone());
     account::join_with_recovery(coord_b.as_ref(), &created.recovery_code, &b, "b")?;
     // the old capability writes nothing now
     let stale = NetworkCoordinator::new(records.clone(), Account::from_seed(seed), Some(provisional));
@@ -149,6 +136,24 @@ fn two_computers_sync_through_the_network() -> Result<()> {
     assert!(ea.sync()?.pulled > 0);
     assert_eq!(fs::read_to_string(tmp.path().join("a/note.txt"))?, "edited on b");
     assert!(!tmp.path().join("a/photos/big.bin").exists());
+
+    // a new epoch: new repository, new network key and scope, and writes
+    // move to its capability; b follows it
+    let rotated = ea.rotate()?;
+    assert_eq!(rotated.epoch, 1);
+    fs::write(tmp.path().join("a/after.txt"), "epoch one")?;
+    ea.request_rescan();
+    ea.sync()?;
+    eb.sync()?;
+    assert_eq!(fs::read_to_string(tmp.path().join("b/after.txt"))?, "epoch one");
+    fs::write(tmp.path().join("b/back.txt"), "from b in epoch one")?;
+    eb.request_rescan();
+    assert!(eb.sync()?.pushed > 0);
+    ea.sync()?;
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("a/back.txt"))?,
+        "from b in epoch one"
+    );
 
     drop(gateway);
     rt.block_on(async {

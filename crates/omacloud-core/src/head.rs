@@ -174,6 +174,20 @@ pub trait Coordinator: Send + Sync {
     /// Drop a join request (after approving or declining it).
     fn remove_request(&self, device: &str) -> Result<()>;
 
+    /// A new epoch began with `secret` (`previous` is the one before, none
+    /// for the account's first): a coordinator whose writes depend on the
+    /// epoch moves them over. Called by whoever started it.
+    fn epoch_started(
+        &self,
+        _previous: Option<&crate::epoch::EpochSecret>,
+        _secret: &crate::epoch::EpochSecret,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    /// This device holds the current epoch's `secret`.
+    fn epoch_known(&self, _secret: &crate::epoch::EpochSecret) {}
+
     /// A token that changes whenever anything here is written, for
     /// coordinators that keep one: an idle device checks it, one cheap
     /// request, instead of syncing. None: there's no such token, sync to

@@ -71,14 +71,17 @@ async fn bucket(net: &Net, password: &str) -> Result<Arc<Bucket>> {
     )))
 }
 
-fn s3(g: &Gateway, root: &str) -> Result<Operator> {
+/// An epoch's network key, as the sync engine makes it.
+const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+fn s3(g: &Gateway, key: &str, root: &str) -> Result<Operator> {
     opendal::install_default();
     let builder = S3::default()
         .endpoint(&g.endpoint())
         .bucket(BUCKET)
         .region("auto")
-        .access_key_id(&g.access_key)
-        .secret_access_key(&g.secret_key)
+        .access_key_id(key)
+        .secret_access_key("network")
         .root(root);
     Ok(Operator::new(builder)?)
 }
@@ -86,9 +89,9 @@ fn s3(g: &Gateway, root: &str) -> Result<Operator> {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_s3_client_sees_a_bucket() -> Result<()> {
     let net = network(4).await?;
-    let b = bucket(&net, "pw").await?;
-    let g = Gateway::start(b.clone()).await?;
-    let op = s3(&g, "/acct/e0")?;
+    let g = Gateway::start(endpoint().await?, net.registry.clone(), BTreeSet::new(), 2).await?;
+    let b = g.bucket(KEY);
+    let op = s3(&g, KEY, "/acct/e0")?;
 
     let big: Vec<u8> = (0..1_500_000u32).map(|i| (i % 253) as u8).collect();
     op.write("data/ab/abcdef", big.clone()).await?;
@@ -126,17 +129,12 @@ async fn an_s3_client_sees_a_bucket() -> Result<()> {
     op.delete_iter(["config".to_string()]).await?;
     assert!(op.stat("config").await.is_err());
 
-    // a wrong key is turned away
-    opendal::install_default();
-    let wrong = Operator::new(
-        S3::default()
-            .endpoint(&g.endpoint())
-            .bucket(BUCKET)
-            .region("auto")
-            .access_key_id("someone")
-            .secret_access_key("else"),
-    )?;
-    assert!(wrong.read("data/ab/abcdef").await.is_err());
+    // another key reaches a bucket of its own, empty
+    let other = s3(&g, &KEY.replace('0', "f"), "/acct/e0")?;
+    assert!(other.read("data/ab/abcdef").await.is_err());
+    assert!(other.list_with("").recursive(true).await?.is_empty());
+    // and no key, nothing
+    assert!(s3(&g, "short", "/acct/e0")?.read("data/ab/abcdef").await.is_err());
     for n in net.nodes {
         n.shutdown().await;
     }

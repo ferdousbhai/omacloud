@@ -54,16 +54,18 @@ pub fn create(coord: &dyn Coordinator, repo: &RepoSpec, device: &SigningKey, nam
     // the repository comes after the first device: storage through the
     // service answers members only
     let password = random_secret();
-    let key = repo.init(&password)?;
+    let key = repo.keyed(&password).init(&password)?;
     let mut chain = DeviceChain::new(&root);
     chain.advance(coord)?;
     let secret = EpochSecret {
         password: password.clone(),
         key,
-        storage: repo.is_bucket().then(|| repo.without_local_options()),
+        // the network's location is this computer's own gateway
+        storage: (repo.is_bucket() && !repo.is_network()).then(|| repo.without_local_options()),
     };
     let record = EpochRecord::next(device, None, 0, &chain, &secret, BTreeMap::new())?;
     ensure!(coord.append_epoch(&record)?, "the account already has keys");
+    coord.epoch_started(None, &secret)?;
     Ok(Created {
         recovery_code,
         root,
@@ -99,6 +101,12 @@ pub fn join_with_recovery(coord: &dyn Coordinator, code: &str, device: &SigningK
     }
     let mut chain = DeviceChain::new(&root);
     chain.advance(coord)?;
+    // the key first: the root opens it, and writing the account's records
+    // may need what it gives
+    let mut epochs = EpochChain::default();
+    epochs.advance(coord, &chain)?;
+    let (epoch, secret) = epochs.secret(coord, &chain, &root_key)?;
+    coord.epoch_known(&secret);
     let me = public_hex(device);
     if !chain.members().valid.contains_key(&me) {
         let action = Action::Add {
@@ -107,9 +115,6 @@ pub fn join_with_recovery(coord: &dyn Coordinator, code: &str, device: &SigningK
         };
         chain.append(coord, &root_key, action)?;
     }
-    let mut epochs = EpochChain::default();
-    epochs.advance(coord, &chain)?;
-    let (epoch, secret) = epochs.secret(coord, &chain, &root_key)?;
     coord.put_grant(&Grant::new(&root_key, epoch, &me, &secret)?)?;
     Ok(root)
 }

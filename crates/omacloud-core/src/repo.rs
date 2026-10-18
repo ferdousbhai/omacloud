@@ -46,11 +46,41 @@ pub const CREDENTIAL_OPTIONS: &[&str] = &[
 /// not the repository's.
 pub const LOCAL_OPTIONS: &[&str] = &["bandwidth", "connections"];
 
+/// The option that marks a repository on the Omacloud network: its S3 key
+/// is the epoch's network key, made from the repository password, which
+/// picks the epoch's keys at the gateway.
+pub const NETWORK: &str = "network";
+
+/// An epoch's key on the network, from its repository password.
+#[must_use]
+pub fn network_key(password: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(format!("omacloud network epoch\n{password}")))
+}
+
 impl RepoSpec {
     /// A bucket (OpenDAL, such as S3), as opposed to a local path.
     #[must_use]
     pub fn is_bucket(&self) -> bool {
         self.repository.starts_with("opendal:")
+    }
+
+    /// On the network, the same location with the key for the epoch whose
+    /// password this is; elsewhere, the same location.
+    #[must_use]
+    pub fn keyed(&self, password: &str) -> Self {
+        let mut spec = self.clone();
+        if spec.options.contains_key(NETWORK) {
+            _ = spec.options.insert("access_key_id".into(), network_key(password));
+            _ = spec.options.insert("secret_access_key".into(), "network".into());
+        }
+        spec
+    }
+
+    /// Whether this is a repository on the Omacloud network.
+    #[must_use]
+    pub fn is_network(&self) -> bool {
+        self.options.contains_key(NETWORK)
     }
 
     /// The same location without credentials, for config files and display.
@@ -86,6 +116,7 @@ impl RepoSpec {
     fn raw_backends(&self) -> Result<RepositoryBackends> {
         let mut options = self.options.clone();
         _ = options.remove("bandwidth");
+        _ = options.remove(NETWORK);
         if !self.is_bucket() {
             options.retain(|k, _| !LOCAL_OPTIONS.contains(&k.as_str()));
         }

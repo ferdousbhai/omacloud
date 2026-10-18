@@ -376,6 +376,9 @@ impl Engine {
             },
         };
         anyhow::ensure!(state.devices.root == root, "sync state belongs to another account root");
+        if let Some((_, secret)) = &state.secret {
+            coord.epoch_known(secret);
+        }
         Ok(Self {
             device,
             folder,
@@ -617,6 +620,11 @@ impl Engine {
     /// or the location this device was set up with. This device's transfer
     /// limits apply either way.
     fn base_spec(&self, secret: &EpochSecret) -> RepoSpec {
+        self.unkeyed_spec(secret).keyed(&secret.password)
+    }
+
+    /// [`Self::base_spec`] without the epoch's network key.
+    fn unkeyed_spec(&self, secret: &EpochSecret) -> RepoSpec {
         let Some(storage) = &secret.storage else {
             return self.repo.clone();
         };
@@ -645,7 +653,11 @@ impl Engine {
     fn ensure_key(&mut self) -> Result<()> {
         self.state.epochs.advance(self.coord.as_ref(), &self.state.devices)?;
         let latest = self.state.epochs.current();
-        if latest.is_some() && self.state.secret.as_ref().map(|s| s.0) == latest {
+        if latest.is_some()
+            && let Some((epoch, secret)) = &self.state.secret
+            && Some(*epoch) == latest
+        {
+            self.coord.epoch_known(secret);
             return Ok(());
         }
         let (epoch, secret) = self
@@ -661,6 +673,7 @@ impl Engine {
         if from != epoch {
             info!("now syncing in repository epoch {epoch}");
         }
+        self.coord.epoch_known(&secret);
         self.state.secret = Some((epoch, secret));
         self.save_state()
     }
@@ -698,10 +711,10 @@ impl Engine {
         self.sync()?; // up to date, a member, holding the current key
         let (old_epoch, old_secret) = self.secret()?;
         let epoch = old_epoch + 1;
-        let base = self.base_spec(&old_secret);
-        let old_spec = base.for_epoch(old_epoch);
-        let new_spec = base.for_epoch(epoch);
+        let base = self.unkeyed_spec(&old_secret);
+        let old_spec = base.keyed(&old_secret.password).for_epoch(old_epoch);
         let password = random_secret();
+        let new_spec = base.keyed(&password).for_epoch(epoch);
         let secret = EpochSecret {
             key: new_spec
                 .init(&password)
@@ -753,6 +766,7 @@ impl Engine {
                 break record;
             }
         };
+        self.coord.epoch_started(Some(&old_secret), &secret)?;
 
         self.state.epochs.push(record, &self.state.devices)?;
         if let Some(base) = self.state.base.as_mut()
