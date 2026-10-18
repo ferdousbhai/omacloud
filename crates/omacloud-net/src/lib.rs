@@ -4,5 +4,8 @@
 //! tokens); availability from copies on independent networks.
 
 pub mod blob;
+pub mod client;
 pub mod credit;
+pub mod node;
 pub mod place;
+pub mod proto;

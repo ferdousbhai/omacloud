@@ -1,0 +1,366 @@
+//! A storage node: keeps other accounts' blobs on this computer's disk.
+//!
+//! It trusts nobody and needs no trust: a blob is kept only if its bytes
+//! hash to the id it was stored under, anyone may read any blob (they're
+//! ciphertext, scrambled per holder), and a blob stays only as long as
+//! someone keeps paying for it. Nothing here knows which account a blob
+//! belongs to.
+
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use anyhow::Result;
+use iroh::{
+    Endpoint, EndpointAddr,
+    endpoint::Connection,
+    protocol::{AcceptError, ProtocolHandler, Router},
+};
+use iroh_blobs::{
+    BlobsProtocol, Hash,
+    store::{
+        GcConfig,
+        fs::{FsStore, options::Options},
+    },
+};
+use rusqlite::{OptionalExtension, params};
+
+use crate::{
+    blob::NodeId,
+    credit::{IssuerKey, Token, tokens_for},
+    proto::{self, BlobId, MAX_OBJECT, Reply, Request},
+};
+
+/// A month, as leases count it.
+pub const MONTH: u64 = 30 * 24 * 3600;
+
+/// How long a new blob is kept before a renewal pays for it.
+pub const FIRST_LEASE: u64 = 7 * 24 * 3600;
+
+/// How far ahead a renewal may pay.
+pub const LONGEST_LEASE: u64 = 6 * MONTH;
+
+/// How long a paid blob is kept after its lease ends, unpaid: an account
+/// whose every computer was lost has this long to come back for it.
+pub const GRACE: u64 = 180 * 24 * 3600;
+
+/// What a node is set up with.
+pub struct Config {
+    /// Where its blobs and records live.
+    pub dir: PathBuf,
+    /// Bytes it gives.
+    pub capacity: u64,
+    /// The Worker's token key; without one (development, tests), storage
+    /// is free.
+    pub issuer: Option<IssuerKey>,
+}
+
+/// A running node.
+pub struct Node {
+    router: Router,
+    inner: Arc<Inner>,
+}
+
+#[derive(Debug)]
+struct Inner {
+    store: FsStore,
+    db: Mutex<rusqlite::Connection>,
+    capacity: u64,
+    issuer: Option<IssuerKey>,
+}
+
+#[derive(Debug, Clone)]
+struct Control(Arc<Inner>);
+
+impl Node {
+    /// Start serving on `endpoint`.
+    ///
+    /// # Errors
+    ///
+    /// If the store or its records can't be opened.
+    pub async fn spawn(endpoint: Endpoint, config: Config) -> Result<Self> {
+        std::fs::create_dir_all(&config.dir)?;
+        let mut options = Options::new(&config.dir.join("blobs"));
+        // an untagged blob (a lease ended, a store that failed) goes at
+        // the next collection
+        options.gc = Some(GcConfig {
+            interval: Duration::from_secs(3600),
+            add_protected: None,
+        });
+        let store = FsStore::load_with_opts(config.dir.join("blobs/blobs.db"), options).await?;
+        let db = open_db(&config.dir.join("node.db"))?;
+        let inner = Arc::new(Inner {
+            store,
+            db: Mutex::new(db),
+            capacity: config.capacity,
+            issuer: config.issuer,
+        });
+        let router = Router::builder(endpoint)
+            .accept(iroh_blobs::ALPN, BlobsProtocol::new(&inner.store, None))
+            .accept(proto::ALPN, Control(inner.clone()))
+            .spawn();
+        Ok(Self { router, inner })
+    }
+
+    #[must_use]
+    pub fn id(&self) -> NodeId {
+        *self.router.endpoint().id().as_bytes()
+    }
+
+    /// Where others reach it.
+    #[must_use]
+    pub fn addr(&self) -> EndpointAddr {
+        self.router.endpoint().addr()
+    }
+
+    /// Bytes kept now.
+    ///
+    /// # Errors
+    ///
+    /// If the records can't be read.
+    pub fn used(&self) -> Result<u64> {
+        self.inner.used()
+    }
+
+    /// Tokens taken and not yet traded in at the Worker.
+    ///
+    /// # Errors
+    ///
+    /// If the records can't be read.
+    pub fn tokens(&self) -> Result<Vec<Token>> {
+        let db = self.inner.db.lock().expect("node db");
+        let mut q = db.prepare("SELECT token FROM tokens WHERE deposited = 0")?;
+        let rows = q.query_map([], |r| r.get::<_, String>(0))?;
+        rows.map(|t| Ok(serde_json::from_str(&t?)?)).collect()
+    }
+
+    /// Drop the blobs whose lease (and, once paid, grace) ran out; their
+    /// space is freed at the next collection. Returns how many.
+    ///
+    /// # Errors
+    ///
+    /// If the records or the store fail.
+    pub async fn sweep(&self) -> Result<usize> {
+        self.sweep_as_of(now()).await
+    }
+
+    /// [`Self::sweep`] as if it were `now`, for tests.
+    #[doc(hidden)]
+    pub async fn sweep_as_of(&self, now: u64) -> Result<usize> {
+        let gone: Vec<String> = {
+            let db = self.inner.db.lock().expect("node db");
+            let mut q =
+                db.prepare("SELECT blob FROM blobs WHERE expires + (CASE WHEN paid THEN ?1 ELSE 0 END) < ?2")?;
+            let rows = q.query_map(params![GRACE, now], |r| r.get(0))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        for blob in &gone {
+            self.inner.store.tags().delete(tag(blob)).await?;
+            self.inner
+                .db
+                .lock()
+                .expect("node db")
+                .execute("DELETE FROM blobs WHERE blob = ?1", [blob])?;
+        }
+        Ok(gone.len())
+    }
+
+    /// Stop serving and close the store.
+    pub async fn shutdown(self) {
+        if let Err(e) = self.router.shutdown().await {
+            log::warn!("stopping the node: {e:#}");
+        }
+        if let Err(e) = self.inner.store.shutdown().await {
+            log::warn!("closing the blob store: {e:#}");
+        }
+    }
+}
+
+fn open_db(path: &Path) -> Result<rusqlite::Connection> {
+    let db = rusqlite::Connection::open(path)?;
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS blobs (
+             blob TEXT PRIMARY KEY,
+             size INTEGER NOT NULL,
+             expires INTEGER NOT NULL,
+             paid INTEGER NOT NULL DEFAULT 0
+         );
+         CREATE TABLE IF NOT EXISTS tokens (
+             id TEXT PRIMARY KEY,
+             token TEXT NOT NULL,
+             deposited INTEGER NOT NULL DEFAULT 0
+         );",
+    )?;
+    Ok(db)
+}
+
+fn tag(blob: &str) -> String {
+    format!("b/{blob}")
+}
+
+fn now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+impl Inner {
+    fn used(&self) -> Result<u64> {
+        let db = self.db.lock().expect("node db");
+        let used: i64 = db.query_row("SELECT COALESCE(SUM(size), 0) FROM blobs", [], |r| r.get(0))?;
+        Ok(u64::try_from(used).unwrap_or(0))
+    }
+
+    async fn store(&self, blob: BlobId, size: u64, recv: &mut iroh::endpoint::RecvStream) -> Result<Reply> {
+        let name = hex::encode(blob.0);
+        let have = self
+            .db
+            .lock()
+            .expect("node db")
+            .query_row("SELECT 1 FROM blobs WHERE blob = ?1", [&name], |_| Ok(()))
+            .optional()?
+            .is_some();
+        if have {
+            return Ok(Reply::Stored);
+        }
+        if size > MAX_OBJECT {
+            return Ok(Reply::Refused {
+                why: format!("objects are at most {MAX_OBJECT} bytes"),
+            });
+        }
+        if self.used()? + size > self.capacity {
+            return Ok(Reply::Refused { why: "full".into() });
+        }
+        let mut data = vec![0u8; usize::try_from(size)?];
+        recv.read_exact(&mut data).await?;
+        if blake3::hash(&data).as_bytes() != &blob.0 {
+            return Ok(Reply::Refused {
+                why: "the bytes don't hash to that blob".into(),
+            });
+        }
+        let added = self.store.add_bytes(data).with_named_tag(tag(&name)).await?;
+        anyhow::ensure!(
+            added.hash == Hash::from_bytes(blob.0),
+            "the store hashed it differently"
+        );
+        self.db.lock().expect("node db").execute(
+            "INSERT OR IGNORE INTO blobs (blob, size, expires) VALUES (?1, ?2, ?3)",
+            params![name, size, now() + FIRST_LEASE],
+        )?;
+        Ok(Reply::Stored)
+    }
+
+    fn renew(&self, blobs: &[BlobId], until: u64, tokens: Vec<Token>) -> Result<Reply> {
+        let now = now();
+        if until > now + LONGEST_LEASE {
+            return Ok(Reply::Refused {
+                why: "that lease is too long".into(),
+            });
+        }
+        let db = self.db.lock().expect("node db");
+        let mut kept = Vec::with_capacity(blobs.len());
+        let mut bytes = 0u64;
+        for b in blobs {
+            let size: Option<i64> = db
+                .query_row("SELECT size FROM blobs WHERE blob = ?1", [hex::encode(b.0)], |r| {
+                    r.get(0)
+                })
+                .optional()?;
+            kept.push(size.is_some());
+            bytes += size.map_or(0, |s| u64::try_from(s).unwrap_or(0));
+        }
+        if let Some(issuer) = &self.issuer {
+            let months = until.saturating_sub(now).div_ceil(MONTH);
+            let owed = tokens_for(bytes) * months;
+            let mut fresh = 0u64;
+            for t in &tokens {
+                if t.verify(issuer).is_err() {
+                    continue;
+                }
+                let id = hex::encode(t.id());
+                let taken = db
+                    .query_row("SELECT 1 FROM tokens WHERE id = ?1", [&id], |_| Ok(()))
+                    .optional()?
+                    .is_some();
+                if !taken {
+                    fresh += 1;
+                }
+            }
+            if fresh < owed {
+                return Ok(Reply::Refused {
+                    why: format!("{owed} tokens owed, {fresh} good ones given"),
+                });
+            }
+            for t in &tokens {
+                if t.verify(issuer).is_ok() {
+                    db.execute(
+                        "INSERT OR IGNORE INTO tokens (id, token) VALUES (?1, ?2)",
+                        params![hex::encode(t.id()), serde_json::to_string(t)?],
+                    )?;
+                }
+            }
+        }
+        for (b, k) in blobs.iter().zip(&kept) {
+            if *k {
+                db.execute(
+                    "UPDATE blobs SET expires = MAX(expires, ?1), paid = 1 WHERE blob = ?2",
+                    params![until, hex::encode(b.0)],
+                )?;
+            }
+        }
+        Ok(Reply::Renewed { kept })
+    }
+
+    fn has(&self, blobs: &[BlobId]) -> Result<Reply> {
+        let db = self.db.lock().expect("node db");
+        let have = blobs
+            .iter()
+            .map(|b| {
+                db.query_row("SELECT 1 FROM blobs WHERE blob = ?1", [hex::encode(b.0)], |_| Ok(()))
+                    .optional()
+                    .map(|r| r.is_some())
+            })
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(Reply::Have { have })
+    }
+
+    async fn serve(&self, conn: Connection) -> Result<()> {
+        loop {
+            let (mut send, mut recv) = match conn.accept_bi().await {
+                Ok(pair) => pair,
+                // the other side is done
+                Err(_) => return Ok(()),
+            };
+            let request: Request = proto::recv(&mut recv).await?;
+            let reply = match request {
+                Request::Store { blob, size } => self.store(blob, size, &mut recv).await,
+                Request::Renew { blobs, until, tokens } => self.renew(&blobs, until, tokens),
+                Request::Has { blobs } => self.has(&blobs),
+            }
+            .unwrap_or_else(|e| Reply::Refused { why: format!("{e:#}") });
+            proto::send(&mut send, &reply).await?;
+            send.finish()?;
+        }
+    }
+}
+
+impl ProtocolHandler for Control {
+    async fn accept(&self, conn: Connection) -> Result<(), AcceptError> {
+        let remote = conn.remote_id();
+        if let Err(e) = self.0.serve(conn).await {
+            log::debug!("node protocol with {remote}: {e:#}");
+        }
+        Ok(())
+    }
+}
+
+/// The blob's id as iroh-blobs knows it.
+#[must_use]
+pub fn hash_of(blob: &BlobId) -> Hash {
+    Hash::from_bytes(blob.0)
+}
+
+/// Read context for errors about a node.
+pub(crate) fn about(addr: &EndpointAddr) -> String {
+    format!("node {}", addr.id.fmt_short())
+}

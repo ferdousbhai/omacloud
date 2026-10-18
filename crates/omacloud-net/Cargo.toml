@@ -16,3 +16,13 @@ rand.workspace = true
 blake3 = "1.8"
 chacha20 = "0.10"
 blind-rsa-signatures = "0.18"
+# no port mapping: a node doesn't ask the router to open ports for it
+iroh = { version = "1.3", default-features = false, features = ["tls-ring"] }
+iroh-blobs = { version = "0.103", default-features = false, features = ["fs-store"] }
+tokio = { workspace = true, features = ["macros", "io-util", "time", "sync", "rt-multi-thread"] }
+bytes = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
