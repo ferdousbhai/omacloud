@@ -1,0 +1,164 @@
+//! A small network on this machine: holders on local endpoints, the
+//! in-memory registry, and a gateway an S3 client talks to.
+
+use std::{collections::BTreeSet, sync::Arc};
+
+use anyhow::Result;
+use iroh::{Endpoint, RelayMode, endpoint::presets};
+use omacloud_net::{
+    bucket::Bucket,
+    gateway::{BUCKET, Gateway},
+    node::{Config, Node},
+    place,
+    registry::{Listed, MemRegistry},
+    seal::Keys,
+};
+use opendal::{Operator, services::S3};
+
+async fn endpoint() -> Result<Endpoint> {
+    Ok(Endpoint::builder(presets::Minimal)
+        .relay_mode(RelayMode::Disabled)
+        .bind()
+        .await?)
+}
+
+struct Net {
+    _tmp: tempfile::TempDir,
+    nodes: Vec<Node>,
+    registry: Arc<MemRegistry>,
+}
+
+async fn network(n: u8) -> Result<Net> {
+    let tmp = tempfile::tempdir()?;
+    let registry = Arc::new(MemRegistry::default());
+    let mut nodes = Vec::new();
+    for i in 0..n {
+        let node = Node::spawn(
+            endpoint().await?,
+            Config {
+                dir: tmp.path().join(format!("node{i}")),
+                capacity: 1 << 30,
+                issuer: None,
+            },
+        )
+        .await?;
+        registry.add_node(Listed {
+            node: place::Node {
+                id: node.id(),
+                asn: 64500 + u32::from(i),
+                prefix: format!("192.0.{i}.0/24"),
+                uptime: 0.99,
+                probation: false,
+            },
+            addr: node.addr(),
+        });
+        nodes.push(node);
+    }
+    Ok(Net {
+        _tmp: tmp,
+        nodes,
+        registry,
+    })
+}
+
+async fn bucket(net: &Net, password: &str) -> Result<Arc<Bucket>> {
+    Ok(Arc::new(Bucket::new(
+        endpoint().await?,
+        net.registry.clone(),
+        Keys::from_secret(password),
+        BTreeSet::new(),
+        2,
+    )))
+}
+
+fn s3(g: &Gateway, root: &str) -> Result<Operator> {
+    opendal::install_default();
+    let builder = S3::default()
+        .endpoint(&g.endpoint())
+        .bucket(BUCKET)
+        .region("auto")
+        .access_key_id(&g.access_key)
+        .secret_access_key(&g.secret_key)
+        .root(root);
+    Ok(Operator::new(builder)?)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_s3_client_sees_a_bucket() -> Result<()> {
+    let net = network(4).await?;
+    let b = bucket(&net, "pw").await?;
+    let g = Gateway::start(b.clone()).await?;
+    let op = s3(&g, "/acct/e0")?;
+
+    let big: Vec<u8> = (0..1_500_000u32).map(|i| (i % 253) as u8).collect();
+    op.write("data/ab/abcdef", big.clone()).await?;
+    op.write("config", b"cfg".to_vec()).await?;
+    op.write("keys/k1", b"key".to_vec()).await?;
+    op.create_dir("data/00/").await?;
+
+    assert_eq!(op.read("data/ab/abcdef").await?.to_vec(), big);
+    assert_eq!(
+        op.read_with("data/ab/abcdef").range(1000..1010).await?.to_vec(),
+        &big[1000..1010]
+    );
+    assert_eq!(op.stat("config").await?.content_length(), 3);
+    assert!(op.stat("nothing").await.is_err());
+
+    let mut listed: Vec<String> = op
+        .list_with("")
+        .recursive(true)
+        .await?
+        .into_iter()
+        .map(|e| e.path().to_string())
+        .collect();
+    listed.sort();
+    assert!(listed.contains(&"data/ab/abcdef".to_string()), "{listed:?}");
+    assert!(listed.contains(&"keys/k1".to_string()), "{listed:?}");
+
+    // each object has two copies, on different holders, scrambled apart
+    let entry = b.entry("acct/e0/data/ab/abcdef").await?.expect("indexed");
+    assert_eq!(entry.holders.len(), 2);
+    assert_ne!(entry.holders[0].node, entry.holders[1].node);
+    assert_ne!(entry.holders[0].blob, entry.holders[1].blob);
+
+    op.delete("keys/k1").await?;
+    assert!(op.stat("keys/k1").await.is_err());
+    op.delete_iter(["config".to_string()]).await?;
+    assert!(op.stat("config").await.is_err());
+
+    // a wrong key is turned away
+    opendal::install_default();
+    let wrong = Operator::new(
+        S3::default()
+            .endpoint(&g.endpoint())
+            .bucket(BUCKET)
+            .region("auto")
+            .access_key_id("someone")
+            .secret_access_key("else"),
+    )?;
+    assert!(wrong.read("data/ab/abcdef").await.is_err());
+    for n in net.nodes {
+        n.shutdown().await;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lost_holder_leaves_the_other_copy_and_another_account_sees_nothing() -> Result<()> {
+    let net = network(3).await?;
+    let b = bucket(&net, "pw").await?;
+    b.put("data/aa/1", b"one").await?;
+    let entry = b.entry("data/aa/1").await?.expect("indexed");
+    // one holder goes
+    net.registry.remove_node(&entry.holders[0].node);
+    assert_eq!(b.get("data/aa/1", None).await?.as_deref(), Some(&b"one"[..]));
+
+    // another account (or epoch) shares the Worker and sees none of it
+    let other = bucket(&net, "another").await?;
+    assert!(other.get("data/aa/1", None).await?.is_none());
+    assert!(other.list("").await?.is_empty());
+    for n in net.nodes {
+        n.shutdown().await;
+    }
+    Ok(())
+}

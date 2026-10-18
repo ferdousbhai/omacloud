@@ -4,8 +4,12 @@
 //! tokens); availability from copies on independent networks.
 
 pub mod blob;
+pub mod bucket;
 pub mod client;
 pub mod credit;
+pub mod gateway;
 pub mod node;
 pub mod place;
 pub mod proto;
+pub mod registry;
+pub mod seal;
