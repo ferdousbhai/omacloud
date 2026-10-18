@@ -44,7 +44,9 @@ Scoped by header `x-scope` (a 128-bit secret as 32 hex characters, derived
 per epoch); the Worker keys entries by `sha256(scope)`. `id` is 32 hex
 characters; `sealed` is base64, at most 64 KiB.
 
-- `GET /api/net/index` answers `{"entries": [{"id", "sealed"}]}`.
+- `GET /api/net/index?after={id}` answers `{"entries": [{"id", "sealed"}],
+  "next"}`: up to 1000 entries after `id` (from the start without it), in
+  id order, and `next` (the last id) when there may be more.
 - `GET /api/net/index/{id}` answers `{"sealed"}`, or 404.
 - `PUT /api/net/index/{id}` with `{"sealed"}` adds or replaces it: 204.
 - `DELETE /api/net/index/{id}`: 204, whether or not it was there.

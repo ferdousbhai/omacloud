@@ -234,7 +234,6 @@ On the network:
   Until then `omacloud init` doesn't work against omacloud.computer.
 - Without relays, computers behind NAT can't reach each other.
 - Erasure coding (4+2) in place of two whole copies.
-- Paging through the index; it's listed whole.
 - OHTTP or Tor for requests to the Worker, a transparency log, and a DHT
   to fall back on when the Worker is down.
 

@@ -163,6 +163,29 @@ test("the index is scoped: another scope sees nothing, and rows hold only the sc
 	assert.equal((await call(env, `/api/net/index/${id}`, { method: "PUT", headers: h, body: { sealed: max } })).status, 204);
 });
 
+test("a big index is read in pages", async () => {
+	const { env, sqlite } = setup();
+	const scope = "0123456789abcdef0123456789abcdef";
+	const h = { "x-scope": scope };
+	const insert = sqlite.prepare("INSERT INTO net_index (scope, id, sealed) VALUES (?, ?, 'eA==')");
+	for (let i = 0; i < 2500; i++) insert.run(sha256(scope), i.toString(16).padStart(32, "0"));
+	const ids: string[] = [];
+	let after = "";
+	for (let pages = 0; ; pages++) {
+		assert.ok(pages < 3);
+		const page = (await (await call(env, `/api/net/index${after ? `?after=${after}` : ""}`, { headers: h })).json()) as {
+			entries: { id: string }[];
+			next?: string;
+		};
+		ids.push(...page.entries.map((e) => e.id));
+		if (!page.next) break;
+		after = page.next;
+	}
+	assert.equal(ids.length, 2500);
+	assert.equal(new Set(ids).size, 2500);
+	assert.equal((await call(env, "/api/net/index?after=nothex", { headers: h })).status, 400);
+});
+
 test("coordination: create-only, capabilities, the marker", async () => {
 	const { env, sqlite } = setup();
 	const acct = "b".repeat(32);

@@ -206,12 +206,25 @@ impl Registry for Worker {
         Ok(from::<Nodes>(self.ok("GET", "/api/net/nodes", &[], None)?)?.nodes)
     }
     fn index(&self, scope: &str) -> Result<Vec<(String, Vec<u8>)>> {
-        let v = self.ok("GET", "/api/net/index", &[("x-scope", scope.to_string())], None)?;
-        let entries: Vec<Sealed> = from(v["entries"].clone())?;
-        entries
-            .into_iter()
-            .map(|e| Ok((e.id.context("an entry without an id")?, STANDARD.decode(e.sealed)?)))
-            .collect()
+        // in pages, each starting after the last one's end
+        let mut out = Vec::new();
+        let mut after = String::new();
+        loop {
+            let path = if after.is_empty() {
+                "/api/net/index".to_string()
+            } else {
+                format!("/api/net/index?after={after}")
+            };
+            let v = self.ok("GET", &path, &[("x-scope", scope.to_string())], None)?;
+            let entries: Vec<Sealed> = from(v["entries"].clone())?;
+            for e in entries {
+                out.push((e.id.context("an entry without an id")?, STANDARD.decode(e.sealed)?));
+            }
+            match v["next"].as_str() {
+                Some(next) if next > after.as_str() => after = next.to_string(),
+                _ => return Ok(out),
+            }
+        }
     }
     fn entry(&self, scope: &str, id: &str) -> Result<Option<Vec<u8>>> {
         let a = self.call(

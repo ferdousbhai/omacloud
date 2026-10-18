@@ -13,11 +13,20 @@ async function scope(req: Request): Promise<string> {
 	return sha256Hex(s);
 }
 
+/** Entries per page: a big bucket's index is read in pages, as one answer
+ * would outgrow what D1 returns at once. */
+export const PAGE = 1000;
+
+/** A page of entries after `?after=<id>`; `next` names where the next
+ * page starts, absent on the last. */
 export async function list(req: Request, env: Env): Promise<Response> {
-	const { results } = await env.DB.prepare("SELECT id, sealed FROM net_index WHERE scope = ? ORDER BY id")
-		.bind(await scope(req))
+	const after = (new URL(req.url).searchParams.get("after") ?? "").toLowerCase();
+	if (after !== "" && !ID.test(after)) throw new HttpError(400, "after must be an entry id");
+	const { results } = await env.DB.prepare("SELECT id, sealed FROM net_index WHERE scope = ?1 AND id > ?2 ORDER BY id LIMIT ?3")
+		.bind(await scope(req), after, PAGE)
 		.all<{ id: string; sealed: string }>();
-	return json({ entries: results.map((r) => ({ id: r.id, sealed: r.sealed })) });
+	const entries = results.map((r) => ({ id: r.id, sealed: r.sealed }));
+	return json(entries.length === PAGE ? { entries, next: entries[PAGE - 1].id } : { entries });
 }
 
 export async function get(req: Request, env: Env, id: string): Promise<Response> {
