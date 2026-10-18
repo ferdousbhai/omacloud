@@ -18,15 +18,35 @@ libadwaita-1-dev`). After changing `server/`, run `npm run check` there
 ## Storage backend features
 
 Default builds include local files and S3-compatible storage through
-OpenDAL; S3 stays for the local gateway the Omacloud network will serve.
+OpenDAL; S3 is how the sync engine reaches the Omacloud network, through
+the gateway each run serves on loopback.
 For an existing repository using another OpenDAL provider, REST or rclone,
 build with `cargo build --release -p omacloud --features full-backends`.
 These optional backends are kept out of normal builds to avoid their unused
 protocol stacks. The manifest-only patch is documented in
 `vendor/rustic_backend/OMACLOUD.md`.
 
+## The network in development
+
+`crates/omacloud-net` is the network: storage nodes, the bucket over them
+and its S3 gateway, the sealed index and coordination, credits and upkeep.
+`OMACLOUD_NETWORK=dir:<path>` keeps the Worker's part (node directory,
+index, coordination records) in a directory instead of at omacloud.computer,
+with the same rules, so a whole network runs on one machine with no
+server; storage isn't paid for there. Run seeds with `omacloud node run
+--give 1G` and computers with `omacloud init`, each with its own
+`--config`. `scripts/network.sh`, which `bin/check` runs, does exactly
+that: three seed nodes and three computers, from `init` through a join
+code and approval, recovery with the recovery code, a key rotation and
+`export --to`, then checks the Worker's part holds nothing readable.
+`crates/omacloud-net/tests/` cover nodes, the bucket through an S3 client,
+upkeep's repairs, and restic syncing through the network across a
+rotation. `docs/network-api.md` is the Worker's API.
+
 ## End to end scripts
 
+- `scripts/network.sh [path/to/omacloud]` (above) needs only a built CLI;
+  with restic on PATH it also restores the exported copy.
 - `scripts/restic-compat.sh` needs restic on PATH; a wrapper around the
   `restic/restic` image with paths mounted 1:1 works.
 - Where `/tmp` is small, put `CARGO_TARGET_DIR` under `~/.cache`.

@@ -2,11 +2,30 @@
 
 ## Unreleased
 
-- Every storage alternative is gone, in favour of one storage of Omacloud's
-  own, the Omacloud network, which is being built: encrypted objects held
-  by other Omarchy computers, with no accounts and no sign-in. Until it's
-  here, `omacloud init` and `join-code` say `unsupported`, and only the
-  development setup (`init --repo <path> --coordinator <directory>`) works.
+- The Omacloud network is Omacloud's one storage: encrypted objects held
+  by other Omarchy computers, with no accounts and no sign-in. `omacloud
+  init` sets a computer up on it and shows the recovery code once;
+  `omacloud join-code` prints a code another computer joins with (`init`
+  with `OMACLOUD_JOIN_CODE`, then approval by fingerprint), and the
+  recovery code alone still gets a computer in. `OMACLOUD_NETWORK` picks
+  another network, and `dir:<path>` one kept in a directory, for
+  development; `init --repo --coordinator` stays for development too.
+- While the daemon runs, a computer gives space to the network: 20G unless
+  `omacloud node give` says otherwise (`node status` shows it). It earns
+  the tokens that pay for its own account's copies, which the daemon checks,
+  renews and repairs every few hours. `omacloud node run` runs a node with
+  no account.
+- Each object is kept twice, on different networks, scrambled differently
+  for each holder; the index of where they are and the coordination
+  records are sealed, so the Worker at omacloud.computer can't read them.
+  A key rotation moves everything to a new bucket with new keys.
+- Leaving: `omacloud export --to <folder>` copies the repository to a
+  folder plain restic reads; `omacloud gateway` serves it as S3 on this
+  computer while it runs, and prints the restic command.
+- Not yet: Omacloud's seed nodes and relays aren't running, so `init`
+  against omacloud.computer waits on them, and without relays computers
+  behind NAT can't reach each other (docs/design.md, "Not yet").
+- Every storage alternative is gone, in favour of the network.
 - Gone: your own S3 bucket (Hetzner, R2 and others) and its bucket keys
   (`omacloud bucket`, the desktop keyring, `--coordination-bucket`,
   `export --to-opt`); Dropbox; Omacloud storage with Google sign-in, its
@@ -16,8 +35,8 @@
 - Gone with them: `OMACLOUD_SECRET_ACCESS_KEY`,
   `OMACLOUD_DROPBOX_CLIENT_SECRET`, `OMACLOUD_DROPBOX_AUTH_CODE`,
   `OMACLOUD_CONTACT_CARD`, `OMACLOUD_SERVICE_URL` and `OMACLOUD_KEYRING`.
-- Existing accounts don't carry over: once the network is here, create the
-  account again on it. Run `omacloud export` before upgrading: plain
+- Existing accounts don't carry over: create the account again on the
+  network. Run `omacloud export` before upgrading: plain
   restic restores everything from what it prints.
 
 ## 0.0.17 (2026-10-16)

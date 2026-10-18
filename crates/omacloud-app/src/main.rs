@@ -778,6 +778,9 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         _ => text(&repo["repository"]),
     };
     storage.add(&row("Where", place.trim()));
+    if let Some(give) = s["network"]["give"].as_u64() {
+        storage.add(&give_row(ui, give, daemon));
+    }
     page.add(&storage);
 
     // for support and the curious
@@ -806,6 +809,62 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     more.add(&details);
     page.add(&more);
     page
+}
+
+const GIB: u64 = 1 << 30;
+
+/// "20.0 GiB", for a size in bytes.
+fn gib(bytes: u64) -> String {
+    format!("{:.1} GiB", bytes as f64 / GIB as f64)
+}
+
+/// The space this computer gives the network, chosen from a few sizes (and
+/// whatever it gives now, if that's none of them). A change restarts a
+/// running daemon, which reads the size when it starts.
+fn give_row(ui: &Rc<Ui>, give: u64, daemon: bool) -> adw::ComboRow {
+    let mut sizes: Vec<u64> = [0, 5, 20, 50, 100, 250].iter().map(|g| g * GIB).collect();
+    if !sizes.contains(&give) {
+        sizes.push(give);
+        sizes.sort_unstable();
+    }
+    let labels: Vec<String> = sizes.iter().map(|&b| gib(b)).collect();
+    let model = gtk::StringList::new(&labels.iter().map(String::as_str).collect::<Vec<_>>());
+    let combo = adw::ComboRow::builder()
+        .title("Space you give")
+        .subtitle("Computers on the network keep each other's encrypted copies; what you give earns what you can store")
+        .model(&model)
+        .build();
+    combo.set_subtitle_lines(0);
+    if let Some(i) = sizes.iter().position(|&b| b == give) {
+        combo.set_selected(i as u32);
+    }
+    // connected after the current size is shown, so only a choice runs it
+    let ui = ui.clone();
+    combo.connect_selected_notify(move |c| {
+        let Some(&bytes) = sizes.get(c.selected() as usize) else {
+            return;
+        };
+        if bytes == give {
+            return;
+        }
+        let size = format!("{}G", bytes / GIB);
+        let ui = ui.clone();
+        cli_then(&["omacloud", "node", "give", &size], Vec::new(), move |r| match r {
+            Err(e) => {
+                ui.toast(&e.shown());
+                ui.refresh();
+            }
+            Ok(_) if daemon => ui.act(
+                &["systemctl", "--user", "restart", "omacloud"],
+                &format!("Giving {}", gib(bytes)),
+            ),
+            Ok(_) => {
+                ui.toast(&format!("Giving {}", gib(bytes)));
+                ui.refresh();
+            }
+        });
+    });
+    combo
 }
 
 /// "2 minutes ago", for a time in seconds since the epoch.

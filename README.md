@@ -9,12 +9,12 @@ only ever holds what it can't read. Underneath it's plain restic, so you can
 always restore without Omacloud. [docs/design.md](docs/design.md) explains
 how it protects your data.
 
-**Between storages.** Omacloud is moving to one storage of its own, the
-Omacloud network: encrypted objects held by other Omarchy computers, with no
-accounts and no sign-in. It is being built. The earlier storage choices are
-gone (see [CHANGELOG.md](CHANGELOG.md)), so for now only the development
-setup below works, with the files and the records that keep computers in
-step in directories you share yourself.
+Storage is the Omacloud network: other Omarchy computers hold your
+encrypted objects, and yours holds some of theirs. There are no accounts
+and no sign-in, only keys your computers make. The network is new:
+[docs/design.md](docs/design.md) says what isn't done yet, including the
+seed nodes and relays it needs before setting up works against
+omacloud.computer.
 
 ## Install
 
@@ -58,26 +58,53 @@ new versions until you install the signed repository.
 
 ## Set up
 
-Until the Omacloud network is here, `omacloud init` on its own says so
-(`unsupported`), and so do `omacloud join-code` and `init --join-code`. For
-development, give it a directory for the restic repository and one for the
-records that keep computers in step; both can be on a shared or synced
-filesystem:
+On the first computer, in a terminal (or in the Omacloud app):
 
 ```sh
-omacloud init --repo <path> --coordinator <directory>   # first computer: shows the recovery code
-omacloud init --repo <path> --coordinator <directory>   # another computer, same two: asks to join
-omacloud devices approve <fingerprint>                  # on the first, after comparing fingerprints
+omacloud init                          # creates the account on the network; shows the recovery code
 ```
 
-The first computer shows your **recovery code** once: write it down and
-keep it offline. With it you can add a computer when no other is at hand
-(`OMACLOUD_RECOVERY_CODE` set when joining) and recover everything;
-without it and without a computer, nobody can.
+It shows your **recovery code** once: write it down and keep it offline.
+With it you can add a computer when no other is at hand and recover
+everything; without it and without a computer, nobody can.
 
-Secrets never go on the command line: the recovery code (and, with the
-network, the join code) come from a prompt that doesn't echo, or from
-`OMACLOUD_RECOVERY_CODE` and `OMACLOUD_JOIN_CODE`.
+To add another computer, run `omacloud join-code` on one that's set up (or
+the app) and give the code to the new one privately: it
+opens your account's records, though not your files. On the new computer,
+with the code in `OMACLOUD_JOIN_CODE` (or in the app):
+
+```sh
+read -rs OMACLOUD_JOIN_CODE && export OMACLOUD_JOIN_CODE
+omacloud init                          # asks to join, and shows this computer's fingerprint
+omacloud devices approve <fingerprint> # on a computer already in, after comparing fingerprints
+```
+
+With no other computer at hand, the recovery code alone gets a computer in,
+without approval: `omacloud init` with it in `OMACLOUD_RECOVERY_CODE`.
+
+Secrets never go on the command line: the recovery code and the join code
+come from `OMACLOUD_RECOVERY_CODE` and `OMACLOUD_JOIN_CODE`, which `read -rs`
+fills without echo or shell history.
+
+`OMACLOUD_NETWORK` picks another network than omacloud.computer's;
+`OMACLOUD_NETWORK=dir:<path>` keeps the Worker's part in a directory, for
+development. Without the network, `omacloud init --repo <path>
+--coordinator <directory>` keeps the repository and the records that keep
+computers in step in two directories you share yourself, also for
+development.
+
+## Giving space
+
+While the daemon (`omacloud watch`) runs, your computer gives 20 GiB to
+the network: it keeps other accounts' encrypted objects, never knowing
+whose, and earns the credits that pay for keeping yours. `omacloud node
+give 50G` changes the amount (`0` gives none) and takes effect when the
+daemon restarts; `omacloud node status` shows it. Every few hours the
+daemon also checks that your copies are still held, pays to keep them, and
+makes new ones where a holder failed or left.
+
+`omacloud node run` runs a node with no account of its own, as Omacloud's
+seed nodes do.
 
 ## What syncs
 
@@ -149,10 +176,14 @@ omacloud secrets restore --from laptop    # ssh and gpg keys: asks for the recov
 ## Versions and leaving
 
 Every change is kept: `omacloud versions notes.md` lists a file's versions,
-and `omacloud restore notes.md --at 3` brings one back. `omacloud export`
-prints the repository location and password, so plain restic or rustic
-restores everything without Omacloud; `export --to <dir>` copies it
-somewhere of your own first.
+and `omacloud restore notes.md --at 3` brings one back.
+
+Leaving needs nothing from Omacloud but a copy: `omacloud export --to
+<folder>` copies the repository to a folder and prints its password and
+the restic command, so plain restic or rustic restores everything without
+Omacloud. `omacloud gateway` instead serves the repository on the network
+as S3 on this computer, while it runs, and prints the restic command that
+reads it.
 
 ## A lost computer
 
@@ -214,7 +245,8 @@ environment variables and confirmations from `--yes`.
 
 What prints a secret prints it only to your terminal, in text mode with
 stdin and stdout on it, and refuses (exit 2) as JSON or into a pipe: `init`
-when it creates an account (the recovery code), `join-code`, `export`, and
+when it creates an account (the recovery code), `join-code`, `export`,
+`gateway`, and
 `recovery split` and `combine`
 (`combine` reads its shares from stdin, so only its stdout must be a
 terminal). Joining with a join code or the recovery code prints no secret
@@ -235,6 +267,11 @@ binary), 1 for anything else.
 bandwidth = "5MiB"            # per second; see below
 connections = 4               # parallel requests to the storage
 pause_on_battery_below = 20   # percent while discharging; 0 never pauses
+
+[network]
+url = "https://omacloud.computer"  # the network's Worker
+give = 21474836480            # bytes given to others (`omacloud node give`)
+relays = []                   # relay servers, for computers behind routers
 ```
 
 `notifications = false` turns off the desktop notifications (a computer
@@ -255,11 +292,12 @@ edits.
 | path | what |
 |---|---|
 | `crates/omacloud-core` | sync engine (`sync.rs`), settings (`settings.rs`; Chromium and Wi-Fi as merged documents: `merged.rs`, `chromium/`, `wifi.rs`), signed heads (`head.rs`), device chain (`devices.rs`, `account.rs`), repository keys and rotation (`epoch.rs`), secrets bundle (`secrets.rs`), Shamir split (`shamir.rs`) |
+| `crates/omacloud-net` | the Omacloud network: storage nodes, the bucket over them as S3 on loopback, sealed index and coordination, credits, upkeep |
 | `crates/omacloud` | CLI and `watch` daemon |
 | `crates/omacloud-app` | the Omacloud app (GTK4, libadwaita), driving the CLI |
 | `vendor/rustic_core` | rustic_core 0.13 plus pack padding and `splice_tree` (upstream PRs in `vendor/upstream-patches`) |
-| `scripts/` | an end to end check against upstream restic (see CONTRIBUTING.md) and the release scripts |
-| `server/` | the Cloudflare Worker behind omacloud.computer: the public pages now, the Omacloud network's coordination later (see its README) |
+| `scripts/` | end to end checks (the network on one machine, upstream restic; see CONTRIBUTING.md) and the release scripts |
+| `server/` | the Cloudflare Worker behind omacloud.computer: the public pages and the network's API (see its README and [docs/network-api.md](docs/network-api.md)) |
 | `contrib/` | the systemd user unit and the desktop entry |
 | `pkgbuild/PKGBUILD` | Arch package, built from the committed checkout |
 | `install.sh` | the installer each release ships |

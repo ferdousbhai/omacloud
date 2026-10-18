@@ -42,17 +42,30 @@ current. Consult `omacloud <command> --help`.
 
 ## Setup (only when requested)
 
-Omacloud is between storages: its own storage, the Omacloud network, is being
-built, and the earlier storage options are gone. Until the network arrives, `omacloud init` without
-storage flags and `join-code` fail with `unsupported`; only the development
-setup works: `omacloud init --repo <path> --coordinator <directory>` (a joining
-computer gives the same `--repo` and `--coordinator`). Use it only when the owner asks for a
-development or test account, and agree on device name, folders, and whether to
-sync settings first. Point test accounts at `OMACLOUD_CONFIG`, never the
-owner's real `~/.config/omacloud`.
+Storage is the Omacloud network: other Omarchy computers hold the encrypted
+objects. Agree on device name, folders, and whether to sync settings first.
+
+- New account: the owner runs `omacloud init` in their own terminal; it shows
+  the recovery code once.
+- Another computer: the owner runs `omacloud join-code` on a computer already
+  in; the new one runs `omacloud init` with the code in `OMACLOUD_JOIN_CODE`
+  and asks to join; the owner approves with `omacloud devices approve
+  <fingerprint>` after comparing fingerprints. With `OMACLOUD_RECOVERY_CODE`
+  instead, `init` gets in without approval.
+- `OMACLOUD_NETWORK` picks the network (default omacloud.computer);
+  `OMACLOUD_NETWORK=dir:<path>` keeps a whole network in a directory, and
+  `init --repo <path> --coordinator <directory>` uses plain directories:
+  both for development and tests only. Point test accounts at
+  `OMACLOUD_CONFIG`, never the owner's real `~/.config/omacloud`.
+
+While `omacloud watch` runs, the computer gives disk space to the network
+(20G by default). `omacloud node status` shows it; `omacloud node give
+<size>` changes it (0 gives none) after a daemon restart, only with the
+owner's say. `omacloud node run` runs a node with no account; don't start it
+unasked.
 
 The owner must retain the recovery code privately. Commands that print a
-secret (`init` creating an account, `join-code`, `export`,
+secret (`init` creating an account, `join-code`, `export`, `gateway`,
 `recovery split|combine`) refuse with `terminal_required`
 off a terminal: have the owner run them in their own terminal. Never work
 around that refusal (no pseudo-terminals, no `script`), and never run them
@@ -87,6 +100,11 @@ settings across computers. Existing settings can contain API keys. Do not sync
 or settle conflicts without the owner's requested scope; never blindly prefer
 remote settings. Follow the applicable desktop configuration skill when editing
 Omarchy config directly.
+
+Leaving: `omacloud export --to <folder>` copies the repository to a folder
+plain restic reads and prints its password; `omacloud gateway` serves the
+network as S3 on loopback until stopped. Both print a secret: the owner runs
+them.
 
 Machine migration: `packages restore --from NAME` previews package installation;
 `--yes` runs pacman. `restore-machine --from NAME` is broader: settings, files,

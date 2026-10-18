@@ -104,12 +104,12 @@ enum Cmd {
         /// Pictures in home, as iCloud does; `omacloud folders` changes them]
         #[arg(long)]
         folder: Option<PathBuf>,
-        /// Where the files live, for development until the Omacloud network:
-        /// a path
+        /// For development, without the network: where the files live, a
+        /// path (with --coordinator)
         #[arg(long)]
         repo: Option<String>,
-        /// Where computers keep in step, for development until the Omacloud
-        /// network: a shared directory
+        /// For development, without the network: where computers keep in
+        /// step, a shared directory (with --repo)
         #[arg(long)]
         coordinator: Option<String>,
         /// Folders of home to sync on this computer, comma separated [default:
@@ -1580,7 +1580,8 @@ fn run(cli: Cli) -> Out {
             }))?;
             eprintln!(
                 "Pass it privately: it opens your account's records (not your files). The new\n\
-                 computer runs\n  omacloud init --join-code <code>\nand then needs your approval (or your recovery code)."
+                 computer runs `omacloud init` with it in OMACLOUD_JOIN_CODE (or Add This Computer\n\
+                 in the app), and then needs your approval (or your recovery code)."
             );
             Ok(Response::new(Value::Null, "join code").human(format!("omacloud-join-{}", hex::encode(blob))))
         }

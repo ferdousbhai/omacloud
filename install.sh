@@ -173,9 +173,9 @@ fi
 
 cat <<EOT
 
-Done. Omacloud's storage, the Omacloud network, is still being built, so
-setting up an account isn't possible yet; "Omacloud" in the app launcher
-(Super + Space) will set up this computer once it is. Updates arrive with
-the rest of the system through:
+Done. Set up this computer on the Omacloud network with "Omacloud" in the
+app launcher (Super + Space), or in a terminal:
+omacloud init
+Updates arrive with the rest of the system through:
 omarchy update
 EOT
