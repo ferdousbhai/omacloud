@@ -442,6 +442,16 @@ fn default_give() -> u64 {
 /// network.
 const NETWORK: &str = "network";
 
+/// The relays computers on Omacloud's own network use: Omacloud runs them
+/// on its seeds. A network elsewhere starts with none.
+fn default_relays(url: &str) -> Vec<String> {
+    if url == omacloud_net::worker::URL {
+        vec!["https://relay1.omacloud.computer".to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
 /// The network's Worker, unless OMACLOUD_NETWORK says otherwise.
 fn network_url() -> String {
     std::env::var("OMACLOUD_NETWORK").unwrap_or_else(|_| omacloud_net::worker::URL.to_string())
@@ -1427,8 +1437,8 @@ fn run(cli: Cli) -> Out {
                         options: BTreeMap::new(),
                     };
                     let net = NetConfig {
+                        relays: default_relays(&url),
                         url,
-                        relays: Vec::new(),
                         give: default_give(),
                     };
                     (NETWORK.to_string(), repo, Some(net), new_code)
@@ -2780,7 +2790,15 @@ fn node(paths: &Paths, action: NodeCmd) -> Out {
                 )),
             )
         }
-        NodeCmd::Run { give, network, relays } => {
+        NodeCmd::Run {
+            give,
+            network,
+            mut relays,
+        } => {
+            let network = network.unwrap_or_else(network_url);
+            if relays.is_empty() {
+                relays = default_relays(&network);
+            }
             let give = match give {
                 Some(g) => net::parse_size(&g).map_err(|e| fail::usage(format!("{e:#}")))?,
                 None => load(paths)
@@ -2789,7 +2807,7 @@ fn node(paths: &Paths, action: NodeCmd) -> Out {
                     .map_or_else(default_give, |n| n.give),
             };
             let s = omacloud_net::session::Session::start(omacloud_net::session::Options {
-                url: network.unwrap_or_else(network_url),
+                url: network,
                 relays,
                 copies: 2,
                 own: None,
