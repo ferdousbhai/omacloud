@@ -1,0 +1,29 @@
+# A seed: a server that only gives space to the Omacloud network, with no
+# account of its own, so the network has always-on holders while it's
+# small. Not installed by the package; on a seed, as root:
+#
+#   useradd --system --create-home --home-dir /var/lib/omacloud-seed omacloud-seed
+#   install -Dm644 omacloud-seed.service /etc/systemd/system/
+#   systemctl enable --now omacloud-seed
+#
+# Seeds should sit with different providers, so they're on different
+# networks: holders of one object never share one.
+[Unit]
+Description=Give space to the Omacloud network
+Documentation=https://github.com/ferdousbhai/omacloud
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=omacloud-seed
+Environment=HOME=/var/lib/omacloud-seed
+ExecStart=/usr/bin/omacloud node run --give 500G
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/omacloud-seed
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
