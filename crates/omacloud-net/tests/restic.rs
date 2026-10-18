@@ -6,12 +6,14 @@ use std::{collections::BTreeSet, fs, sync::Arc};
 use anyhow::Result;
 use ed25519_dalek::SigningKey;
 use iroh::{Endpoint, RelayMode, endpoint::presets};
-use omacloud_core::{DirCoordinator, Engine, RepoSpec, Setup, account};
+use omacloud_core::{Coordinator, Engine, RepoSpec, Setup, account};
 use omacloud_net::{
     bucket::Bucket,
+    coord::{Account, NetworkCoordinator, capability},
     gateway::{BUCKET, Gateway},
     node::{Config, Node},
     place,
+    records::MemRecords,
     registry::{Listed, MemRegistry},
     seal::Keys,
 };
@@ -79,14 +81,36 @@ fn two_computers_sync_through_the_network() -> Result<()> {
         .map(|(k, v)| (k.to_string(), v))
         .collect(),
     };
-    let coord = Arc::new(DirCoordinator::new(tmp.path().join("coord"))?);
+    // coordination at the "Worker", sealed: a made the account; b joins
+    // with the recovery code, which gives the same account keys
+    let records = Arc::new(MemRecords::default());
     let (a, b) = (
         SigningKey::generate(&mut rand::rngs::OsRng),
         SigningKey::generate(&mut rand::rngs::OsRng),
     );
-    let created = account::create(coord.as_ref(), &repo, &a, "a")?;
-    account::join_with_recovery(coord.as_ref(), &created.recovery_code, &b, "b")?;
-    let engine = |name: &str, key: &SigningKey| {
+    let seed: [u8; 32] = rand::random();
+    let provisional = hex::encode(rand::random::<[u8; 32]>());
+    let coord_a = Arc::new(NetworkCoordinator::new(
+        records.clone(),
+        Account::from_seed(seed),
+        Some(provisional.clone()),
+    ));
+    assert!(coord_a.create(&provisional)?);
+    let created = account::create(coord_a.as_ref(), &repo, &a, "a")?;
+    // from now on, writes need the epoch's capability
+    let cap = capability(&created.password);
+    coord_a.replace_cap(&cap)?;
+    let coord_b = Arc::new(NetworkCoordinator::new(records.clone(), Account::from_seed(seed), None));
+    assert!(account::join_with_recovery(coord_b.as_ref(), &created.recovery_code, &b, "b").is_err());
+    coord_b.set_cap(cap.clone());
+    account::join_with_recovery(coord_b.as_ref(), &created.recovery_code, &b, "b")?;
+    // the old capability writes nothing now
+    let stale = NetworkCoordinator::new(records.clone(), Account::from_seed(seed), Some(provisional));
+    assert!(stale.remove_request("x").is_err());
+    // and another account's keys open nothing
+    let outsider = NetworkCoordinator::new(records.clone(), Account::from_seed([9; 32]), None);
+    assert!(outsider.anchor()?.is_none());
+    let engine = |name: &str, key: &SigningKey, coord: Arc<NetworkCoordinator>| {
         let folder = tmp.path().join(name);
         fs::create_dir_all(&folder)?;
         Engine::new(
@@ -100,10 +124,10 @@ fn two_computers_sync_through_the_network() -> Result<()> {
                 settings: None,
                 folders: None,
             },
-            coord.clone(),
+            coord,
         )
     };
-    let (mut ea, mut eb) = (engine("a", &a)?, engine("b", &b)?);
+    let (mut ea, mut eb) = (engine("a", &a, coord_a)?, engine("b", &b, coord_b)?);
 
     let big: Vec<u8> = (0..3_000_000u32)
         .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)

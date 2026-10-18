@@ -6,11 +6,14 @@
 pub mod blob;
 pub mod bucket;
 pub mod client;
+pub mod coord;
 pub mod credit;
 pub mod gateway;
 pub mod node;
 pub mod place;
 pub mod proto;
+pub mod records;
 pub mod registry;
 pub mod seal;
 pub mod upkeep;
+pub mod worker;

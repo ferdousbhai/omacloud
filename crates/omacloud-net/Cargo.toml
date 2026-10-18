@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+omacloud-core.workspace = true
+base64.workspace = true
+sha2.workspace = true
+ureq = { version = "3.4.2", features = ["json"] }
 anyhow.workspace = true
 thiserror.workspace = true
 serde.workspace = true
@@ -28,7 +32,6 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 
 [dev-dependencies]
-omacloud-core.workspace = true
 ed25519-dalek.workspace = true
 # the transport rustic_backend brings in production
 opendal = { workspace = true, features = ["http-transport-reqwest"] }
