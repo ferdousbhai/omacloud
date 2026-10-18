@@ -136,6 +136,19 @@ impl Node {
         rows.map(|t| Ok(serde_json::from_str(&t?)?)).collect()
     }
 
+    /// Note tokens as traded in at the Worker.
+    ///
+    /// # Errors
+    ///
+    /// If the records can't be written.
+    pub fn mark_deposited(&self, tokens: &[Token]) -> Result<()> {
+        let db = self.inner.db.lock().expect("node db");
+        for t in tokens {
+            db.execute("UPDATE tokens SET deposited = 1 WHERE id = ?1", [hex::encode(t.id())])?;
+        }
+        Ok(())
+    }
+
     /// Drop the blobs whose lease (and, once paid, grace) ran out; their
     /// space is freed at the next collection. Returns how many.
     ///

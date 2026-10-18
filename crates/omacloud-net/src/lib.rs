@@ -17,3 +17,5 @@ pub mod registry;
 pub mod seal;
 pub mod upkeep;
 pub mod worker;
+pub mod dirstore;
+pub mod session;

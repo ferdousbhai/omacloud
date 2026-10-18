@@ -36,11 +36,27 @@ pub struct Created {
 /// If the coordinator already serves an account, or the repository can't be
 /// created (for example because one exists there).
 pub fn create(coord: &dyn Coordinator, repo: &RepoSpec, device: &SigningKey, name: &str) -> Result<Created> {
+    create_with_code(coord, repo, device, name, new_recovery_code())
+}
+
+/// [`create`] with a recovery code made beforehand (from
+/// [`crate::devices::new_recovery_code`]), for coordination that is found
+/// by what the code gives.
+///
+/// # Errors
+///
+/// As [`create`], and if the code isn't one.
+pub fn create_with_code(
+    coord: &dyn Coordinator,
+    repo: &RepoSpec,
+    device: &SigningKey,
+    name: &str,
+    recovery_code: String,
+) -> Result<Created> {
     ensure!(
         coord.anchor()?.is_none(),
         "an account already exists here; join it instead"
     );
-    let recovery_code = new_recovery_code();
     let root_key = root_key(&recovery_code)?;
     let root = public_hex(&root_key);
     ensure!(
