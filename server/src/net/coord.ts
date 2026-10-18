@@ -111,8 +111,13 @@ export async function putAnchor(req: Request, env: Env, id: string): Promise<Res
 	return created();
 }
 
-/** GET grants (with a name prefix) or requests. */
-export async function listRecords(env: Env, id: string, kind: "grants" | "requests", prefix = ""): Promise<Response> {
+/** Named records: grants, join requests, and the account's computers'
+ * node ids (so holders are chosen elsewhere). */
+export type Kind = "grants" | "requests" | "nodes";
+export const KINDS: ReadonlySet<string> = new Set(["grants", "requests", "nodes"]);
+
+/** GET named records of a kind, those whose name starts with a prefix. */
+export async function listRecords(env: Env, id: string, kind: Kind, prefix = ""): Promise<Response> {
 	if (prefix !== "" && !NAME.test(prefix)) throw new HttpError(400, "bad name prefix");
 	await account(env, id);
 	const { results } = await env.DB.prepare(
@@ -123,10 +128,11 @@ export async function listRecords(env: Env, id: string, kind: "grants" | "reques
 	return json({ records: results.map((r) => ({ name: r.name, body: r.body })) });
 }
 
-/** PUT a grant (with the capability) or a join request (without, rate limited). */
-export async function putRecord(req: Request, env: Env, id: string, kind: "grants" | "requests", name: string, now: number): Promise<Response> {
+/** PUT a named record: with the capability, or for a join request
+ * without it, rate limited. */
+export async function putRecord(req: Request, env: Env, id: string, kind: Kind, name: string, now: number): Promise<Response> {
 	const text = await body(req);
-	if (kind === "grants") {
+	if (kind !== "requests") {
 		await authorized(req, env, id);
 	} else {
 		await account(env, id);
@@ -143,8 +149,8 @@ export async function putRecord(req: Request, env: Env, id: string, kind: "grant
 	return noContent();
 }
 
-/** DELETE a grant or a join request, with the capability. */
-export async function deleteRecord(req: Request, env: Env, id: string, kind: "grants" | "requests", name: string): Promise<Response> {
+/** DELETE a named record, with the capability. */
+export async function deleteRecord(req: Request, env: Env, id: string, kind: Kind, name: string): Promise<Response> {
 	await authorized(req, env, id);
 	await env.DB.batch([
 		env.DB.prepare("DELETE FROM net_records WHERE account = ? AND kind = ? AND name = ?").bind(id, kind, name),

@@ -683,7 +683,24 @@ fn network_coordinator(paths: &Paths, config: &Config) -> Result<Option<Arc<omac
         return Ok(None);
     };
     let account = omacloud_net::coord::Account::from_seed(read_seed(paths)?);
-    Ok(Some(Arc::new(session(paths, net)?.coordinator(account))))
+    let s = session(paths, net)?;
+    let coord = s.coordinator(account);
+    // the account's other computers' nodes hold none of its copies either
+    let mut own = coord.account_nodes().unwrap_or_default();
+    own.insert(*omacloud_net::session::node_key(&paths.node_key())?.public().as_bytes());
+    s.set_own(own);
+    Ok(Some(Arc::new(coord)))
+}
+
+/// Record this computer's node among the account's, sealed.
+fn publish_node(paths: &Paths, config: &Config, engine: &Engine, c: &net::Contribution) -> Result<()> {
+    let Some(node) = c.node_id() else { return Ok(()) };
+    let Some(coord) = network_coordinator(paths, config)? else {
+        return Ok(());
+    };
+    let (_, secret, _) = engine.repository()?;
+    coord.set_cap(omacloud_net::coord::capability(&secret.password));
+    coord.publish_node(&engine.device_key(), &node)
 }
 
 /// Where the files live: the network's bucket through this run's gateway,
@@ -908,7 +925,13 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
         Some(n) => {
             let s = session(paths, n)?;
             match net::Contribution::start(s, &paths.data, n.give) {
-                Ok(c) => Some((s, c)),
+                Ok(c) => {
+                    // so the account's other computers don't choose this one
+                    if let Err(e) = publish_node(paths, config, &engine, &c) {
+                        warn!("telling the account's computers about this node: {e:#}");
+                    }
+                    Some((s, c))
+                }
                 Err(e) => {
                     warn!("not giving space to the network this run: {e:#}");
                     None

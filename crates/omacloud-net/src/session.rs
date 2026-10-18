@@ -188,8 +188,12 @@ async fn endpoint(relays: &[String], key: Option<SecretKey>) -> Result<Endpoint>
         RelayMode::Custom(urls.into_iter().collect::<RelayMap>())
     };
     let mut b = Endpoint::builder(presets::Minimal).relay_mode(mode);
-    if let Some(key) = key {
-        b = b.secret_key(key);
+    match key {
+        Some(key) => b = b.secret_key(key),
+        // reaching holders through relays only, when there are relays: a
+        // holder then never learns this computer's address
+        None if !relays.is_empty() => b = b.clear_ip_transports(),
+        None => {}
     }
     Ok(b.bind().await?)
 }
@@ -260,6 +264,11 @@ impl Session {
         })?;
         self.network.heartbeat(&key, &node, capacity)?;
         Ok(node)
+    }
+
+    /// Never choose these nodes (the account's own) as holders.
+    pub fn set_own(&self, own: BTreeSet<NodeId>) {
+        self.gateway.set_own(own);
     }
 
     /// Run `f` on the session's runtime.

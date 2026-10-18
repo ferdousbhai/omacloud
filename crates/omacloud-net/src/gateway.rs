@@ -55,7 +55,7 @@ impl Gateway {
         let state = Arc::new(State {
             ep,
             registry,
-            own,
+            own: Arc::new(std::sync::RwLock::new(own)),
             copies,
             buckets: Mutex::default(),
             uploads: Mutex::default(),
@@ -85,6 +85,11 @@ impl Gateway {
         Ok(Self { addr, state, task })
     }
 
+    /// The account's own nodes are these, from now on.
+    pub fn set_own(&self, own: BTreeSet<NodeId>) {
+        *self.state.own.write().expect("own") = own;
+    }
+
     /// The bucket a key reaches.
     #[must_use]
     pub fn bucket(&self, access_key: &str) -> Arc<Bucket> {
@@ -107,7 +112,7 @@ impl Drop for Gateway {
 struct State {
     ep: Endpoint,
     registry: Arc<dyn Registry>,
-    own: BTreeSet<NodeId>,
+    own: crate::bucket::Own,
     copies: usize,
     /// One bucket per key used.
     buckets: Mutex<HashMap<String, Arc<Bucket>>>,

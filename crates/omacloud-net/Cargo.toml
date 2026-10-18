@@ -32,6 +32,8 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 
 [dev-dependencies]
+# a relay server to test relay-only traffic against
+iroh = { version = "1.3", default-features = false, features = ["tls-ring", "test-utils"] }
 ed25519-dalek.workspace = true
 # the transport rustic_backend brings in production
 opendal = { workspace = true, features = ["http-transport-reqwest"] }

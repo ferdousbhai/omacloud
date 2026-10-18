@@ -70,6 +70,10 @@ need the account's capability, except join requests.
 - `GET /api/net/coord/{account}/grants?name={prefix}`:
   `{"records": [{"name", "body"}]}` whose name starts with the prefix.
   `PUT /api/net/coord/{account}/grants/{name}` (with `x-cap`): 204.
+- `GET /api/net/coord/{account}/nodes`: `{"records": [{"name", "body"}]}`,
+  the account's computers' node ids (sealed), so none is chosen to hold the
+  account's copies. `PUT` and `DELETE /api/net/coord/{account}/nodes/{name}`
+  (with `x-cap`): 204.
 - `GET /api/net/coord/{account}/requests`: `{"records": [{"name", "body"}]}`.
   `PUT /api/net/coord/{account}/requests/{name}` needs no capability (a
   computer asking to join has none), at most 10 per prefix per hour: 204.

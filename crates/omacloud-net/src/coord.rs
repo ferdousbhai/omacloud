@@ -150,6 +150,36 @@ impl NetworkCoordinator {
             .append(&self.account.id, &self.cap()?, log, seq, &self.seal(&place, value)?)
     }
 
+    /// Say `device` (its public key, hex) serves as node `node`, so the
+    /// account's computers never choose each other to hold its copies.
+    ///
+    /// # Errors
+    ///
+    /// If this computer can't write the account's records.
+    pub fn publish_node(&self, device: &str, node: &crate::blob::NodeId) -> Result<()> {
+        let body = self.seal(&format!("nodes/{device}"), &hex::encode(node))?;
+        self.records
+            .put_named(&self.account.id, Some(&self.cap()?), "nodes", device, &body)
+    }
+
+    /// The nodes the account's computers serve as.
+    ///
+    /// # Errors
+    ///
+    /// If the records can't be read or don't verify.
+    pub fn account_nodes(&self) -> Result<std::collections::BTreeSet<crate::blob::NodeId>> {
+        self.records
+            .named(&self.account.id, "nodes", "")?
+            .iter()
+            .map(|(name, body)| {
+                let id: String = self.open(&format!("nodes/{name}"), body)?;
+                hex::decode(id)?
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("not a node id"))
+            })
+            .collect()
+    }
+
     /// Make the account at the Worker, writable with `cap`. False if it
     /// exists.
     ///

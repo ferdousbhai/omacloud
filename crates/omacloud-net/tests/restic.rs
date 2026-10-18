@@ -94,6 +94,10 @@ fn two_computers_sync_through_the_network() -> Result<()> {
     // the old capability writes nothing now
     let stale = NetworkCoordinator::new(records.clone(), Account::from_seed(seed), Some(provisional));
     assert!(stale.remove_request("x").is_err());
+    // the account's computers learn each other's nodes, which then hold
+    // none of its copies
+    coord_a.publish_node(&hex::encode(a.verifying_key().as_bytes()), &[7; 32])?;
+    assert!(coord_b.account_nodes()?.contains(&[7; 32]));
     // and another account's keys open nothing
     let outsider = NetworkCoordinator::new(records.clone(), Account::from_seed([9; 32]), None);
     assert!(outsider.anchor()?.is_none());

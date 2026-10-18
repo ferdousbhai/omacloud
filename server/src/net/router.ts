@@ -66,18 +66,17 @@ async function routeCoord(req: Request, env: Env, parts: string[], url: URL, t: 
 		if (what === "marker" && m === "GET") return coord.marker(env, account);
 		if (what === "anchor" && m === "GET") return coord.getAnchor(env, account);
 		if (what === "anchor" && m === "PUT") return coord.putAnchor(req, env, account);
-		if (what === "grants" && m === "GET") return coord.listRecords(env, account, "grants", url.searchParams.get("name") ?? "");
-		if (what === "requests" && m === "GET") return coord.listRecords(env, account, "requests");
+		if (coord.KINDS.has(what) && m === "GET") return coord.listRecords(env, account, what as coord.Kind, url.searchParams.get("name") ?? "");
 		if (coord.LOGS.has(what) && m === "GET") return coord.readLog(env, account, what, url.searchParams.get("after"));
 		throw notFound();
 	}
 	if (parts.length === 3) {
 		const name = parts[2];
 		if (coord.LOGS.has(what) && m === "PUT") return coord.appendLog(req, env, account, what, name);
-		if (what === "grants" || what === "requests") {
+		if (coord.KINDS.has(what)) {
 			if (!NAME.test(name)) throw new HttpError(400, "bad name");
-			if (m === "PUT") return coord.putRecord(req, env, account, what, name, t);
-			if (m === "DELETE") return coord.deleteRecord(req, env, account, what, name);
+			if (m === "PUT") return coord.putRecord(req, env, account, what as coord.Kind, name, t);
+			if (m === "DELETE") return coord.deleteRecord(req, env, account, what as coord.Kind, name);
 		}
 	}
 	throw notFound();

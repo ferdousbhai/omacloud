@@ -42,19 +42,23 @@ pub struct Held {
 /// How long a directory read is used before reading it again.
 const DIRECTORY_FRESH: Duration = Duration::from_secs(60);
 
+/// The account's own nodes, as known now.
+pub type Own = Arc<std::sync::RwLock<BTreeSet<NodeId>>>;
+
 pub struct Bucket {
     ep: Endpoint,
     registry: Arc<dyn Registry>,
     keys: Keys,
-    /// This account's own nodes: never holders of its copies.
-    own: BTreeSet<NodeId>,
+    /// This account's own nodes: never holders of its copies. Shared, as
+    /// they're learned after the bucket is made.
+    own: Own,
     copies: usize,
     directory: Mutex<Option<(Instant, Vec<Listed>)>>,
 }
 
 impl Bucket {
     #[must_use]
-    pub fn new(ep: Endpoint, registry: Arc<dyn Registry>, keys: Keys, own: BTreeSet<NodeId>, copies: usize) -> Self {
+    pub fn new(ep: Endpoint, registry: Arc<dyn Registry>, keys: Keys, own: Own, copies: usize) -> Self {
         Self {
             ep,
             registry,
@@ -136,7 +140,7 @@ impl Bucket {
     /// wanted when the network is short of independent nodes.
     async fn place(&self, key: &str, data: &[u8], mut held: Vec<Held>, avoid: &BTreeSet<NodeId>) -> Result<Vec<Held>> {
         let nodes = self.directory(false).await?;
-        let mut refused: BTreeSet<NodeId> = self.own.union(avoid).copied().collect();
+        let mut refused: BTreeSet<NodeId> = self.own.read().expect("own").union(avoid).copied().collect();
         refused.extend(held.iter().map(|h| h.node));
         while held.len() < self.copies {
             let taken: Vec<_> = nodes

@@ -68,6 +68,12 @@ impl Contribution {
         })
     }
 
+    /// The node this computer serves as, if it gives space.
+    #[must_use]
+    pub fn node_id(&self) -> Option<omacloud_net::blob::NodeId> {
+        self.node.as_ref().map(Node::id)
+    }
+
     /// Do what's due; `engine` is the account's, none on a node that only
     /// gives. Failures only log: the network may be out of reach.
     pub fn tick(&mut self, session: &Session, engine: Option<&Engine>) {

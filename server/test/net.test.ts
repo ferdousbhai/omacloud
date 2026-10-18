@@ -221,6 +221,13 @@ test("coordination: create-only, capabilities, the marker", async () => {
 	assert.equal(((await (await call(env, `${base}/grants`)).json()) as { records: unknown[] }).records.length, 3);
 	assert.equal((await call(env, `${base}/grants/bad.name`, { method: "PUT", headers: cap, body: { body: "x" } })).status, 400);
 
+	// the account's computers' node ids: written with the capability only
+	assert.equal((await call(env, `${base}/nodes/dev-1`, { method: "PUT", body: { body: "n1" } })).status, 401);
+	assert.equal((await call(env, `${base}/nodes/dev-1`, { method: "PUT", headers: cap, body: { body: "n1" } })).status, 204);
+	assert.deepEqual(await (await call(env, `${base}/nodes`)).json(), { records: [{ name: "dev-1", body: "n1" }] });
+	assert.equal((await call(env, `${base}/nodes/dev-1`, { method: "DELETE", headers: cap })).status, 204);
+	assert.deepEqual(await (await call(env, `${base}/nodes`)).json(), { records: [] });
+
 	// a new capability: the old one stops working
 	assert.equal((await call(env, `${base}/cap`, { method: "PUT", headers: { "x-cap": "wrong" }, body: { cap: "secret-two" } })).status, 403);
 	v = await marker();

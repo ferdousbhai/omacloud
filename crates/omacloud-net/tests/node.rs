@@ -107,3 +107,39 @@ async fn a_renewal_pays_in_tokens_and_a_paid_blob_gets_its_grace() -> Result<()>
     n.shutdown().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computer_reaches_a_holder_through_a_relay_alone() -> Result<()> {
+    use iroh::{RelayMode, tls::CaTlsConfig};
+    let (map, _url, _server) = iroh::test_utils::run_relay_server().await?;
+    let tmp = tempfile::tempdir()?;
+    let holder_ep = Endpoint::builder(presets::Minimal)
+        .relay_mode(RelayMode::Custom(map.clone()))
+        .ca_tls_config(CaTlsConfig::insecure_skip_verify())
+        .bind()
+        .await?;
+    holder_ep.online().await;
+    let n = Node::spawn(
+        holder_ep,
+        Config {
+            dir: tmp.path().to_path_buf(),
+            capacity: 1 << 20,
+            issuer: None,
+        },
+    )
+    .await?;
+    // no IP transport at all: only the relay carries it
+    let me = Endpoint::builder(presets::Minimal)
+        .relay_mode(RelayMode::Custom(map))
+        .ca_tls_config(CaTlsConfig::insecure_skip_verify())
+        .clear_ip_transports()
+        .bind()
+        .await?;
+    me.online().await;
+    let addr = n.addr();
+    assert!(addr.relay_urls().next().is_some(), "{addr:?}");
+    let blob = client::store(&me, &addr, b"through the relay").await?;
+    assert_eq!(client::read(&me, &addr, blob, None).await?, b"through the relay");
+    n.shutdown().await;
+    Ok(())
+}

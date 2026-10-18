@@ -66,7 +66,7 @@ async fn bucket(net: &Net, password: &str) -> Result<Arc<Bucket>> {
         endpoint().await?,
         net.registry.clone(),
         Keys::from_secret(password),
-        BTreeSet::new(),
+        Arc::default(),
         2,
     )))
 }

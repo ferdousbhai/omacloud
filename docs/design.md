@@ -97,8 +97,10 @@ sync engine. Nothing in it is trusted for anything but availability.
   account, as seeds do. The owner's computer picks holders from the public
   node directory (`place.rs`): two copies per object, on different
   networks (ASN and /24 or /48 as the Worker saw them), one of them always
-  on (95% uptime or more) when there is one, never this computer's own
-  node. New nodes are on probation and only ever hold extra copies.
+  on (95% uptime or more) when there is one, never a node of the
+  account's own computers (each records its node id, sealed, among the
+  account's records). New nodes are on probation and come last: they hold
+  copies only when established nodes run out, as on a new network.
 - **What a holder keeps** (`node.rs`): a blob only if its bytes hash to the
   id it was stored under. Anyone may read any blob, as it's ciphertext. A
   first lease is 7 days, unpaid; renewals pay in tokens, and a blob that
@@ -193,18 +195,18 @@ network:
   IP addresses and timing. It never links a node to an account, and can't
   read object names, placements or heads.
 - **Holders** see scrambled blobs, their sizes and when they're fetched or
-  checked, a node key that changes every run, and, for now, the owner's IP
-  address: until traffic between accounts goes through relays, a client
-  connects directly.
+  checked, and a node key that changes every run. With relays set, a
+  computer reaches holders through relays only, so they don't learn its
+  address; with none (as until seed relays run), it connects directly and
+  they do.
 - **Relays and seeds** see who connects to whom and how much, by address;
   seeds are holders too. Omacloud will run them while the network is small.
 - **Cloudflare** sits in front of the Worker and sees what it sees.
 - **A removed computer** keeps what it had synced before removal, and with
   a new epoch can't read what comes after or write coordination records.
 
-The remaining leaks are addresses and timing at the Worker, the holders
-(until relay-only traffic) and the relays. The account's other computers
-can be chosen as holders of its copies; they learn no more than any holder.
+The remaining leaks are addresses and timing at the Worker and the relays,
+and at holders when there are no relays.
 
 Nobody but your computers and your recovery code can read file contents,
 names, settings or keys.
@@ -231,10 +233,6 @@ On the network:
   with migration 0006 and its `CREDIT_KEY` (`server/deploy.sh --first`).
   Until then `omacloud init` doesn't work against omacloud.computer.
 - Without relays, computers behind NAT can't reach each other.
-- Relay-only traffic between accounts, so holders don't learn owners'
-  addresses.
-- Excluding the account's other computers' nodes as holders; only this
-  computer's own node is excluded.
 - Erasure coding (4+2) in place of two whole copies.
 - Paging through the index; it's listed whole.
 - OHTTP or Tor for requests to the Worker, a transparency log, and a DHT
