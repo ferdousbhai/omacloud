@@ -69,7 +69,7 @@ failure is {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, 
 error:/hint: lines on stderr in text mode.
 
 Commands that print a secret (init when it creates an account, join-code,
-export, recovery split and combine) print only to a
+export, gateway, recovery split and combine) print only to a
 terminal, in text mode, with stdin a terminal too (combine excepted: its shares
 may come on stdin).
 
@@ -229,6 +229,9 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<NodeCmd>,
     },
+    /// Serve the account's repository on the network as S3 on this computer,
+    /// for plain restic, until stopped; prints how to reach it
+    Gateway,
     /// Print the agent skill (SKILL.md) built into omacloud, or install it
     /// for your coding agents
     Skill {
@@ -1658,6 +1661,36 @@ fn run(cli: Cli) -> Out {
             let data = json!({ "epoch": r.epoch, "snapshots": r.snapshots, "left": r.left });
             Ok(Response::new(data, summary.clone()).human(format!("{summary}\n{}", leftover_text(&r))))
         }
+        Cmd::Gateway => {
+            if !output::to_terminal(mode()) {
+                return Err(fail::terminal_required("the repository password and network key").into());
+            }
+            let config = load(&paths)?;
+            let mut e = engine(&paths, &config)?;
+            e.sync()?;
+            let (spec, secret, epoch) = e.repository()?;
+            anyhow::ensure!(
+                spec.is_network(),
+                "this account's repository is a folder: restic reads it as it is"
+            );
+            let opt = |k: &str| spec.options.get(k).cloned().unwrap_or_default();
+            let url = format!(
+                "s3:{}/{}{}",
+                opt("endpoint"),
+                opt("bucket"),
+                opt("root").trim_end_matches('/')
+            );
+            println!(
+                "# the network as S3, while this runs (Ctrl-C ends it); repository epoch {epoch}\n\
+                 AWS_ACCESS_KEY_ID={} AWS_SECRET_ACCESS_KEY=network RESTIC_PASSWORD='{}' \\\n  \
+                 restic -r {url} restore latest --target <dir>",
+                opt("access_key_id"),
+                secret.password
+            );
+            loop {
+                std::thread::sleep(Duration::from_secs(3600));
+            }
+        }
         Cmd::Export { to } => {
             if !output::to_terminal(mode()) {
                 return Err(fail::terminal_required("the repository password").into());
@@ -1678,6 +1711,17 @@ fn run(cli: Cli) -> Out {
             }
             let repo = &spec.repository;
             let mut out = String::new();
+            if spec.is_network() {
+                // this run's gateway ends with it: point at what outlasts it
+                say!(
+                    out,
+                    "# restore without omacloud: the repository password, and either a copy of\n\
+                     # the repository in a folder (`omacloud export --to <folder>`, then plain restic),\n\
+                     # or the network served as S3 while `omacloud gateway` runs\n\
+                     # (repository epoch {epoch})\npassword:   {password}"
+                );
+                return Ok(Response::new(Value::Null, "export").human(out.trim_end()));
+            }
             say!(
                 out,
                 "# restore without omacloud: restic or rustic, this repository and password"

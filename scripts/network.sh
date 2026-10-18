@@ -67,6 +67,15 @@ oc a sync >/dev/null 2>&1
 oc b sync >/dev/null 2>&1
 diff -r --no-dereference "$work/A" "$work/B"
 
+# leaving: the repository copied to a folder, which plain restic reads
+oc_tty a export --to "$work/copy" >"$work/export.txt"
+password=$(sed -n 's/^password: *//p' "$work/export.txt")
+[ -n "$password" ] && [ -f "$work/copy/config" ] || { cat "$work/export.txt"; exit 1; }
+if command -v "${RESTIC:-restic}" >/dev/null; then
+  RESTIC_PASSWORD=$password ${RESTIC:-restic} -r "$work/copy" --no-lock restore latest --target "$work/restored" >/dev/null
+  diff -r --no-dereference "$work/A" "$work/restored"
+fi
+
 # the Worker's part holds nothing readable: no file names, no contents
 if grep -rqa -e "from a" -e "a.txt" -e "docs" "$work/worker"; then
   echo "the Worker's part holds something readable"; exit 1
