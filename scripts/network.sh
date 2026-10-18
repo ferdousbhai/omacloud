@@ -16,7 +16,7 @@ cleanup() {
   rm -rf "${work:?}"
 }
 trap cleanup EXIT
-export OMACLOUD_NETWORK="dir:$work/worker"
+export OMACLOUD_NETWORK=${OMACLOUD_NETWORK:-dir:$work/worker}
 oc() { local dev=$1; shift; "$OMACLOUD" --config "$work/$dev.toml" --styled "$@"; }
 # what prints a secret prints only to a terminal: give it one
 oc_tty() {
@@ -28,11 +28,17 @@ for s in s1 s2 s3; do
   "$OMACLOUD" --config "$work/$s.toml" node run --give 1G >"$work/$s.log" 2>&1 &
   pids+=($!)
 done
+listed() {
+  case $OMACLOUD_NETWORK in
+    dir:*) ls "${OMACLOUD_NETWORK#dir:}/nodes" 2>/dev/null | wc -l ;;
+    *) curl -s "$OMACLOUD_NETWORK/api/net/nodes" | grep -o '"id"' | wc -l ;;
+  esac
+}
 for _ in $(seq 1 100); do
-  [ "$(ls "$work/worker/nodes" 2>/dev/null | wc -l)" -ge 3 ] && break
+  [ "$(listed)" -ge 3 ] && break
   sleep 0.1
 done
-[ "$(ls "$work/worker/nodes" | wc -l)" -ge 3 ] || { echo "seed nodes didn't list themselves"; cat "$work"/s*.log; exit 1; }
+[ "$(listed)" -ge 3 ] || { echo "seed nodes didn't list themselves"; cat "$work"/s*.log; exit 1; }
 
 oc_tty a init --folder "$work/A" --device a >"$work/init.txt"
 grep -q "on the Omacloud network" "$work/init.txt" || { cat "$work/init.txt"; exit 1; }
@@ -77,7 +83,7 @@ if command -v "${RESTIC:-restic}" >/dev/null; then
 fi
 
 # the Worker's part holds nothing readable: no file names, no contents
-if grep -rqa -e "from a" -e "a.txt" -e "docs" "$work/worker"; then
+if [ -d "$work/worker" ] && grep -rqa -e "from a" -e "a.txt" -e "docs" "$work/worker"; then
   echo "the Worker's part holds something readable"; exit 1
 fi
 echo "network: ok"

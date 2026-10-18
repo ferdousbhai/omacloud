@@ -40,7 +40,9 @@ pub enum PlaceError {
 /// Pick `copies` holders at random among `nodes`, never one of `exclude`
 /// (this account's own) or one in `taken` (holding a copy already, for a
 /// repair), each on a network no other copy is on, and one of them always
-/// on when any is. Nodes on probation only fill `extra` places beyond that.
+/// on when any is. Nodes on probation come last: they fill copies only
+/// when the established ones run out (as on a new network, where every
+/// node is new), and `extra` places beyond them.
 ///
 /// # Errors
 ///
@@ -82,6 +84,14 @@ pub fn choose(
             chosen.push((*n).clone());
         }
     }
+    for n in &pool {
+        if chosen.len() >= copies {
+            break;
+        }
+        if n.probation && free(n, &chosen) {
+            chosen.push((*n).clone());
+        }
+    }
     if chosen.len() < copies {
         return Err(PlaceError::TooFew {
             found: chosen.len(),
@@ -93,7 +103,7 @@ pub fn choose(
         if added >= extra {
             break;
         }
-        if n.probation && free(n, &chosen) {
+        if n.probation && !chosen.iter().any(|c| c.id == n.id) && free(n, &chosen) {
             chosen.push((*n).clone());
             added += 1;
         }
@@ -144,13 +154,19 @@ mod tests {
     }
 
     #[test]
-    fn probation_is_only_ever_extra() {
+    fn probation_comes_last() {
         let mut new = node(3, 300, 0.99);
         new.probation = true;
         let nodes = [node(1, 100, 0.99), new.clone()];
-        assert!(choose(&nodes, &BTreeSet::new(), &[], 2, 0).is_err());
-        let c = choose(&nodes, &BTreeSet::new(), &[], 1, 1).unwrap();
-        assert_eq!(c, vec![nodes[0].clone(), new]);
+        for _ in 0..20 {
+            // the established node first, the new one as extra
+            let c = choose(&nodes, &BTreeSet::new(), &[], 1, 1).unwrap();
+            assert_eq!(c, vec![nodes[0].clone(), new.clone()]);
+        }
+        // and the new one as a copy when there's nothing else
+        let c = choose(&nodes, &BTreeSet::new(), &[], 2, 0).unwrap();
+        assert_eq!(c.len(), 2);
+        assert!(choose(&[new.clone()], &BTreeSet::new(), &[], 1, 0).is_ok());
     }
 
     #[test]

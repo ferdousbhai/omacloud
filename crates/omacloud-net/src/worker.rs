@@ -118,7 +118,10 @@ impl Worker {
     pub fn issuer(&self) -> Result<IssuerKey> {
         let v = self.ok("GET", "/api/net/credits/key", &[], None)?;
         let der = STANDARD.decode(v["spki"].as_str().context("no key")?)?;
-        IssuerKey::from_spki(&der).map_err(|e| anyhow::anyhow!("the token key: {e}"))
+        // WebCrypto exports a plain RSA key; RFC 9474 also allows the PSS form
+        IssuerKey::from_der(&der)
+            .or_else(|_| IssuerKey::from_spki(&der))
+            .map_err(|e| anyhow::anyhow!("the token key: {e}"))
     }
 
     /// The starter tokens a new install may have.
