@@ -200,7 +200,9 @@ fn tag(blob: &str) -> String {
     format!("b/{blob}")
 }
 
-fn now() -> u64 {
+/// Unix seconds.
+#[must_use]
+pub fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 

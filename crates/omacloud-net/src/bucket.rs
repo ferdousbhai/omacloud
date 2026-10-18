@@ -116,54 +116,120 @@ impl Bucket {
     ///
     /// If no holder took a copy, or the index can't be written.
     pub async fn put(&self, key: &str, data: &[u8]) -> Result<()> {
-        let mut holders: Vec<Held> = Vec::new();
-        if !data.is_empty() {
-            let nodes = self.directory(false).await?;
-            let mut refused = self.own.clone();
-            let mut last_error = None;
-            while holders.len() < self.copies {
-                let taken: Vec<_> = nodes
-                    .iter()
-                    .filter(|n| holders.iter().any(|h| h.node == n.node.id))
-                    .map(|n| n.node.clone())
-                    .collect();
-                let all: Vec<_> = nodes.iter().map(|n| n.node.clone()).collect();
-                let chosen = match place::choose(&all, &refused, &taken, self.copies - holders.len(), 0) {
-                    Ok(c) => c,
-                    // fewer copies than wanted, on as many networks as there are
-                    Err(PlaceError::TooFew { found: 0, .. }) => break,
-                    Err(PlaceError::TooFew { found, .. }) => {
-                        place::choose(&all, &refused, &taken, found, 0).unwrap_or_default()
-                    }
-                };
-                if chosen.is_empty() {
-                    break;
-                }
-                for node in chosen {
-                    let addr = &nodes.iter().find(|n| n.node.id == node.id).expect("listed").addr;
-                    let mut copy = data.to_vec();
-                    self.keys.blob.apply(key, &node.id, &mut copy);
-                    match client::store(&self.ep, addr, &copy).await {
-                        Ok(blob) => holders.push(Held { node: node.id, blob }),
-                        Err(e) => {
-                            log::debug!("{e:#}");
-                            last_error = Some(e);
-                        }
-                    }
-                    refused.insert(node.id);
-                }
-            }
-            if holders.is_empty() {
-                return Err(last_error.unwrap_or_else(|| anyhow::anyhow!("the network has no node with room")))
-                    .with_context(|| format!("storing {key}"));
-            }
-        }
+        let holders = if data.is_empty() {
+            Vec::new()
+        } else {
+            let holders = self.place(key, data, Vec::new(), &BTreeSet::new()).await?;
+            anyhow::ensure!(!holders.is_empty(), "storing {key}: the network has no node with room");
+            holders
+        };
         self.put_entry(&Entry {
             key: key.to_string(),
             size: data.len() as u64,
             holders,
         })
         .await
+    }
+
+    /// Add copies of `data` next to `held` until there are `copies`,
+    /// never on a node in `avoid`. Returns all the copies; fewer than
+    /// wanted when the network is short of independent nodes.
+    async fn place(&self, key: &str, data: &[u8], mut held: Vec<Held>, avoid: &BTreeSet<NodeId>) -> Result<Vec<Held>> {
+        let nodes = self.directory(false).await?;
+        let mut refused: BTreeSet<NodeId> = self.own.union(avoid).copied().collect();
+        refused.extend(held.iter().map(|h| h.node));
+        while held.len() < self.copies {
+            let taken: Vec<_> = nodes
+                .iter()
+                .filter(|n| held.iter().any(|h| h.node == n.node.id))
+                .map(|n| n.node.clone())
+                .collect();
+            let all: Vec<_> = nodes.iter().map(|n| n.node.clone()).collect();
+            let chosen = match place::choose(&all, &refused, &taken, self.copies - held.len(), 0) {
+                Ok(c) => c,
+                // fewer copies than wanted, on as many networks as there are
+                Err(PlaceError::TooFew { found, .. }) => {
+                    place::choose(&all, &refused, &taken, found, 0).unwrap_or_default()
+                }
+            };
+            if chosen.is_empty() {
+                break;
+            }
+            for node in chosen {
+                let addr = &nodes.iter().find(|n| n.node.id == node.id).expect("listed").addr;
+                let mut copy = data.to_vec();
+                self.keys.blob.apply(key, &node.id, &mut copy);
+                match client::store(&self.ep, addr, &copy).await {
+                    Ok(blob) => held.push(Held { node: node.id, blob }),
+                    Err(e) => log::debug!("{e:#}"),
+                }
+                refused.insert(node.id);
+            }
+        }
+        Ok(held)
+    }
+
+    /// Drop the copies on `gone` and add new ones from a good copy until
+    /// there are enough, never on a node in `avoid` (those that just
+    /// failed, for any object). True when the entry changed.
+    ///
+    /// # Errors
+    ///
+    /// If no good copy can be read, or the index can't be written.
+    pub async fn repair(&self, entry: &Entry, gone: &BTreeSet<NodeId>, avoid: &BTreeSet<NodeId>) -> Result<bool> {
+        let good: Vec<Held> = entry
+            .holders
+            .iter()
+            .filter(|h| !gone.contains(&h.node))
+            .cloned()
+            .collect();
+        if good.len() >= self.copies && good.len() == entry.holders.len() {
+            return Ok(false);
+        }
+        let from = Entry {
+            holders: good.clone(),
+            ..entry.clone()
+        };
+        // a holder that stopped keeping a copy may still have its bytes
+        let data = match self.read(&from, None).await {
+            Ok(data) => data,
+            Err(e) if good.len() < entry.holders.len() => {
+                log::debug!("{e:#}");
+                self.read(entry, None).await?
+            }
+            Err(e) => return Err(e),
+        };
+        let avoid: BTreeSet<NodeId> = gone.union(avoid).copied().collect();
+        let holders = self.place(&entry.key, &data, good, &avoid).await?;
+        if holders == entry.holders {
+            return Ok(false);
+        }
+        self.put_entry(&Entry {
+            holders,
+            ..entry.clone()
+        })
+        .await?;
+        Ok(true)
+    }
+
+    /// The node directory, read again.
+    ///
+    /// # Errors
+    ///
+    /// If the Worker can't be reached.
+    pub async fn nodes(&self) -> Result<Vec<Listed>> {
+        self.directory(true).await
+    }
+
+    #[must_use]
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.ep
+    }
+
+    /// How many copies each object should have.
+    #[must_use]
+    pub fn copies(&self) -> usize {
+        self.copies
     }
 
     /// The object under `key`, all of it or `range` (which must lie

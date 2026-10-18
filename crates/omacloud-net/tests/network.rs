@@ -162,3 +162,49 @@ async fn a_lost_holder_leaves_the_other_copy_and_another_account_sees_nothing() 
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn upkeep_replaces_a_holder_that_left_and_one_that_dropped_its_copy() -> Result<()> {
+    use omacloud_net::upkeep;
+    let net = network(5).await?;
+    let b = bucket(&net, "pw").await?;
+    for i in 0..4 {
+        b.put(&format!("data/aa/{i}"), format!("object {i}").as_bytes()).await?;
+    }
+    let mut free = |_| Ok(Vec::new());
+
+    // nothing wrong: nothing done
+    let r = upkeep::round(&b, 100, None, &mut free).await?;
+    assert_eq!((r.failed, r.repaired), (0, 0), "{r:?}");
+    assert_eq!(r.audited, 8);
+
+    // one holder leaves the network
+    let e0 = b.entry("data/aa/0").await?.expect("indexed");
+    let left = e0.holders[0].node;
+    net.registry.remove_node(&left);
+    // another silently drops everything it holds
+    let e1 = b.entry("data/aa/1").await?.expect("indexed");
+    let dropper = e1
+        .holders
+        .iter()
+        .map(|h| h.node)
+        .find(|n| *n != left)
+        .expect("another holder");
+    let n = net.nodes.iter().find(|n| n.id() == dropper).expect("node");
+    n.sweep_as_of(u64::MAX / 2).await?;
+
+    let r = upkeep::round(&b, 100, Some(omacloud_net::node::now() + 3600), &mut free).await?;
+    assert!(r.repaired >= 2, "{r:?}");
+    assert!(r.lost.is_empty(), "{r:?}");
+    for i in 0..4 {
+        let key = format!("data/aa/{i}");
+        let e = b.entry(&key).await?.expect("indexed");
+        assert_eq!(e.holders.len(), 2, "{key}");
+        assert!(e.holders.iter().all(|h| h.node != left && h.node != dropper), "{key}");
+        assert_eq!(b.get(&key, None).await?, Some(format!("object {i}").into_bytes()));
+    }
+    for n in net.nodes {
+        n.shutdown().await;
+    }
+    Ok(())
+}
