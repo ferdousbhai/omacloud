@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/omacloud-core", "crates/omacloud", "crates/omacloud-app"]
+members = ["crates/omacloud-core", "crates/omacloud-net", "crates/omacloud", "crates/omacloud-app"]
 
 [workspace.package]
 version = "0.0.17"

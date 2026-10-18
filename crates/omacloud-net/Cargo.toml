@@ -1,0 +1,18 @@
+[package]
+name = "omacloud-net"
+description = "The Omacloud network: storage held by untrusted Omarchy computers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex = { workspace = true, features = ["serde"] }
+rand.workspace = true
+blake3 = "1.8"
+chacha20 = "0.10"
+blind-rsa-signatures = "0.18"
