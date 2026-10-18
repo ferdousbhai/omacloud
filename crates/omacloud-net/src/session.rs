@@ -260,6 +260,11 @@ impl Session {
         let issuer = self.network.issuer()?;
         let node = self.rt.block_on(async {
             let ep = endpoint(&self.relays, Some(key.clone())).await?;
+            // listed with its relay, so computers behind routers can reach
+            // it: give the relay a moment to answer first
+            if !self.relays.is_empty() {
+                _ = tokio::time::timeout(std::time::Duration::from_secs(15), ep.online()).await;
+            }
             Node::spawn(ep, Config { dir, capacity, issuer }).await
         })?;
         self.network.heartbeat(&key, &node, capacity)?;
