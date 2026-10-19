@@ -1569,18 +1569,7 @@ impl Engine {
                 bail!(EpochError::Pending { epoch: h.epoch });
             }
             let repo = self.open_repo()?;
-            let mut base = self.base_tree()?;
-            // a computer away longer than versions are kept may find the
-            // tree it last synced gone: it starts again from nothing,
-            // comparing everything, keeping both sides where they differ
-            if let Some(tree) = base
-                && repo.get_tree(&tree).is_err()
-            {
-                warn!("the version this computer last synced is no longer kept: comparing everything");
-                self.state.base = None;
-                self.rescan = true;
-                base = None;
-            }
+            let base = self.base_tree()?;
             self.refresh_synced(&repo, base)?;
             if std::mem::take(&mut self.rescan) {
                 self.queue_rescan(&repo)?;

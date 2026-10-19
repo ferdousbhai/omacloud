@@ -840,40 +840,6 @@ fn a_computer_away_keeps_the_version_it_stands_on() -> Result<()> {
 }
 
 #[test]
-fn a_computer_whose_version_went_compares_everything_and_loses_nothing() -> Result<()> {
-    let w = World::new(&["a", "b"])?;
-    let (mut a, mut b) = (w.engine("a")?, w.engine("b")?);
-    let (da, db) = (w.dir("a"), w.dir("b"));
-    let f = write(&da, "notes.md", "v1\n");
-    write(&da, "other.md", "the same on both\n");
-    a.sync()?;
-    b.sync()?;
-    // `b` edits while away, and never told what it stands on (an older
-    // Omacloud)
-    write(&db, "notes.md", "b's own\n");
-    for v in ["v2\n", "v3\n"] {
-        write(&da, "notes.md", v);
-        a.notice([f.clone()]);
-        a.sync()?;
-    }
-    fs::remove_file(w.tmp.path().join("coord/synced").join(b.device_key()))?;
-    let (mut t, _) = tidier_first(a, b);
-    t.tidy_at_once(Duration::ZERO)?;
-    // the version `b` stood on is gone, with the data only it used
-    assert_eq!(t.versions(&f)?.iter().map(|v| v.seq).collect::<Vec<_>>(), [3]);
-    drop(t);
-
-    let mut b = w.engine("b")?;
-    b.sync()?;
-    let files = digest(&db);
-    assert_eq!(files[Path::new("other.md")], "the same on both\n");
-    // both sides of the changed file are there: nothing is lost
-    let contents: BTreeSet<&str> = files.values().map(String::as_str).collect();
-    assert!(contents.contains("v3\n") && contents.contains("b's own\n"), "{files:?}");
-    Ok(())
-}
-
-#[test]
 fn ignore_rules_hold_in_both_directions() -> Result<()> {
     let w = World::new(&["a", "b"])?;
     let (mut a, mut b) = (w.engine("a")?, w.engine("b")?);
