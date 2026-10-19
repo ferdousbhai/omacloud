@@ -168,7 +168,7 @@ assert branches == ['master', 'omacloud'], branches
 print('merged, version only: passed')
 
 # Merged, and the recipe changed beyond the version: a new pull request.
-changed = recipe(**{"'libsecret')": "'libsecret' 'openssl')"})
+changed = recipe(**{"'libadwaita')": "'libadwaita' 'openssl')"})
 result, calls, _, fork, before, branches, upstream = check('MERGED', upstream=recipe(), released=changed)
 assert result.returncode == 0, result.stderr
 assert 'omacloud-1.2.3' in branches, branches

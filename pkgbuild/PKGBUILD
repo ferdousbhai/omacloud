@@ -14,7 +14,7 @@ arch=('x86_64' 'aarch64')
 url='https://github.com/ferdousbhai/omacloud'
 license=('MIT')
 options=('!debug' '!lto')
-depends=('glibc' 'libgcc' 'gtk4' 'libadwaita' 'libsecret')
+depends=('glibc' 'libgcc' 'gtk4' 'libadwaita')
 makedepends=('cargo' 'git')
 optdepends=('restic: restore without omacloud (see `omacloud export`)'
             'fuse3: every file in ~/Omacloud, each fetched when opened (`omacloud mount`)')

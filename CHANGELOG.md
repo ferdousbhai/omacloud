@@ -50,6 +50,7 @@
 - Gone with them: `OMACLOUD_SECRET_ACCESS_KEY`,
   `OMACLOUD_DROPBOX_CLIENT_SECRET`, `OMACLOUD_DROPBOX_AUTH_CODE`,
   `OMACLOUD_CONTACT_CARD`, `OMACLOUD_SERVICE_URL` and `OMACLOUD_KEYRING`.
+  The package no longer depends on libsecret, which only the keyring used.
 - Existing accounts don't carry over: create the account again on the
   network. Run `omacloud export` before upgrading: plain
   restic restores everything from what it prints.

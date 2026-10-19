@@ -51,7 +51,7 @@ assert not drift, 'The Omarchy recipe drifted from pkgbuild/PKGBUILD:\n' + '\n'.
 print('recipe matches pkgbuild/PKGBUILD: passed')
 
 # The check itself catches a change in each kind of field.
-for old, new in (("'libsecret'", "'libsecret' 'openssl'"),
+for old, new in (("'libadwaita'", "'libadwaita' 'openssl'"),
                  ("options=('!debug' '!lto')", "options=('!debug')"),
                  ('-p omacloud-core --lib', '-p omacloud-core'),
                  ('${CARGO_TARGET_DIR:-target}/release/omacloud-app', '${CARGO_TARGET_DIR:-target}/release/omacloud-gtk')):

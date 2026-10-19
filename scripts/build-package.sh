@@ -37,7 +37,7 @@ docker run --rm --platform "$platform" \
     else
       pacman-key --populate archlinux
     fi
-    pacman -Syu --noconfirm --needed base-devel cargo git gtk4 libadwaita libsecret
+    pacman -Syu --noconfirm --needed base-devel cargo git gtk4 libadwaita
     git config --global --add safe.directory /source
     git config --global --add safe.directory /source/.git
     git clone --no-hardlinks /source /build
