@@ -271,6 +271,28 @@ impl Session {
         Ok(node)
     }
 
+    /// Share `data` as a file named `name`: the secret its link carries.
+    ///
+    /// # Errors
+    ///
+    /// If no holder takes it.
+    pub fn share(&self, name: &str, data: &[u8]) -> Result<String> {
+        let secret = crate::share::secret();
+        let bucket = self.gateway.bucket(&crate::share::bucket_key(&secret));
+        self.rt.block_on(crate::share::put(&bucket, &secret, name, data))?;
+        Ok(secret)
+    }
+
+    /// The file shared under `secret`: its name and contents.
+    ///
+    /// # Errors
+    ///
+    /// If it's gone, can't be read, or doesn't verify.
+    pub fn receive(&self, secret: &str) -> Result<(String, Vec<u8>)> {
+        let bucket = self.gateway.bucket(&crate::share::bucket_key(secret));
+        self.rt.block_on(crate::share::get(&bucket, secret))
+    }
+
     /// Never choose these nodes (the account's own) as holders.
     pub fn set_own(&self, own: BTreeSet<NodeId>) {
         self.gateway.set_own(own);

@@ -8,7 +8,7 @@ const get = (path: string, method = "GET") =>
 	worker.fetch(new Request(`https://omacloud.computer${path}`, { method }) as never, env);
 
 test("the pages are served, and nothing else", async () => {
-	for (const path of ["/", "/privacy", "/terms", "/llms.txt", "/health"]) assert.equal((await get(path)).status, 200, path);
+	for (const path of ["/", "/privacy", "/terms", "/llms.txt", "/s", "/health"]) assert.equal((await get(path)).status, 200, path);
 	for (const path of ["/signin", "/waitlist", "/api/keys", "/auth/google/callback"]) assert.equal((await get(path)).status, 404, path);
 	assert.equal((await get("/", "POST")).status, 404);
 });

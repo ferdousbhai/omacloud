@@ -64,6 +64,21 @@ safe location. If you lose all your computers, you need this code to get your da
 <p>Then open Omacloud from the app launcher.</p>`,
 	);
 
+/** Where a share link lands. The key is after the #, which browsers never
+ * send, so this page can't open the file and doesn't try. */
+export const shared = () =>
+	layout(
+		"A shared file · Omacloud",
+		`<h1>A file shared with you</h1>
+<p class="lead">Someone shared a file through Omacloud. It is encrypted, and only this link opens it.</p>
+<p>To download it on Omarchy, install Omacloud, run this command and paste the link:</p>
+<pre>omacloud receive</pre>
+<p>You don't need an account. The link works for 7 days after it was made.</p>
+<p>This site never receives the part of the link after the #, so it can't read the file.</p>
+<h2>Get Omacloud</h2>
+<pre>curl -fsSL https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh | sudo bash</pre>`,
+	);
+
 export const privacy = () =>
 	layout(
 		"Privacy · Omacloud",

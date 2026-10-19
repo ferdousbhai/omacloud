@@ -197,6 +197,16 @@ Omacloud. `omacloud gateway` instead serves the repository on the network
 as S3 on this computer, while it runs, and prints the restic command that
 reads it.
 
+## Sharing a file
+
+`omacloud share photo.jpg` prints a link. Whoever has it can download the
+file for 7 days, on any Omarchy computer with Omacloud, with no account:
+they run `omacloud receive` and paste the link (or put it in
+`OMACLOUD_LINK`). The file is encrypted with a key that lives only in the
+link, after the `#`, which browsers never send: opened in a browser, the
+link shows how to get the file, and omacloud.computer can't read it. A
+share holds up to 256 MiB.
+
 ## A lost computer
 
 Remove it under Devices (or `omacloud devices revoke <fingerprint>`, which
@@ -253,12 +263,13 @@ omacloud devices --ids-only
 
 Commands only ask (a secret, a confirmation) in text mode with stdin and
 stdout on a terminal; elsewhere secrets come from the `OMACLOUD_*`
-environment variables and confirmations from `--yes`.
+environment variables (`OMACLOUD_LINK` for `receive`) and confirmations
+from `--yes`.
 
 What prints a secret prints it only to your terminal, in text mode with
 stdin and stdout on it, and refuses (exit 2) as JSON or into a pipe: `init`
 when it creates an account (the recovery code), `join-code`, `export`,
-`gateway`, and
+`gateway`, `share` (the link), and
 `recovery split` and `combine`
 (`combine` reads its shares from stdin, so only its stdout must be a
 terminal). Joining with a join code or the recovery code prints no secret

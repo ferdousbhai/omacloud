@@ -172,6 +172,19 @@ enum Cmd {
         /// An empty folder outside the synced ones [default: ~/Omacloud]
         dir: Option<PathBuf>,
     },
+    /// Share a file by link: whoever has the link can download it, for 7
+    /// days. It needs no account to open
+    Share {
+        /// The file to share (up to 256 MiB)
+        file: PathBuf,
+    },
+    /// Download a file shared by link; the link comes from OMACLOUD_LINK, or
+    /// is asked for
+    Receive {
+        /// Folder to write it in [default: the current one]
+        #[arg(long)]
+        to: Option<PathBuf>,
+    },
     /// Write a file as it was at a given version
     Restore {
         /// Path inside the synced folder
@@ -462,6 +475,24 @@ fn default_relays(url: &str) -> Vec<String> {
         vec!["https://relay1.omacloud.computer".to_string()]
     } else {
         Vec::new()
+    }
+}
+
+/// The network to share on (this account's, or the default) or to receive
+/// from (`url`, the link's).
+fn share_network(paths: &Paths, url: Option<String>) -> NetConfig {
+    let mine = load(paths).ok().and_then(|c| c.network);
+    match (url, mine) {
+        (None, Some(n)) => n,
+        (Some(url), Some(n)) if url == n.url => n,
+        (url, _) => {
+            let url = url.unwrap_or_else(network_url);
+            NetConfig {
+                relays: default_relays(&url),
+                url,
+                give: 0,
+            }
+        }
     }
 }
 
@@ -1680,6 +1711,63 @@ fn run(cli: Cli) -> Out {
             Ok(Response::new(
                 json!({ "dir": dir }),
                 format!("unmounted {}", dir.display()),
+            ))
+        }
+        Cmd::Share { file } => {
+            if !output::to_terminal(mode()) {
+                return Err(fail::terminal_required("a share link (it opens the file)").into());
+            }
+            let size = fs::metadata(&file)
+                .map_err(|e| fail::not_found(format!("{}: {e}", file.display())))?
+                .len();
+            if !fs::metadata(&file)?.is_file() || size > omacloud_net::share::MAX {
+                return Err(
+                    fail::usage(format!("{} isn't a file of 256 MiB or less", file.display()))
+                        .hint("share one file at a time; zip a folder first")
+                        .into(),
+                );
+            }
+            let name = file
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .ok_or_else(|| fail::usage("give a file"))?;
+            let net = share_network(&paths, None);
+            let secret = session(&paths, &net)?
+                .share(&name, &fs::read(&file)?)
+                .map_err(|e| fail::unavailable(format!("{e:#}")))?;
+            eprintln!(
+                "Anyone with this link can download {name} for 7 days. On Omarchy, they run\n\
+                 `omacloud receive` and paste it; nobody else, Omacloud included, can open it."
+            );
+            Ok(
+                Response::new(Value::Null, format!("shared {name}"))
+                    .human(omacloud_net::share::link(&net.url, &secret)),
+            )
+        }
+        Cmd::Receive { to } => {
+            let link = read_secret("OMACLOUD_LINK", "share link")?;
+            let (url, secret) = omacloud_net::share::parse(&link).map_err(|e| fail::usage(format!("{e:#}")))?;
+            let net = share_network(&paths, Some(url));
+            let (name, data) = session(&paths, &net)?
+                .receive(&secret)
+                .map_err(|e| fail::unavailable(format!("{e:#}")))?;
+            let dest = to.unwrap_or_default().join(&name);
+            if dest.exists() {
+                return Err(CliError::new(
+                    "exists",
+                    output::EXIT_USAGE,
+                    format!("{} already exists", dest.display()),
+                )
+                .hint("pass --to another folder")
+                .into());
+            }
+            if let Some(dir) = dest.parent().filter(|d| !d.as_os_str().is_empty()) {
+                fs::create_dir_all(dir)?;
+            }
+            fs::write(&dest, &data)?;
+            Ok(Response::new(
+                json!({ "name": name, "written": dest, "size": data.len() }),
+                format!("wrote {}", dest.display()),
             ))
         }
         Cmd::Restore { path, at, to, yes } => {

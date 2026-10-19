@@ -12,6 +12,7 @@ export default {
 			if (url.pathname === "/") return pages.home();
 			if (url.pathname === "/privacy") return pages.privacy();
 			if (url.pathname === "/terms") return pages.terms();
+			if (url.pathname === "/s") return pages.shared();
 			if (url.pathname === "/llms.txt") return pages.llms(env);
 			if (url.pathname === "/health") return new Response("ok");
 		}

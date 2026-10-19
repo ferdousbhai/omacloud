@@ -267,8 +267,14 @@ mod tests {
         assert_eq!(before["tokens"], 0);
 
         let token = serde_json::json!({ "msg": "00".repeat(32), "randomizer": "00".repeat(32), "sig": "00" });
-        fs::write(dir.path().join("wallet.json"), serde_json::json!(vec![token; 7]).to_string())?;
-        fs::write(dir.path().join("space.json"), r#"{"stored": 5000, "monthly": 3, "at": 1}"#)?;
+        fs::write(
+            dir.path().join("wallet.json"),
+            serde_json::json!(vec![token; 7]).to_string(),
+        )?;
+        fs::write(
+            dir.path().join("space.json"),
+            r#"{"stored": 5000, "monthly": 3, "at": 1}"#,
+        )?;
         fs::write(dir.path().join("renewed"), "100")?;
         let s = space(dir.path());
         assert_eq!((s["stored"].as_u64(), s["tokens"].as_u64()), (Some(5000), Some(7)));

@@ -17,5 +17,6 @@ pub mod records;
 pub mod registry;
 pub mod seal;
 pub mod session;
+pub mod share;
 pub mod upkeep;
 pub mod worker;

@@ -214,3 +214,27 @@ async fn upkeep_replaces_a_holder_that_left_and_one_that_dropped_its_copy() -> R
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shared_file_opens_with_its_secret_only() -> Result<()> {
+    use omacloud_net::share;
+    let net = network(3).await?;
+    let secret = share::secret();
+    let sharer = bucket(&net, &share::bucket_key(&secret)).await?;
+    share::put(&sharer, &secret, "photo.jpg", b"jpeg bytes").await?;
+
+    // anyone with the secret, from another computer
+    let other = bucket(&net, &share::bucket_key(&secret)).await?;
+    assert_eq!(
+        share::get(&other, &secret).await?,
+        ("photo.jpg".to_string(), b"jpeg bytes".to_vec())
+    );
+    // another secret finds nothing
+    let wrong = share::secret();
+    let stranger = bucket(&net, &share::bucket_key(&wrong)).await?;
+    assert!(share::get(&stranger, &wrong).await.is_err());
+    for n in net.nodes {
+        n.shutdown().await;
+    }
+    Ok(())
+}

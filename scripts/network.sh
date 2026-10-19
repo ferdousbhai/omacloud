@@ -82,6 +82,12 @@ if command -v "${RESTIC:-restic}" >/dev/null; then
   diff -r --no-dereference "$work/A" "$work/restored"
 fi
 
+# a file shared by link opens on a computer with no account
+link=$(oc_tty a share "$work/A/docs/deep/a.txt" | grep '/s#')
+[ -n "$link" ] || { echo "no share link"; exit 1; }
+OMACLOUD_LINK=$link oc c receive --to "$work/got" >/dev/null
+cmp "$work/A/docs/deep/a.txt" "$work/got/a.txt"
+
 # the Worker's part holds nothing readable: no file names, no contents
 if [ -d "$work/worker" ] && grep -rqa -e "from a" -e "a.txt" -e "docs" "$work/worker"; then
   echo "the Worker's part holds something readable"; exit 1

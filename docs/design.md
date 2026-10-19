@@ -145,6 +145,13 @@ sync engine. Nothing in it is trusted for anything but availability.
   reaches holders through it only, so a holder never learns its address;
   nodes take direct connections too. Other networks set their own relays
   (`[network] relays`).
+- **Shared files** (`share.rs`). `omacloud share` seals the file under a
+  random 256-bit secret and keeps it in a bucket of its own, whose keys
+  come from that secret alone, like an epoch's from its network key. The
+  link is `<network>/s#<secret>`: the Worker's page at `/s` never gets the
+  part after `#`. Nobody renews a share, so its holders drop it after the
+  first lease, 7 days. Holders and the Worker see a bucket like any other,
+  unlinked to the account that made it.
 - **What stays central.** The Worker keeps the node directory, the sealed
   index, the sealed coordination records, and issues credits. There are no
   accounts, emails or sign-ins: only ids and keys the computers make.
@@ -250,6 +257,7 @@ Elsewhere:
 - Online-only files you can edit in place (#7): `omacloud mount` shows
   every file read-only, fetched on open, but a folder is either kept here
   in full or skipped, not freed file by file.
-- Sharing a file by link (#15) or a folder with other people (#8).
+- Sharing a folder with other people (#8); a shared link (#15) is one
+  file, read-only, for 7 days.
 - Reaching files from a phone or a browser.
 - An outside review of this design (#18).

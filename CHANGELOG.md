@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Share a file by link: `omacloud share <file>` prints a link that opens
+  it for 7 days; `omacloud receive` downloads it on any computer with
+  Omacloud, no account needed. The key is only in the link, after the `#`.
 - How much space you have: `omacloud node status`, `status --json`
   (`network.space`) and the app's Storage show what the account stores,
   its monthly cost in credits, the credits held and how many months they
