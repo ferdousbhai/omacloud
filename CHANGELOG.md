@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.19 (2026-10-19)
 
 - Holders are paid for what they served: a renewal keeps blobs on credit
   for up to three months and pays for the time already kept, never ahead;
