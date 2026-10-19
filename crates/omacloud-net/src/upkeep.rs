@@ -43,7 +43,8 @@ pub struct Report {
     pub lost: Vec<String>,
     /// Bytes stored, one copy of each object.
     pub stored: u64,
-    /// Tokens a month keeping every good copy costs, as holders charge.
+    /// Tokens a month keeping every copy the index names costs (failed
+    /// ones too, until repaired), as holders charge.
     pub monthly: u64,
     /// Holders that failed: an audit, a renewal, or asked more than they
     /// could have earned.
@@ -54,7 +55,7 @@ pub struct Report {
 /// `last` (0: none): every byte for every month begun since, at most a
 /// longest lease's worth, and at least a month's.
 #[must_use]
-pub fn most_earned(bytes: u64, last: u64, now: u64) -> u64 {
+fn most_earned(bytes: u64, last: u64, now: u64) -> u64 {
     let longest = crate::node::LONGEST_LEASE.div_ceil(MONTH);
     let months = if last == 0 {
         longest
@@ -179,7 +180,6 @@ pub async fn round(
         }
     }
     report.monthly = per_holder.values().map(|b| tokens_for(*b)).sum();
-    // fewest good copies first: those are nearest to being lost
     let mut repairs: Vec<&Entry> = entries
         .iter()
         .filter(|e| e.size > 0 && (bad.contains_key(&e.key) || e.holders.len() < e.wanted(bucket.copies())))
@@ -190,7 +190,7 @@ pub async fn round(
         good.saturating_sub(e.needed())
     });
     // a node that failed any copy gets none of the new ones
-    let suspects: BTreeSet<NodeId> = bad.values().flatten().copied().collect();
+    let suspects = report.failed_nodes.clone();
     for e in repairs {
         let gone = bad.remove(&e.key).unwrap_or_default();
         match bucket.repair(e, &gone, &suspects).await {

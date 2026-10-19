@@ -83,12 +83,13 @@ impl View {
             .mtime
             .and_then(|t| u64::try_from(t.as_second()).ok())
             .map_or(UNIX_EPOCH, |s| UNIX_EPOCH + Duration::from_secs(s));
-        let (kind, perm) = match e.kind {
-            Kind::Dir => (FileType::Directory, 0o555),
-            Kind::Symlink => (FileType::Symlink, 0o777),
+        let perm = match e.kind {
+            Kind::Dir => 0o555,
+            Kind::Symlink => 0o777,
             // read-only, whatever the file's mode, keeping execute bits
-            Kind::File => (FileType::RegularFile, e.mode.map_or(0o444, |m| (m & 0o555) | 0o444)),
+            Kind::File => e.mode.map_or(0o444, |m| (m & 0o555) | 0o444),
         };
+        let kind = file_type(e.kind);
         FileAttr {
             ino: INodeNo(ino),
             size: e.size,
@@ -107,6 +108,14 @@ impl View {
             blksize: 4096,
             flags: 0,
         }
+    }
+}
+
+fn file_type(kind: Kind) -> FileType {
+    match kind {
+        Kind::Dir => FileType::Directory,
+        Kind::File => FileType::RegularFile,
+        Kind::Symlink => FileType::Symlink,
     }
 }
 
@@ -221,12 +230,7 @@ impl Filesystem for View {
         ];
         let mut inodes = self.inodes.lock().unwrap();
         for e in entries {
-            let kind = match e.kind {
-                Kind::Dir => FileType::Directory,
-                Kind::File => FileType::RegularFile,
-                Kind::Symlink => FileType::Symlink,
-            };
-            all.push((INodeNo(inodes.number(&path.join(&e.name))), kind, e.name));
+            all.push((INodeNo(inodes.number(&path.join(&e.name))), file_type(e.kind), e.name));
         }
         drop(inodes);
         for (i, (ino, kind, name)) in all

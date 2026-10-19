@@ -63,7 +63,7 @@ function bigToHex(x: bigint, bytes: number): string {
 	return x.toString(16).padStart(2 * bytes, "0");
 }
 
-export function modPow(base: bigint, exp: bigint, mod: bigint): bigint {
+function modPow(base: bigint, exp: bigint, mod: bigint): bigint {
 	let result = 1n;
 	let b = base % mod;
 	let e = exp;

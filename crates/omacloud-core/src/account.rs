@@ -67,8 +67,6 @@ pub fn create_with_code(
         coord.append_device(&genesis(&root_key, device, name))?,
         "the device list is not empty"
     );
-    // the repository comes after the first device: storage through the
-    // service answers members only
     let password = random_secret();
     let key = repo.keyed(&password).init(&password)?;
     let mut chain = DeviceChain::new(&root);
@@ -76,8 +74,6 @@ pub fn create_with_code(
     let secret = EpochSecret {
         password: password.clone(),
         key,
-        // the network's location is this computer's own gateway
-        storage: (repo.is_bucket() && !repo.is_network()).then(|| repo.without_local_options()),
     };
     let record = EpochRecord::next(device, None, 0, &chain, &secret, BTreeMap::new())?;
     ensure!(coord.append_epoch(&record)?, "the account already has keys");

@@ -5,23 +5,16 @@ use std::{collections::BTreeSet, fs, sync::Arc};
 
 use anyhow::Result;
 use ed25519_dalek::SigningKey;
-use iroh::{Endpoint, RelayMode, endpoint::presets};
 use omacloud_core::{Coordinator, Engine, RepoSpec, Setup, account};
 use omacloud_net::{
     coord::{Account, NetworkCoordinator},
     gateway::{BUCKET, Gateway},
-    node::{Config, Node},
-    place,
     records::MemRecords,
-    registry::{Listed, MemRegistry},
+    registry::MemRegistry,
 };
 
-async fn endpoint() -> Result<Endpoint> {
-    Ok(Endpoint::builder(presets::Minimal)
-        .relay_mode(RelayMode::Disabled)
-        .bind()
-        .await?)
-}
+mod common;
+use common::endpoint;
 
 #[test]
 fn two_computers_sync_through_the_network() -> Result<()> {
@@ -29,30 +22,7 @@ fn two_computers_sync_through_the_network() -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     let (nodes, gateway) = rt.block_on(async {
         let registry = Arc::new(MemRegistry::default());
-        let mut nodes = Vec::new();
-        for i in 0..3u8 {
-            let node = Node::spawn(
-                endpoint().await?,
-                Config {
-                    dir: tmp.path().join(format!("node{i}")),
-                    capacity: 1 << 30,
-                    issuer: None,
-                },
-            )
-            .await?;
-            registry.add_node(Listed {
-                node: place::Node {
-                    id: node.id(),
-                    asn: 64500 + u32::from(i),
-                    prefix: format!("192.0.{i}.0/24"),
-                    uptime: 0.99,
-                    probation: false,
-                    since: 0,
-                },
-                addr: node.addr(),
-            });
-            nodes.push(node);
-        }
+        let nodes = common::holders(tmp.path(), 3, &registry).await?;
         let gateway = Gateway::start(endpoint().await?, registry, BTreeSet::new(), 2).await?;
         anyhow::Ok((nodes, gateway))
     })?;

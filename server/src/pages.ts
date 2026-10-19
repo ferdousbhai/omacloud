@@ -1,8 +1,9 @@
-// The public pages of omacloud.computer: home, privacy, terms and llms.txt.
+// The public pages of omacloud.computer: home, privacy, terms, llms.txt and
+// /s, where a share link lands. index.ts also serves /install.sh.
 
 const PRIVACY = "privacy@omacloud.computer";
 const LEGAL = "legal@omacloud.computer";
-const UPDATED = "18 October 2026";
+const UPDATED = "19 October 2026";
 
 function layout(title: string, body: string): Response {
 	return new Response(
@@ -75,7 +76,8 @@ export const shared = () =>
 <p class="lead">Someone shared a file through Omacloud. It is encrypted, and only this link opens it.</p>
 <p>To download it on Omarchy, install Omacloud, run this command and paste the link:</p>
 <pre>omacloud receive</pre>
-<p>You don't need an account. The link works for 7 days after it was made.</p>
+<p>You don't need an account. The link works until it expires or the person who shared it takes
+it back: 7 days, unless they chose longer.</p>
 <p>This site never receives the part of the link after the #, so it can't read the file.</p>
 <h2>Get Omacloud</h2>
 <pre>curl -fsSL https://omacloud.computer/install.sh | sudo bash</pre>`,
@@ -91,6 +93,10 @@ pass through Cloudflare, which handles your IP address to deliver them.</p>
 <p>Omacloud itself has no accounts or sign-in. Your files, their names, your settings and your
 keys are encrypted on your computer, with keys that never leave your computers and your
 recovery code, before anything is stored. Whoever holds the encrypted data can't read it.</p>
+<p>For Omacloud's storage network, this site keeps only what its limits need: the /24 or /48
+that an address belongs to, never the address itself, and only for a while. For each storage
+node it keeps the node's network and the address that computers reach it at, and forgets the
+node 30 days after it was last seen.</p>
 <h2>Contact</h2>
 <p><a href="mailto:${PRIVACY}">${PRIVACY}</a></p>`,
 	);
@@ -138,7 +144,7 @@ it. Omacloud runs on Omarchy (Arch Linux, x86_64 and aarch64), as a GTK app and 
 
 ## Command line
 
-- [omacloud CLI](${repo}/blob/master/README.md): \`omacloud --help\` lists every command. Piped, every command prints a JSON envelope ({ok, data, summary} or {ok: false, error: {code, message, hint}}; \`--quiet\` for the data alone) and exits 0, 1, 2 usage, 3 not set up, 4 not found or 5 unreachable; \`omacloud status\` reports state. Commands that print a secret (\`join-code\`, \`export\`, a new account's recovery code) print only to a terminal. Secrets come from environment variables (OMACLOUD_RECOVERY_CODE, OMACLOUD_JOIN_CODE) or a prompt, never arguments
+- [omacloud CLI](${repo}/blob/master/README.md): \`omacloud --help\` lists every command. Piped, every command prints a JSON envelope ({ok, data, summary} or {ok: false, error: {code, message, hint}}; \`--quiet\` for the data alone) and exits 0, 1, 2 usage, 3 not set up, 4 not found or 5 unreachable; \`omacloud status\` reports state. Commands that print a secret (\`join-code\`, \`export\`, \`share\`, a new account's recovery code) print only to a terminal. Secrets come from environment variables (OMACLOUD_RECOVERY_CODE, OMACLOUD_JOIN_CODE) or a prompt, never arguments
 
 ## Site
 

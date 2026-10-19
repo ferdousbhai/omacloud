@@ -1,6 +1,6 @@
 //! The built binary against the output contract: a local repository and a
 //! shared coordination directory in a temporary home, no network, and no
-//! keyring or systemd of the real user. Commands that print a secret run on a
+//! systemd of the real user. Commands that print a secret run on a
 //! pseudo-terminal of the test's own.
 
 use std::fs::File;

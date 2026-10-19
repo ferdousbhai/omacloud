@@ -1,7 +1,8 @@
 //! An account's coordination records as the Worker keeps them: append-only
 //! logs (create-only positions), a create-only anchor, and named records
-//! (grants, join requests). Bodies are opaque here; [`crate::coord`] seals
-//! them. Writes need the account's capability, except a join request.
+//! (grants, join requests, nodes, bases). Bodies are opaque here;
+//! [`crate::coord`] seals them. Writes need the account's capability,
+//! except a join request.
 
 use std::{collections::BTreeMap, sync::Mutex};
 
@@ -20,7 +21,7 @@ pub trait Records: Send + Sync {
     fn anchor(&self, account: &str) -> Result<Option<String>>;
     /// Set the anchor once. False if set.
     fn set_anchor(&self, account: &str, cap: &str, body: &str) -> Result<bool>;
-    /// Named records of `kind` (`grants`, `requests`) whose name starts with `prefix`.
+    /// Named records of `kind` (`grants`, `requests`, `nodes`, `bases`) whose name starts with `prefix`.
     fn named(&self, account: &str, kind: &str, prefix: &str) -> Result<Vec<(String, String)>>;
     /// Add or replace a named record; `cap` is None for a join request.
     fn put_named(&self, account: &str, cap: Option<&str>, kind: &str, name: &str, body: &str) -> Result<()>;

@@ -2,7 +2,8 @@
 
 Omacloud keeps Desktop, Documents and Pictures (and any folder of home you
 add) in sync on every Omarchy computer, with Omarchy settings, package lists
-and ssh and gpg keys alongside, every version kept, end to end encrypted.
+and ssh and gpg keys alongside, earlier versions and deleted files kept
+for 30 days, end to end encrypted.
 This page describes what protects your data and what each party can and
 can't do. The source files named here hold the details.
 
@@ -178,9 +179,10 @@ sync engine. Nothing in it is trusted for anything but availability.
   come from that secret alone, like an epoch's from its network key. The
   link is `<network>/s#<secret>`: the Worker's page at `/s` never gets the
   part after `#`. A share lasts its first lease, 7 days, unless the
-  sharing computer's daemon renews it (`share --days`), keeping its secret
-  in a private file beside the wallet, and paying as for its own copies. Holders and the Worker see a bucket like any other,
-  unlinked to the account that made it.
+  sharing computer's daemon renews it (`share --days`, up to 365),
+  keeping its secret in a private file beside the wallet, and paying as
+  for its own copies; `unshare` takes it back. Holders and the Worker see
+  a bucket like any other, unlinked to the account that made it.
 - **What stays central.** The Worker keeps the node directory, the sealed
   index, the sealed coordination records, and issues credits. There are no
   accounts, emails or sign-ins: only ids and keys the computers make.
@@ -247,10 +249,9 @@ network:
 - **Holders** see scrambled blobs, their sizes and when they're fetched or
   checked, and a node key that changes every run. With relays set, a
   computer reaches holders through relays only, so they don't learn its
-  address; with none (as until seed relays run), it connects directly and
-  they do.
+  address; on a network with no relays, it connects directly and they do.
 - **Relays and seeds** see who connects to whom and how much, by address;
-  seeds are holders too. Omacloud will run them while the network is small.
+  seeds are holders too. Omacloud runs the first seed and its relay.
 - **Cloudflare** sits in front of the Worker and sees what it sees.
 - **A removed computer** keeps what it had synced before removal, and with
   a new epoch can't read what comes after or write coordination records.
@@ -263,7 +264,7 @@ names, settings or keys.
 
 - **Programs you run, AI agents included,** can run `omacloud` as you. The
   commands that print a secret (the recovery code, a join code,
-  shares, the repository password) print it only in text
+  shares, a share link, the repository password) print it only in text
   mode with stdin and stdout on a terminal, and refuse as JSON or into a
   pipe, so it doesn't land in a script's output, a JSON consumer or an
   agent's captured output by accident. That is a guard against accidents,
@@ -295,6 +296,7 @@ Elsewhere:
   every file read-only, fetched on open, but a folder is either kept here
   in full or skipped, not freed file by file.
 - Sharing a folder with other people (#8); a shared link (#15) is one
-  file, read-only, for 7 days.
+  file, read-only, for 7 days by default, up to a year with
+  `share --days`.
 - Reaching files from a phone or a browser (#35).
 - An outside review of this design (#18).

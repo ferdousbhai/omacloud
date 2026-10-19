@@ -152,12 +152,6 @@ pub trait Coordinator: Send + Sync {
         Ok(true)
     }
 
-    /// Block until a head with `seq > after` exists or the coordinator's
-    /// wait runs out; returns the latest seq. The default doesn't wait.
-    fn wait(&self, after: u64) -> Result<u64> {
-        Ok(self.head()?.map_or(after, |h| h.seq))
-    }
-
     /// All epoch records, from epoch 0.
     fn epochs(&self) -> Result<Vec<EpochRecord>>;
     /// Append an epoch record if it is exactly the next one.
@@ -208,7 +202,7 @@ pub trait Coordinator: Send + Sync {
 }
 
 /// Everything as files in a directory: `heads/`, `devices/`, `epochs/`,
-/// `grants/`, `requests/` and `account.json`. Appends are an atomic compare and swap across
+/// `grants/`, `requests/`, `synced/` and `account.json`. Appends are an atomic compare and swap across
 /// processes: the entry is written to a temp file and hard linked into place,
 /// which fails if the name exists.
 #[derive(Debug, Clone)]
@@ -224,9 +218,7 @@ impl DirCoordinator {
     /// If the directories can't be created.
     pub fn new(dir: impl Into<PathBuf>) -> Result<Self> {
         let dir = dir.into();
-        for sub in [
-            "heads", "devices", "epochs", "grants", "requests", "keys", "key-acks", "synced",
-        ] {
+        for sub in ["heads", "devices", "epochs", "grants", "requests", "synced"] {
             fs::create_dir_all(dir.join(sub)).with_context(|| format!("creating {}", dir.join(sub).display()))?;
         }
         Ok(Self { dir })
@@ -366,7 +358,6 @@ impl Coordinator for DirCoordinator {
         Ok(())
     }
     fn set_synced(&self, device: &str, seq: u64) -> Result<()> {
-        fs::create_dir_all(self.dir.join("synced"))?;
         fs::write(self.dir.join("synced").join(device), seq.to_string())?;
         Ok(())
     }

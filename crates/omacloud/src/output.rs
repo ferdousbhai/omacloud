@@ -26,12 +26,11 @@ pub const EXIT_ERROR: u8 = 1;
 /// `--yes` when nobody can be asked, an ambiguous name, something already
 /// there.
 pub const EXIT_USAGE: u8 = 2;
-/// Not set up, not joined or approved, or a key, code or card refused.
+/// Not set up, not joined or approved, or a key, code or share refused.
 pub const EXIT_SETUP: u8 = 3;
 /// What was asked for doesn't exist: a device, a version, a bundle.
 pub const EXIT_NOT_FOUND: u8 = 4;
-/// A service or tool is out of reach: the storage, the network, Omacloud's
-/// sign-in, the keyring, systemd.
+/// A service or tool is out of reach: the storage, the network, systemd.
 pub const EXIT_UNAVAILABLE: u8 = 5;
 
 /// How a result is rendered.

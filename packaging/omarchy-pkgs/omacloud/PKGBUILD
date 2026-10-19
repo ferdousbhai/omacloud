@@ -2,7 +2,7 @@
 pkgname=omacloud
 pkgver=0.0.14
 pkgrel=1
-pkgdesc="Your files and settings on every Omarchy computer, end to end encrypted, in your own storage or optionally on Omacloud storage (CLI, daemon, GTK app)"
+pkgdesc="Your files and settings on every Omarchy computer, end to end encrypted, on the Omacloud network (CLI, daemon, GTK app)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/ferdousbhai/omacloud"
 license=('MIT')

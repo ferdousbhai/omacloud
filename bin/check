@@ -32,7 +32,11 @@ step "server"
 (cd server && { [[ -d node_modules ]] || npm ci; } && npm run check)
 
 step "packaging"
-bash -n install.sh pkgbuild/PKGBUILD packaging/omarchy-pkgs/omacloud/PKGBUILD scripts/*.sh .githooks/pre-push
+# bash -n reads one script (the rest are its arguments), so one at a time
+for f in install.sh pkgbuild/PKGBUILD packaging/omarchy-pkgs/omacloud/PKGBUILD scripts/*.sh .githooks/pre-push \
+  contrib/seed-setup.sh server/deploy.sh server/backup.sh; do
+  bash -n "$f"
+done
 for t in scripts/tests/*.py; do python3 "$t"; done
 
 printf '\nAll checks passed.\n'

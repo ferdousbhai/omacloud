@@ -11,13 +11,18 @@ use iroh_blobs::{
 
 use crate::{
     credit::Token,
-    node::{about, hash_of},
+    node::hash_of,
     proto::{self, BlobId, Reply, Request},
 };
 
 /// How long reaching a holder may take: one that's gone shouldn't hold up
 /// a read that others can answer.
 const CONNECT: Duration = Duration::from_secs(10);
+
+/// Read context for errors about a node.
+fn about(addr: &EndpointAddr) -> String {
+    format!("node {}", addr.id.fmt_short())
+}
 
 async fn connect(ep: &Endpoint, to: &EndpointAddr, alpn: &[u8]) -> Result<Connection> {
     tokio::time::timeout(CONNECT, ep.connect(to.clone(), alpn))
@@ -46,7 +51,7 @@ async fn ask(ep: &Endpoint, to: &EndpointAddr, request: &Request, body: Option<&
 ///
 /// If the holder can't be reached or refuses it.
 pub async fn store(ep: &Endpoint, to: &EndpointAddr, data: &[u8]) -> Result<BlobId> {
-    let blob = BlobId(*blake3::hash(data).as_bytes());
+    let blob = BlobId(crate::blob::blob_id(data));
     let request = Request::Store {
         blob,
         size: data.len() as u64,
@@ -84,18 +89,6 @@ pub async fn renew(
         Reply::Renewed { kept } => Ok(Renewal::Kept(kept)),
         Reply::Owed { tokens } => Ok(Renewal::Owed(tokens)),
         Reply::Refused { why } => anyhow::bail!("{} refused the renewal: {why}", about(to)),
-        other => anyhow::bail!("{} answered {other:?}", about(to)),
-    }
-}
-
-/// Which of `blobs` a holder says it has.
-///
-/// # Errors
-///
-/// If the holder can't be reached.
-pub async fn has(ep: &Endpoint, to: &EndpointAddr, blobs: Vec<BlobId>) -> Result<Vec<bool>> {
-    match ask(ep, to, &Request::Has { blobs }, None).await? {
-        Reply::Have { have } => Ok(have),
         other => anyhow::bail!("{} answered {other:?}", about(to)),
     }
 }

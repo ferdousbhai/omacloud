@@ -27,21 +27,6 @@ pub struct RepoSpec {
     pub options: BTreeMap<String, String>,
 }
 
-/// Backend options that are credentials: kept out of config files, sealed
-/// in the epoch secret instead.
-pub const CREDENTIAL_OPTIONS: &[&str] = &[
-    "access_key_id",
-    "secret_access_key",
-    "session_token",
-    "security_token",
-    "application_key_id",
-    "application_key",
-    "password",
-    "access_token",
-    "refresh_token",
-    "client_secret",
-];
-
 /// Backend options that are this device's own business (transfer limits),
 /// not the repository's.
 pub const LOCAL_OPTIONS: &[&str] = &["bandwidth", "connections"];
@@ -83,23 +68,6 @@ impl RepoSpec {
         self.options.contains_key(NETWORK)
     }
 
-    /// The same location without credentials, for config files and display.
-    #[must_use]
-    pub fn without_credentials(&self) -> Self {
-        let mut spec = self.clone();
-        spec.options.retain(|k, _| !CREDENTIAL_OPTIONS.contains(&k.as_str()));
-        spec
-    }
-
-    /// The same location without this device's transfer limits: what is
-    /// shared with other devices.
-    #[must_use]
-    pub fn without_local_options(&self) -> Self {
-        let mut spec = self.clone();
-        spec.options.retain(|k, _| !LOCAL_OPTIONS.contains(&k.as_str()));
-        spec
-    }
-
     fn backends(&self) -> Result<RepositoryBackends> {
         let backends = self.raw_backends()?;
         // `bandwidth`: this device's cap, whatever the backend
@@ -133,22 +101,11 @@ impl RepoSpec {
             &ConfigOptions::default()
                 .set_pack_padding(true)
                 // packs otherwise grow with the repository, without limit:
-                // kept small enough for storage that caps an upload at
-                // 100 MB, padding and one last chunk included
+                // kept under the network's largest object, 128 MiB, padding
+                // and one last chunk included
                 .set_datapack_size_limit(bytesize::ByteSize::mib(PACK_SIZE_LIMIT_MIB))
                 .set_treepack_size_limit(bytesize::ByteSize::mib(PACK_SIZE_LIMIT_MIB)),
         )?;
-        Ok(repo.key())
-    }
-
-    /// Open an existing repository with its password and return the master key.
-    ///
-    /// # Errors
-    ///
-    /// If the backend is unreachable or the password is wrong.
-    pub fn unlock(&self, password: &str) -> Result<MasterKey> {
-        let repo = Repository::new(&RepositoryOptions::default(), &self.backends()?)?
-            .open(&Credentials::password(password))?;
         Ok(repo.key())
     }
 

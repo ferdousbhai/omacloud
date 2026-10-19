@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# The Omacloud network on this machine: three seed nodes give space, then
-# two computers of one account sync through them, joined by a join code
-# and approval, and survive a key rotation. The Worker's part is a
-# directory (OMACLOUD_NETWORK=dir:...), so it needs no server.
+# The Omacloud network on this machine: three seed nodes give space, and
+# three computers of one account sync through them: a sets it up, b joins
+# with a join code and approval, c with the recovery code. Then a key
+# rotation, export to plain restic, files shared by link (kept longer,
+# listed, taken back), and the Worker losing the account's records. The
+# Worker's part is a directory (OMACLOUD_NETWORK=dir:...), so it needs no
+# server.
 #
 #   scripts/network.sh [path/to/omacloud]
 set -euo pipefail

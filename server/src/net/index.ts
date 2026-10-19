@@ -15,7 +15,7 @@ async function scope(req: Request): Promise<string> {
 
 /** Entries per page: a big bucket's index is read in pages, as one answer
  * would outgrow what D1 returns at once. */
-export const PAGE = 1000;
+const PAGE = 1000;
 
 /** A page of entries after `?after=<id>`; `next` names where the next
  * page starts, absent on the last. */

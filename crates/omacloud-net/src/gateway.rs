@@ -32,7 +32,7 @@ pub const BUCKET: &str = "omacloud";
 
 /// A running gateway.
 pub struct Gateway {
-    pub addr: SocketAddr,
+    addr: SocketAddr,
     state: Arc<State>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -464,13 +464,18 @@ impl State {
         Ok(xml(format!(
             "<CompleteMultipartUploadResult><Bucket>{BUCKET}</Bucket><Key>{}</Key><ETag>\"{}\"</ETag></CompleteMultipartUploadResult>",
             escape(key),
-            hex::encode(&blake3::hash(&data).as_bytes()[..16])
+            tag_of(&data)
         )))
     }
 }
 
+/// An object's entity tag, without its quotes.
+fn tag_of(data: &[u8]) -> String {
+    hex::encode(&blake3::hash(data).as_bytes()[..16])
+}
+
 fn etag(mut r: Reply, data: &[u8]) -> Reply {
-    if let Ok(v) = format!("\"{}\"", hex::encode(&blake3::hash(data).as_bytes()[..16])).parse() {
+    if let Ok(v) = format!("\"{}\"", tag_of(data)).parse() {
         r.headers_mut().insert(header::ETAG, v);
     }
     r

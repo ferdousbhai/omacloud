@@ -216,8 +216,8 @@ pub struct Rotated {
     pub epoch: u64,
     /// Snapshots copied into the new repository.
     pub snapshots: usize,
-    /// Files of the old repository that delete protection kept; deleting
-    /// them is retried about daily.
+    /// Files of the old repository that couldn't be deleted; deleting them
+    /// is retried about daily.
     pub left: usize,
 }
 
@@ -261,9 +261,8 @@ pub struct State {
     /// by content until their mtime is safely in the past.
     #[serde(default)]
     pub racy: BTreeSet<PathBuf>,
-    /// Old repository epochs not fully deleted after a rotation: delete
-    /// protection on the bucket holds their files until retention ends.
-    /// Deletion is retried about daily.
+    /// Old repository epochs not fully deleted after a rotation: some of
+    /// their files couldn't be deleted. Deletion is retried about daily.
     #[serde(default)]
     pub leftover: BTreeSet<u64>,
     /// When deleting leftovers was last tried, in seconds since the epoch.
@@ -624,39 +623,12 @@ impl Engine {
     /// If this device has no repository key yet.
     pub fn repository(&self) -> Result<(RepoSpec, EpochSecret, u64)> {
         let (epoch, secret) = self.secret()?;
-        let spec = self.base_spec(&secret);
+        let spec = self.repo.keyed(&secret.password);
         anyhow::ensure!(
             !spec.repository.is_empty(),
-            "this account's key doesn't say where its repository is; set this device up with --repo"
+            "this computer doesn't know where the repository is; set it up with --repo"
         );
         Ok((spec.for_epoch(epoch), secret, epoch))
-    }
-
-    /// Where the repository lives: the bucket sealed in the epoch secret,
-    /// or the location this device was set up with. This device's transfer
-    /// limits apply either way.
-    fn base_spec(&self, secret: &EpochSecret) -> RepoSpec {
-        self.unkeyed_spec(secret).keyed(&secret.password)
-    }
-
-    /// [`Self::base_spec`] without the epoch's network key.
-    fn unkeyed_spec(&self, secret: &EpochSecret) -> RepoSpec {
-        let Some(storage) = &secret.storage else {
-            return self.repo.clone();
-        };
-        let mut spec = storage.clone();
-        // credentials this device keeps in its own config win over sealed ones
-        for k in crate::repo::CREDENTIAL_OPTIONS {
-            if let Some(v) = self.repo.options.get(*k) {
-                _ = spec.options.insert((*k).to_string(), v.clone());
-            }
-        }
-        for k in crate::repo::LOCAL_OPTIONS {
-            if let Some(v) = self.repo.options.get(*k) {
-                _ = spec.options.insert((*k).to_string(), v.clone());
-            }
-        }
-        spec
     }
 
     fn open_repo(&self) -> Result<Repo> {
@@ -727,7 +699,7 @@ impl Engine {
         self.sync()?; // up to date, a member, holding the current key
         let (old_epoch, old_secret) = self.secret()?;
         let epoch = old_epoch + 1;
-        let base = self.unkeyed_spec(&old_secret);
+        let base = &self.repo;
         let old_spec = base.keyed(&old_secret.password).for_epoch(old_epoch);
         let password = random_secret();
         let new_spec = base.keyed(&password).for_epoch(epoch);
@@ -736,7 +708,6 @@ impl Engine {
                 .init(&password)
                 .context("creating the next epoch's repository")?,
             password,
-            storage: old_secret.storage.clone(),
         };
 
         // copy, then claim the next head; if another device pushed in the
@@ -800,7 +771,7 @@ impl Engine {
         let left = old_spec.destroy()?;
         if left > 0 {
             warn!(
-                "{left} files of repository epoch {old_epoch} are under delete protection; \
+                "{left} files of repository epoch {old_epoch} couldn't be deleted; \
                  deleting them is retried later"
             );
             _ = self.state.leftover.insert(old_epoch);
@@ -815,7 +786,7 @@ impl Engine {
         })
     }
 
-    /// Try again to delete old epochs that delete protection held back,
+    /// Try again to delete old epochs whose files couldn't all be deleted,
     /// about once a day. Best effort: failures only log.
     fn clean_leftovers(&mut self) {
         const EVERY: u64 = 24 * 60 * 60;
@@ -828,10 +799,10 @@ impl Engine {
             let Ok((_, secret)) = self.secret() else {
                 return;
             };
-            match self.base_spec(&secret).for_epoch(epoch).destroy() {
+            match self.repo.keyed(&secret.password).for_epoch(epoch).destroy() {
                 Ok(0) => info!("deleted leftover repository epoch {epoch}"),
                 Ok(left) => {
-                    debug!("{left} files of repository epoch {epoch} still protected");
+                    debug!("{left} files of repository epoch {epoch} still couldn't be deleted");
                     _ = self.state.leftover.insert(epoch);
                 }
                 Err(e) => {

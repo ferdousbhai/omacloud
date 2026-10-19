@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 pub type IssuerKey = PublicKeySha384PSSRandomized;
 
 /// What one token buys: a GiB for a month.
-pub const TOKEN_BYTES: u64 = 1 << 30;
+const TOKEN_BYTES: u64 = 1 << 30;
 
 /// A spendable token.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

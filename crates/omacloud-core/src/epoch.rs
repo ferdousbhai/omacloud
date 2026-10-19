@@ -28,7 +28,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    RepoSpec,
     devices::{DeviceChain, public_hex, verify_sig},
     head::Coordinator,
 };
@@ -39,11 +38,6 @@ pub struct EpochSecret {
     /// The repository password, for restoring with plain restic.
     pub password: String,
     pub key: MasterKey,
-    /// For a bucket of the user's own: where it is and the credentials to
-    /// reach it, so a new device gets them with the key instead of from
-    /// the person typing them in.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub storage: Option<RepoSpec>,
 }
 
 /// Seal `secret` so only the holder of `recipient`'s signing key (hex public
@@ -335,7 +329,6 @@ mod tests {
         let secret = EpochSecret {
             password: "pw".into(),
             key: MasterKey::new(),
-            storage: None,
         };
         let sealed = seal(&public_hex(&a), &secret)?;
         assert_eq!(open(&a, &sealed)?.password, "pw");
@@ -361,7 +354,6 @@ mod tests {
         let s = |p: &str| EpochSecret {
             password: p.into(),
             key: MasterKey::new(),
-            storage: None,
         };
         let snaps = |pairs: &[(&str, &str)]| {
             pairs

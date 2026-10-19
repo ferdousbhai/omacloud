@@ -8,9 +8,9 @@
 //! | code | exit |
 //! |---|---|
 //! | `error` (anything unrecognised), `verification_failed`, `pending`, `command_failed`, `cancelled` | 1 |
-//! | `usage`, `confirmation_required`, `terminal_required`, `ambiguous`, `already_set_up`, `exists`, `unsupported`, `same_key` | 2 |
-//! | `not_set_up`, `storage_gone`, `not_approved`, `removed`, `recovery_code_rejected`, `shares_rejected`, `settings_off` | 3 |
-//! | `not_found`, `no_account` | 4 |
+//! | `usage`, `confirmation_required`, `terminal_required`, `ambiguous`, `already_set_up`, `exists`, `unsupported` | 2 |
+//! | `not_set_up`, `storage_gone`, `not_approved`, `removed`, `recovery_code_rejected`, `join_code_rejected`, `shares_rejected`, `settings_off` | 3 |
+//! | `not_found` | 4 |
 //! | `unavailable` | 5 |
 
 use omacloud_core::{DeviceError, HeadError, Membership, epoch::EpochError};
@@ -102,24 +102,16 @@ pub fn classify(e: &anyhow::Error) -> CliError {
         }
         None => {}
     }
-    if let Some(EpochError::Pending { .. } | EpochError::NoKey { .. }) = e.downcast_ref::<EpochError>() {
+    if is_waiting(e) {
         return CliError::new("pending", EXIT_ERROR, message).hint("try again in a minute");
     }
-    // older than what this computer saw: the Worker lost records, or is
-    // hiding them; either way this computer's copy can put them back
-    let rollback = matches!(e.downcast_ref::<HeadError>(), Some(HeadError::Rollback { .. }))
-        || matches!(e.downcast_ref::<DeviceError>(), Some(DeviceError::Rollback { .. }))
-        || matches!(e.downcast_ref::<EpochError>(), Some(EpochError::Rollback { .. }));
-    if rollback {
+    if is_rollback(e) {
         return CliError::new("verification_failed", EXIT_ERROR, message).hint(
             "the network's records are older than this computer has seen; if the Worker lost them, \
              `omacloud republish` on a computer that synced lately puts them back",
         );
     }
-    if e.downcast_ref::<HeadError>().is_some()
-        || e.downcast_ref::<DeviceError>().is_some()
-        || e.downcast_ref::<EpochError>().is_some()
-    {
+    if is_unverified(e) {
         return CliError::new("verification_failed", EXIT_ERROR, message)
             .hint("the storage served a history this computer refuses; check the account from another computer");
     }
@@ -127,6 +119,29 @@ pub fn classify(e: &anyhow::Error) -> CliError {
         return unavailable(message).hint("check the network connection and that the storage is up, then try again");
     }
     CliError::new("error", EXIT_ERROR, message)
+}
+
+/// A key rotation in progress, or a grant not written yet: worth waiting for.
+pub fn is_waiting(e: &anyhow::Error) -> bool {
+    matches!(
+        e.downcast_ref::<EpochError>(),
+        Some(EpochError::Pending { .. } | EpochError::NoKey { .. })
+    )
+}
+
+/// Records older than what this computer saw: the Worker lost them, or is
+/// hiding them; either way this computer's copy can put them back.
+pub fn is_rollback(e: &anyhow::Error) -> bool {
+    matches!(e.downcast_ref::<HeadError>(), Some(HeadError::Rollback { .. }))
+        || matches!(e.downcast_ref::<DeviceError>(), Some(DeviceError::Rollback { .. }))
+        || matches!(e.downcast_ref::<EpochError>(), Some(EpochError::Rollback { .. }))
+}
+
+/// A history this computer refuses: heads, devices or keys that don't verify.
+pub fn is_unverified(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<HeadError>().is_some()
+        || e.downcast_ref::<DeviceError>().is_some()
+        || e.downcast_ref::<EpochError>().is_some()
 }
 
 /// A connection that couldn't be made or was lost.

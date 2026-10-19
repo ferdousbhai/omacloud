@@ -1,7 +1,8 @@
 # omacloud.computer
 
 A Cloudflare Worker serving Omacloud's public pages (home, privacy, terms,
-`/llms.txt` and `/health`) and the storage network's API under
+`/s` where share links land, `/llms.txt`, `/health`, and `/install.sh`,
+a redirect to the latest release's installer) and the storage network's API under
 `/api/net/` (docs/network-api.md): the node directory, each bucket's
 sealed index, each account's coordination records, and storage tokens.
 It keeps no logs (observability is off), sets no cookies and has no
@@ -9,7 +10,7 @@ accounts or sign-in. Writes are allowed by capabilities the computers
 derive, kept only as hashes; of a request's address it keeps only the
 /24 or /48, for limits.
 
-- `src/`: the Worker (`pages.ts` the pages; `limit.ts` rate limiting).
+- `src/`: the Worker (`index.ts` the paths; `pages.ts` the pages).
 - `src/net/`: the network API. `router.ts` the paths; `auth.ts` node
   signatures, capabilities and prefixes; `nodes.ts` the directory;
   `index.ts` the bucket index; `coord.ts` coordination; `credits.ts` blind
@@ -21,8 +22,8 @@ derive, kept only as hashes; of a request's address it keeps only the
   `0006_network.sql` adds the network's.
 - `cloudflare.config.ts`: the Worker's configuration, for `cf`.
   `STARTER_TOKENS` is the free tokens a prefix gets each 30 days.
-- `deploy.sh`: type checks, applies new migrations (the code expects them),
-  then deploys with `cf`. `deploy.sh --first` also makes the secret
+- `deploy.sh` (`npm run deploy`): type checks, applies new migrations (the
+  code expects them), then deploys with `cf`. `deploy.sh --first` also makes the secret
   `CREDIT_KEY`.
 - `backup.sh [dir]`: copies every table off Cloudflare as JSON, into
   `<dir>/<date>/` (default `~/omacloud-backups`), readable by you alone.

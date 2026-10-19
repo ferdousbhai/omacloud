@@ -24,7 +24,7 @@ pub struct Node {
     pub prefix: String,
     /// Share of the last month it answered heartbeats, 0 to 1.
     pub uptime: f32,
-    /// New, without a record yet: only ever an extra copy.
+    /// New, without a record yet: chosen only after the established nodes.
     pub probation: bool,
     /// When the directory first saw it (Unix seconds; 0 when it didn't say).
     #[serde(default)]
@@ -46,7 +46,7 @@ impl Node {
 }
 
 /// Up enough to be the copy that's there when the others aren't.
-pub const ALWAYS_ON: f32 = 0.95;
+const ALWAYS_ON: f32 = 0.95;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PlaceError {
@@ -59,7 +59,7 @@ pub enum PlaceError {
 /// repair), each on a network no other copy is on, and one of them always
 /// on when any is. Nodes on probation come last: they fill copies only
 /// when the established ones run out (as on a new network, where every
-/// node is new), and `extra` places beyond them.
+/// node is new).
 ///
 /// # Errors
 ///
@@ -69,7 +69,6 @@ pub fn choose(
     exclude: &BTreeSet<NodeId>,
     taken: &[Node],
     copies: usize,
-    extra: usize,
 ) -> Result<Vec<Node>, PlaceError> {
     let mut rng = rand::thread_rng();
     let now = crate::node::now();
@@ -82,6 +81,7 @@ pub fn choose(
     pool.sort_by(|a, b| b.0.total_cmp(&a.0));
     let pool: Vec<&Node> = pool.into_iter().map(|(_, n)| n).collect();
     let mut chosen: Vec<Node> = Vec::new();
+    // a node shares its own network, so this also keeps one from being chosen twice
     let free = |n: &Node, chosen: &[Node]| {
         taken
             .iter()
@@ -101,7 +101,7 @@ pub fn choose(
         if chosen.len() >= copies {
             break;
         }
-        if !n.probation && !chosen.iter().any(|c| c.id == n.id) && free(n, &chosen) {
+        if !n.probation && free(n, &chosen) {
             chosen.push((*n).clone());
         }
     }
@@ -118,16 +118,6 @@ pub fn choose(
             found: chosen.len(),
             wanted: copies,
         });
-    }
-    let mut added = 0;
-    for n in &pool {
-        if added >= extra {
-            break;
-        }
-        if n.probation && !chosen.iter().any(|c| c.id == n.id) && free(n, &chosen) {
-            chosen.push((*n).clone());
-            added += 1;
-        }
     }
     Ok(chosen)
 }
@@ -156,7 +146,7 @@ mod tests {
             node(4, 300, 0.99),
         ];
         for _ in 0..50 {
-            let c = choose(&nodes, &BTreeSet::new(), &[], 2, 0).unwrap();
+            let c = choose(&nodes, &BTreeSet::new(), &[], 2).unwrap();
             assert_eq!(c.len(), 2);
             assert_ne!(c[0].asn, c[1].asn);
             assert!(c.iter().any(|n| n.uptime >= ALWAYS_ON));
@@ -170,7 +160,7 @@ mod tests {
         let nodes = [node(1, 100, 0.99), same_prefix, node(3, 300, 0.5)];
         let own: BTreeSet<NodeId> = [[3; 32]].into();
         assert_eq!(
-            choose(&nodes, &own, &[], 2, 0),
+            choose(&nodes, &own, &[], 2),
             Err(PlaceError::TooFew { found: 1, wanted: 2 })
         );
     }
@@ -181,14 +171,14 @@ mod tests {
         new.probation = true;
         let nodes = [node(1, 100, 0.99), new.clone()];
         for _ in 0..20 {
-            // the established node first, the new one as extra
-            let c = choose(&nodes, &BTreeSet::new(), &[], 1, 1).unwrap();
-            assert_eq!(c, vec![nodes[0].clone(), new.clone()]);
+            // the established node first
+            let c = choose(&nodes, &BTreeSet::new(), &[], 1).unwrap();
+            assert_eq!(c, vec![nodes[0].clone()]);
         }
         // and the new one as a copy when there's nothing else
-        let c = choose(&nodes, &BTreeSet::new(), &[], 2, 0).unwrap();
+        let c = choose(&nodes, &BTreeSet::new(), &[], 2).unwrap();
         assert_eq!(c.len(), 2);
-        assert!(choose(&[new.clone()], &BTreeSet::new(), &[], 1, 0).is_ok());
+        assert!(choose(&[new.clone()], &BTreeSet::new(), &[], 1).is_ok());
     }
 
     #[test]
@@ -205,7 +195,7 @@ mod tests {
         for _ in 0..3000 {
             // no always-on rule here: the copy is taken already
             let held = node(9, 900, 0.99);
-            let c = choose(&nodes, &BTreeSet::new(), &[held], 1, 0).unwrap();
+            let c = choose(&nodes, &BTreeSet::new(), &[held], 1).unwrap();
             first[usize::from(c[0].id[0]) - 1] += 1;
         }
         assert!(first[2] > first[1] && first[1] > first[0], "{first:?}");
@@ -216,7 +206,7 @@ mod tests {
     fn a_repair_keeps_clear_of_the_copies_left() {
         let left = node(1, 100, 0.99);
         let nodes = [left.clone(), node(2, 100, 0.99), node(3, 200, 0.5)];
-        let c = choose(&nodes, &BTreeSet::new(), &[left], 1, 0).unwrap();
+        let c = choose(&nodes, &BTreeSet::new(), &[left], 1).unwrap();
         assert_eq!(c[0].id, [3; 32]);
     }
 }

@@ -67,7 +67,7 @@ impl Network {
     /// If the Worker can't be reached or refuses.
     pub fn heartbeat(&self, key: &SecretKey, node: &Node, capacity: u64) -> Result<()> {
         match &self.place {
-            Place::Worker(w) => w.heartbeat(key, &node.addr(), capacity).map(|_| ()),
+            Place::Worker(w) => w.heartbeat(key, &node.addr(), capacity),
             Place::Dir(d) => d.list_node(&node.id(), &node.addr(), capacity),
         }
     }
@@ -106,12 +106,6 @@ impl Network {
             Place::Worker(w) => w.exchange(&w.issuer()?, tokens),
             Place::Dir(_) => Ok(Vec::new()),
         }
-    }
-
-    /// This computer's copy, when it keeps one.
-    #[must_use]
-    pub fn mirror(&self) -> Option<&Mirror> {
-        self.mirror.as_ref()
     }
 
     /// Put this computer's copy back where the Worker lacks it: the

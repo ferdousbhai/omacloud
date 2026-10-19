@@ -59,6 +59,14 @@ fn read(path: &Path) -> Result<Option<String>> {
     }
 }
 
+/// Remove `path`; gone already is fine.
+fn remove(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Err(e) if e.kind() != ErrorKind::NotFound => Err(e.into()),
+        _ => Ok(()),
+    }
+}
+
 fn names(dir: &Path) -> Result<Vec<String>> {
     match fs::read_dir(dir) {
         Ok(it) => {
@@ -123,12 +131,26 @@ impl DirStore {
         Ok(dir)
     }
 
-    fn bump(dir: &Path) -> Result<()> {
-        let v: u64 = read(&dir.join("version"))?
+    /// The account's version: it goes up with every write, so a computer
+    /// can tell when to read again.
+    fn version(dir: &Path) -> Result<u64> {
+        Ok(read(&dir.join("version"))?
             .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(0);
-        fs::write(dir.join("version"), (v + 1).to_string())?;
+            .unwrap_or(0))
+    }
+
+    fn bump(dir: &Path) -> Result<()> {
+        fs::write(dir.join("version"), (Self::version(dir)? + 1).to_string())?;
         Ok(())
+    }
+
+    /// `create` in the account at `dir`, which changes only if it made it.
+    fn create_in(dir: &Path, path: &Path, body: &[u8]) -> Result<bool> {
+        let made = create(path, body)?;
+        if made {
+            Self::bump(dir)?;
+        }
+        Ok(made)
     }
 }
 
@@ -162,21 +184,14 @@ impl Registry for DirStore {
         Ok(())
     }
     fn delete_entry(&self, scope: &str, id: &str) -> Result<()> {
-        match fs::remove_file(self.root.join("index").join(hash(scope)).join(safe(id)?)) {
-            Err(e) if e.kind() != ErrorKind::NotFound => Err(e.into()),
-            _ => Ok(()),
-        }
+        remove(&self.root.join("index").join(hash(scope)).join(safe(id)?))
     }
 }
 
 impl Records for DirStore {
     fn create_account(&self, account: &str, cap: &str) -> Result<bool> {
         let dir = self.account(account)?;
-        let made = create(&dir.join("cap"), hash(cap).as_bytes())?;
-        if made {
-            Self::bump(&dir)?;
-        }
-        Ok(made)
+        Self::create_in(&dir, &dir.join("cap"), hash(cap).as_bytes())
     }
     fn replace_cap(&self, account: &str, cap: &str, new: &str) -> Result<()> {
         let dir = self.check(account, cap)?;
@@ -197,22 +212,14 @@ impl Records for DirStore {
     }
     fn append(&self, account: &str, cap: &str, log: &str, seq: u64, body: &str) -> Result<bool> {
         let dir = self.check(account, cap)?;
-        let made = create(&dir.join(safe(log)?).join(format!("{seq:020}")), body.as_bytes())?;
-        if made {
-            Self::bump(&dir)?;
-        }
-        Ok(made)
+        Self::create_in(&dir, &dir.join(safe(log)?).join(format!("{seq:020}")), body.as_bytes())
     }
     fn anchor(&self, account: &str) -> Result<Option<String>> {
         read(&self.account(account)?.join("anchor"))
     }
     fn set_anchor(&self, account: &str, cap: &str, body: &str) -> Result<bool> {
         let dir = self.check(account, cap)?;
-        let made = create(&dir.join("anchor"), body.as_bytes())?;
-        if made {
-            Self::bump(&dir)?;
-        }
-        Ok(made)
+        Self::create_in(&dir, &dir.join("anchor"), body.as_bytes())
     }
     fn named(&self, account: &str, kind: &str, prefix: &str) -> Result<Vec<(String, String)>> {
         let dir = self.account(account)?.join("named").join(safe(kind)?);
@@ -234,15 +241,10 @@ impl Records for DirStore {
     }
     fn delete_named(&self, account: &str, cap: &str, kind: &str, name: &str) -> Result<()> {
         let dir = self.check(account, cap)?;
-        match fs::remove_file(dir.join("named").join(safe(kind)?).join(safe(name)?)) {
-            Err(e) if e.kind() != ErrorKind::NotFound => return Err(e.into()),
-            _ => {}
-        }
+        remove(&dir.join("named").join(safe(kind)?).join(safe(name)?))?;
         Self::bump(&dir)
     }
     fn marker(&self, account: &str) -> Result<u64> {
-        Ok(read(&self.account(account)?.join("version"))?
-            .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(0))
+        Self::version(&self.account(account)?)
     }
 }

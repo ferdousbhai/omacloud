@@ -208,6 +208,12 @@ impl Node {
     }
 }
 
+/// Months begun between when a blob was paid up to and now, or its
+/// lease's end if that came first: the grace after a lease is unpaid.
+fn months_served(paid_to: u64, expires: u64, now: u64) -> u64 {
+    now.min(expires).saturating_sub(paid_to).div_ceil(MONTH)
+}
+
 fn open_db(path: &Path) -> Result<rusqlite::Connection> {
     let db = rusqlite::Connection::open(path)?;
     db.execute_batch(
@@ -279,16 +285,13 @@ impl Inner {
         }
         let mut data = vec![0u8; usize::try_from(size)?];
         recv.read_exact(&mut data).await?;
-        if blake3::hash(&data).as_bytes() != &blob.0 {
+        if crate::blob::blob_id(&data) != blob.0 {
             return Ok(Reply::Refused {
                 why: "the bytes don't hash to that blob".into(),
             });
         }
         let added = self.store.add_bytes(data).with_named_tag(tag(&name)).await?;
-        anyhow::ensure!(
-            added.hash == Hash::from_bytes(blob.0),
-            "the store hashed it differently"
-        );
+        anyhow::ensure!(added.hash == hash_of(&blob), "the store hashed it differently");
         self.db.lock().expect("node db").execute(
             "INSERT OR IGNORE INTO blobs (blob, size, expires, paid_to) VALUES (?1, ?2, ?3, ?3)",
             params![name, size, now() + FIRST_LEASE],
@@ -309,16 +312,20 @@ impl Inner {
         // was last paid for (the first week is free)
         let mut byte_months = 0u64;
         for b in blobs {
-            let row: Option<(i64, i64)> = db
+            let row: Option<(i64, i64, i64)> = db
                 .query_row(
-                    "SELECT size, paid_to FROM blobs WHERE blob = ?1",
+                    "SELECT size, paid_to, expires FROM blobs WHERE blob = ?1",
                     [hex::encode(b.0)],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
                 .optional()?;
             kept.push(row.is_some());
-            if let Some((size, paid_to)) = row {
-                let served = now.saturating_sub(u64::try_from(paid_to).unwrap_or(0)).div_ceil(MONTH);
+            if let Some((size, paid_to, expires)) = row {
+                let served = months_served(
+                    u64::try_from(paid_to).unwrap_or(0),
+                    u64::try_from(expires).unwrap_or(0),
+                    now,
+                );
                 byte_months += u64::try_from(size).unwrap_or(0) * served;
             }
         }
@@ -366,19 +373,6 @@ impl Inner {
         Ok(Reply::Renewed { kept })
     }
 
-    fn has(&self, blobs: &[BlobId]) -> Result<Reply> {
-        let db = self.db.lock().expect("node db");
-        let have = blobs
-            .iter()
-            .map(|b| {
-                db.query_row("SELECT 1 FROM blobs WHERE blob = ?1", [hex::encode(b.0)], |_| Ok(()))
-                    .optional()
-                    .map(|r| r.is_some())
-            })
-            .collect::<rusqlite::Result<_>>()?;
-        Ok(Reply::Have { have })
-    }
-
     async fn serve(&self, conn: Connection) -> Result<()> {
         loop {
             let (mut send, mut recv) = match conn.accept_bi().await {
@@ -390,7 +384,6 @@ impl Inner {
             let reply = match request {
                 Request::Store { blob, size } => self.store(blob, size, &mut recv).await,
                 Request::Renew { blobs, until, tokens } => self.renew(&blobs, until, tokens),
-                Request::Has { blobs } => self.has(&blobs),
             }
             .unwrap_or_else(|e| Reply::Refused { why: format!("{e:#}") });
             proto::send(&mut send, &reply).await?;
@@ -411,11 +404,21 @@ impl ProtocolHandler for Control {
 
 /// The blob's id as iroh-blobs knows it.
 #[must_use]
-pub fn hash_of(blob: &BlobId) -> Hash {
+pub(crate) fn hash_of(blob: &BlobId) -> Hash {
     Hash::from_bytes(blob.0)
 }
 
-/// Read context for errors about a node.
-pub(crate) fn about(addr: &EndpointAddr) -> String {
-    format!("node {}", addr.id.fmt_short())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_holder_charges_for_the_lease_it_served_not_the_grace_after() {
+        let t = 100 * MONTH;
+        assert_eq!(months_served(t, t + 2 * MONTH, t), 0);
+        assert_eq!(months_served(t, t + 2 * MONTH, t + 1), 1);
+        assert_eq!(months_served(t, t + 2 * MONTH, t + MONTH + 1), 2);
+        // a year on, deep in its grace: still the two months of the lease
+        assert_eq!(months_served(t, t + 2 * MONTH, t + 12 * MONTH), 2);
+    }
 }

@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "cf dev",
-    "deploy": "cf deploy",
+    "deploy": "./deploy.sh",
     "types": "cf workers types",
     "check": "cf workers types && tsc --noEmit && node --experimental-strip-types --test test/*.test.ts"
   },

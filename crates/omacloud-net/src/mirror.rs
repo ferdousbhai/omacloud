@@ -197,23 +197,6 @@ impl Mirror {
             .query_row("SELECT json FROM nodes WHERE one = 1", [], |r| r.get(0))
             .optional()?)
     }
-
-    /// How much is kept: index entries, and coordination records.
-    ///
-    /// # Errors
-    ///
-    /// If the database can't be read.
-    pub fn counts(&self) -> Result<(u64, u64)> {
-        let db = self.db();
-        let n = |sql: &str| {
-            db.query_row(sql, [], |r| r.get::<_, i64>(0))
-                .map(|n| u64::try_from(n).unwrap_or(0))
-        };
-        Ok((
-            n("SELECT count(*) FROM entries")?,
-            n("SELECT (SELECT count(*) FROM logs) + (SELECT count(*) FROM anchors) + (SELECT count(*) FROM named)")?,
-        ))
-    }
 }
 
 /// Whether a listing of `listed` against `kept` looks like loss: fewer

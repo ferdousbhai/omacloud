@@ -2,19 +2,15 @@
 
 use anyhow::Result;
 use blind_rsa_signatures::{DefaultRng, KeyPairSha384PSSRandomized};
-use iroh::{Endpoint, RelayMode, endpoint::presets};
+use iroh::{Endpoint, endpoint::presets};
 use omacloud_net::{
     client, credit,
-    node::{self, Config, Node},
+    node::{self, Config, Node, now},
     proto::BlobId,
 };
 
-async fn endpoint() -> Result<Endpoint> {
-    Ok(Endpoint::builder(presets::Minimal)
-        .relay_mode(RelayMode::Disabled)
-        .bind()
-        .await?)
-}
+mod common;
+use common::endpoint;
 
 async fn holder(dir: &std::path::Path, capacity: u64, issuer: Option<credit::IssuerKey>) -> Result<Node> {
     Node::spawn(
@@ -26,13 +22,6 @@ async fn holder(dir: &std::path::Path, capacity: u64, issuer: Option<credit::Iss
         },
     )
     .await
-}
-
-fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -52,7 +41,6 @@ async fn a_blob_stored_is_read_back_whole_and_in_verified_ranges() -> Result<()>
     assert_eq!(part, &data[100_000..100_100]);
 
     let other = BlobId([7; 32]);
-    assert_eq!(client::has(&me, &n.addr(), vec![blob, other]).await?, vec![true, false]);
     assert!(client::read(&me, &n.addr(), other, Some(0..10)).await.is_err());
     n.shutdown().await;
     Ok(())
@@ -69,7 +57,11 @@ async fn a_full_holder_refuses_and_an_unpaid_blob_goes_when_its_lease_ends() -> 
 
     assert_eq!(n.sweep_as_of(now()).await?, 0);
     assert_eq!(n.sweep_as_of(now() + node::FIRST_LEASE + 60).await?, 1);
-    assert_eq!(client::has(&me, &n.addr(), vec![blob]).await?, vec![false]);
+    // no longer kept (its bytes are served until the store's next collection)
+    assert_eq!(
+        client::renew(&me, &n.addr(), vec![blob], now() + node::MONTH, Vec::new()).await?,
+        client::Renewal::Kept(vec![false])
+    );
     // room again
     client::store(&me, &n.addr(), &[2u8; 600]).await?;
     n.shutdown().await;

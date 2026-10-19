@@ -1,4 +1,4 @@
-//! A bandwidth cap around any backend: bucket, service or path.
+//! A bandwidth cap around any backend: bucket or path.
 //!
 //! Each transfer reserves its slot in time before it starts, so the rate
 //! holds on average across every thread, for small transfers as for packs

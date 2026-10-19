@@ -10,7 +10,7 @@ threat model: docs/design.md; build, test and release: CONTRIBUTING.md.
 |---|---|
 | `crates/omacloud-core` | sync engine (`sync.rs`), settings sync (`settings.rs`, `agents.rs`, `merged.rs`, `chromium/`, `wifi.rs`), signed heads (`head.rs`), the on-demand view of a head (`browse.rs`), device chain (`devices.rs`, `account.rs`), repository keys and rotation (`epoch.rs`), coordination (`Coordinator`, and `DirCoordinator` for development and tests, in `head.rs`), secrets bundle (`secrets.rs`), Shamir split (`shamir.rs`). Integration tests in `tests/` |
 | `crates/omacloud-net` | the Omacloud network: `blob.rs` per-holder scrambling, `erasure.rs` 4+2 shards for large objects, `place.rs` holder choice, `credit.rs` blind tokens, `node.rs` a storage node, `proto.rs` its protocol, `client.rs` talking to holders, `seal.rs` epoch keys and sealed index entries, `registry.rs` directory and index, `bucket.rs` the bucket over holders, `gateway.rs` S3 on loopback, `upkeep.rs` audits, renewals, repairs, `coord.rs`/`records.rs` sealed coordination, `worker.rs` the Worker over HTTPS, `dirstore.rs` the Worker's part in a directory, `session.rs` one run's network, `mirror.rs` this computer's copy of what it keeps at the Worker, `share.rs` a file shared by link. Tests in `tests/` |
-| `crates/omacloud` | the `omacloud` CLI and `watch` daemon (`main.rs`: every subcommand; `mount.rs`: the read-only FUSE view `mount` serves; `output.rs`: the shared output contract, vendored from icloud-for-omarchy; `fail.rs`: error codes and exit codes; `net.rs`: the node, heartbeats, tokens and upkeep `watch` runs; `alerts.rs`, `power.rs`). CLI tests in `tests/cli.rs` |
+| `crates/omacloud` | the `omacloud` CLI and `watch` daemon (`main.rs`: every subcommand; `mount.rs`: the read-only FUSE view `mount` serves; `output.rs`: the shared output contract, vendored from icloud-for-omarchy; `fail.rs`: error codes and exit codes; `net.rs`: the node, heartbeats, tokens and upkeep `watch` runs; `agent_skill.rs`: installs `skills/omacloud` for coding agents; `alerts.rs`, `power.rs`). CLI tests in `tests/cli.rs` |
 | `crates/omacloud-app` | GTK4/libadwaita app; it shells out to the CLI with `--json` and reads the envelope's `data` (`status` above all) or `error.code`, so keep that output stable; `init` and `join-code` it runs on a pseudo-terminal of its own |
 | `vendor/rustic_core` | patched rustic_core 0.13 (pack padding, `splice_tree`), wired in through `[patch.crates-io]`; see its `OMACLOUD.md` |
 | `server/` | Cloudflare Worker (TypeScript, `cf` CLI): omacloud.computer's public pages (home, privacy, terms, `/llms.txt`) and the network's API in `server/src/net/` (spec: docs/network-api.md). D1 schema in `server/migrations/`. See server/README.md |
@@ -45,7 +45,7 @@ three computers on a `dir:` network. `scripts/restic-compat.sh` needs restic
   fails with a `CliError` (`fail.rs`: code, exit 1-5, remediation in the
   hint); piped output is the JSON envelope, so scripts parsing text pass
   `--styled`. Commands that print a secret (a recovery code, join code,
-  shares, export's and gateway's password) check `output::to_terminal` (stdin and
+  shares, a share link, export's and gateway's password) check `output::to_terminal` (stdin and
   stdout a terminal; `combine` stdout only) first and refuse otherwise;
   tests and scripts run them under a pty (`script`), the app on its own.
   `watch` keeps its exit codes (2 stopped, 75 upgraded): the systemd unit's

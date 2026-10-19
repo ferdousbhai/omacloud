@@ -30,15 +30,11 @@ struct World {
 
 impl World {
     fn new(devices: &[&str]) -> Result<Self> {
-        Self::with_repo(devices, |tmp| RepoSpec {
-            repository: tmp.join("repo").to_string_lossy().into_owned(),
-            options: BTreeMap::new(),
-        })
-    }
-
-    fn with_repo(devices: &[&str], repo: impl Fn(&Path) -> RepoSpec) -> Result<Self> {
         let tmp = tempfile::tempdir()?;
-        let repo = repo(tmp.path());
+        let repo = RepoSpec {
+            repository: tmp.path().join("repo").to_string_lossy().into_owned(),
+            options: BTreeMap::new(),
+        };
         let coord = Arc::new(DirCoordinator::new(tmp.path().join("coord"))?);
         let keys: BTreeMap<String, SigningKey> = devices
             .iter()
@@ -404,17 +400,16 @@ fn approval_refuses_a_device_shown_another_account() -> Result<()> {
     Ok(())
 }
 
-/// A bucket with delete protection keeps the old epoch's packs until their
-/// retention ends. The rotation still completes, and deleting them is
-/// retried later.
+/// When the old epoch's packs can't be deleted, the rotation still
+/// completes, and deleting them is retried later.
 #[test]
-fn rotation_leaves_protected_files_for_later() -> Result<()> {
+fn rotation_leaves_undeletable_files_for_later() -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let w = World::new(&["a"])?;
     let mut a = w.engine("a")?;
     write(&w.dir("a"), "note.md", "kept\n");
     a.sync()?;
-    // read-only pack directories stand in for a bucket lock
+    // read-only pack directories make their deletes fail
     let packs: Vec<PathBuf> = fs::read_dir(Path::new(&w.repo.repository).join("data"))?
         .map(|e| e.map(|e| e.path()))
         .collect::<std::io::Result<_>>()?;
@@ -434,7 +429,7 @@ fn rotation_leaves_protected_files_for_later() -> Result<()> {
     a.sync()?;
     assert!(Path::new(&w.repo.repository).exists());
 
-    // retention ends, and a day passes; the next sync deletes what's left
+    // deletes work again, and a day passes; the next sync deletes what's left
     for p in &packs {
         mode(p, 0o755)?;
     }
@@ -1169,65 +1164,6 @@ fn secrets_travel_sealed_and_open_only_with_the_recovery_code() -> Result<()> {
     assert!(!w.dir("b").join(".omacloud").exists());
     assert!(!w.dir("a").join(".ssh").exists());
     assert_eq!(w.engine_with_settings("a")?.sync()?.pushed, 0);
-    Ok(())
-}
-
-/// An own bucket: its location and credentials travel sealed in the epoch
-/// secret, so a joining device needs neither typed in, and whoever relays
-/// the records never sees them.
-#[test]
-fn own_bucket_location_and_credentials_travel_with_the_key() -> Result<()> {
-    let bucket = |tmp: &Path| RepoSpec {
-        repository: "opendal:fs".into(),
-        options: [
-            ("root".to_string(), tmp.join("bucket").to_string_lossy().into_owned()),
-            ("access_key_id".to_string(), "not-needed-by-fs".to_string()),
-        ]
-        .into(),
-    };
-    let w = World::with_repo(&["a"], bucket)?;
-    let mut a = w.engine("a")?;
-    write(&w.dir("a"), "note.md", "in my bucket\n");
-    a.sync()?;
-
-    // b joins knowing nothing about the bucket
-    let kb = SigningKey::generate(&mut rand::rngs::OsRng);
-    account::join_with_recovery(w.coord.as_ref(), &w.recovery_code, &kb, "b")?;
-    let db = w.tmp.path().join("b");
-    fs::create_dir_all(&db)?;
-    let mut b = Engine::new(
-        Setup {
-            device: "b".into(),
-            folder: db.clone(),
-            repo: RepoSpec {
-                repository: w.tmp.path().join("nowhere").to_string_lossy().into_owned(),
-                options: [("connections".to_string(), "2".to_string())].into(),
-            },
-            signing: kb,
-            root: w.root.clone(),
-            state_path: None,
-            settings: None,
-            folders: None,
-        },
-        w.coord.clone(),
-    )?;
-    b.sync()?;
-    assert_eq!(fs::read_to_string(db.join("note.md"))?, "in my bucket\n");
-    let (spec, secret, _) = b.repository()?;
-    assert_eq!(
-        spec.options.get("access_key_id").map(String::as_str),
-        Some("not-needed-by-fs")
-    );
-    assert_eq!(spec.options.get("connections").map(String::as_str), Some("2"));
-    assert!(!w.tmp.path().join("nowhere").exists());
-    // the location isn't this device's limit to share
-    assert!(!secret.storage.unwrap().options.contains_key("connections"));
-
-    // a rotation keeps the bucket
-    a.sync()?;
-    assert_eq!(a.rotate()?.epoch, 1);
-    b.sync()?;
-    assert!(b.repository()?.0.options["root"].ends_with("omacloud-e1"));
     Ok(())
 }
 

@@ -8,8 +8,6 @@
 use std::{
     collections::BTreeMap,
     fs,
-    io::Write,
-    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     sync::{Arc, OnceLock, mpsc},
     time::{Duration, Instant},
@@ -28,9 +26,8 @@ use clap::{Parser, Subcommand};
 use log::{info, warn};
 use notify::{RecursiveMode, Watcher};
 use omacloud_core::{
-    Coordinator, DeviceError, DirCoordinator, Engine, HeadError, Membership, RepoSpec, SettingsSetup, Setup, account,
+    Coordinator, DirCoordinator, Engine, Membership, RepoSpec, SettingsSetup, Setup, account,
     devices::{fingerprint, public_hex},
-    epoch::EpochError,
     head::load_or_create_key,
     settings::Manifest,
 };
@@ -64,13 +61,14 @@ fn mode() -> Mode {
 const AFTER_HELP: &str = "\
 Output: text on a terminal, a JSON envelope {\"ok\":true,\"data\",\"summary\"} when
 piped. --json forces the envelope, --styled text, --quiet prints only the data,
---ids-only one id per line (devices, versions, folders, packages, secrets),
+--ids-only one id per line (devices, versions, deleted, folders, packages,
+secrets, shares),
 --count the number of results; ids-only > count > quiet > json > styled. A
 failure is {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, or
 error:/hint: lines on stderr in text mode.
 
 Commands that print a secret (init when it creates an account, join-code,
-export, gateway, recovery split and combine) print only to a
+export, gateway, share, recovery split and combine) print only to a
 terminal, in text mode, with stdin a terminal too (combine excepted: its shares
 may come on stdin).
 
@@ -175,7 +173,7 @@ enum Cmd {
     /// Share a file by link: whoever has the link can download it, for 7
     /// days. It needs no account to open
     Share {
-        /// The file to share (up to 256 MiB)
+        /// The file to share (up to 128 MiB)
         file: PathBuf,
         /// Put the link on the clipboard (wl-copy) instead of printing it
         #[arg(long)]
@@ -462,6 +460,18 @@ struct Config {
     network: Option<NetConfig>,
 }
 
+impl Config {
+    /// How this computer reaches the network, if the account is on it.
+    fn net(&self) -> Option<&NetConfig> {
+        self.network.as_ref().filter(|_| self.coordinator == NETWORK)
+    }
+
+    fn require_net(&self) -> Result<&NetConfig, CliError> {
+        self.net()
+            .ok_or_else(|| fail::unsupported("this account isn't on the Omacloud network"))
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct NetConfig {
     /// The network's Worker, or `dir:<path>` for a network on one machine
@@ -529,6 +539,13 @@ fn share_network(paths: &Paths, url: Option<String>) -> NetConfig {
     }
 }
 
+/// A share link, asked for: the network it's on, and its secret.
+fn share_link(paths: &Paths) -> Result<(NetConfig, String)> {
+    let link = read_secret("OMACLOUD_LINK", "share link")?;
+    let (url, secret) = omacloud_net::share::parse(&link).map_err(|e| fail::usage(format!("{e:#}")))?;
+    Ok((share_network(paths, Some(url)), secret))
+}
+
 /// The network's Worker, unless OMACLOUD_NETWORK says otherwise.
 fn network_url() -> String {
     std::env::var("OMACLOUD_NETWORK").unwrap_or_else(|_| omacloud_net::worker::URL.to_string())
@@ -564,16 +581,7 @@ fn read_seed(paths: &Paths) -> Result<[u8; 32]> {
 
 fn write_seed(paths: &Paths, seed: &[u8; 32]) -> Result<()> {
     fs::create_dir_all(&paths.data)?;
-    let tmp = paths.seed().with_extension("tmp");
-    fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)?
-        .write_all(hex::encode(seed).as_bytes())?;
-    fs::rename(&tmp, paths.seed())?;
-    Ok(())
+    net::write_private(&paths.seed(), hex::encode(seed).as_bytes())
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -592,10 +600,9 @@ const DEFAULT_FOLDERS: &[&str] = &["Desktop", "Documents", "Pictures"];
 /// The folders of home a computer is asked about.
 const USUAL_FOLDERS: &[&str] = &["Desktop", "Documents", "Pictures", "Music", "Videos", "Downloads"];
 
-/// This machine's names for the XDG user folders, where they differ from
-/// the English names the account uses (`Documents` -> `Dokumente`). Only
-/// folders directly in home count.
-fn xdg_names(home: &Path) -> BTreeMap<String, String> {
+/// The XDG user folders this machine sets, by the English names the
+/// account uses, with what `user-dirs.dirs` gives each (unquoted).
+fn user_dirs(home: &Path) -> Vec<(&'static str, String)> {
     let dirs = fs::read_to_string(
         std::env::var_os("XDG_CONFIG_HOME")
             .map_or_else(|| home.join(".config"), PathBuf::from)
@@ -610,38 +617,41 @@ fn xdg_names(home: &Path) -> BTreeMap<String, String> {
         ("VIDEOS", "Videos"),
         ("DOWNLOAD", "Downloads"),
     ]
-    .iter()
+    .into_iter()
     .filter_map(|(key, name)| {
-        let local = dirs.lines().find_map(|l| {
+        let value = dirs.lines().find_map(|l| {
             l.trim()
                 .strip_prefix(&format!("XDG_{key}_DIR="))
-                .map(|v| v.trim_matches('"').replace("$HOME/", ""))
+                .map(|v| v.trim_matches('"').to_string())
         })?;
-        let direct = !local.is_empty() && !local.contains('/') && !local.starts_with('$');
-        (direct && local != *name).then(|| ((*name).to_string(), local))
+        Some((name, value))
     })
     .collect()
+}
+
+/// This machine's names for the XDG user folders, where they differ from
+/// the English names the account uses (`Documents` -> `Dokumente`). Only
+/// folders directly in home count.
+fn xdg_names(home: &Path) -> BTreeMap<String, String> {
+    user_dirs(home)
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let local = value.replace("$HOME/", "");
+            let direct = !local.is_empty() && !local.contains('/') && !local.starts_with('$');
+            (direct && local != name).then(|| (name.to_string(), local))
+        })
+        .collect()
 }
 
 /// The usual folders this computer points at home itself (Omarchy's
 /// `XDG_DESKTOP_DIR="$HOME/"`): there is no such folder to sync.
 fn xdg_at_home(home: &Path) -> Vec<String> {
-    let dirs = fs::read_to_string(
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map_or_else(|| home.join(".config"), PathBuf::from)
-            .join("user-dirs.dirs"),
-    )
-    .unwrap_or_default();
-    [("DESKTOP", "Desktop"), ("DOWNLOAD", "Downloads")]
-        .iter()
-        .filter(|(key, _)| {
-            dirs.lines().any(|l| {
-                l.trim()
-                    .strip_prefix(&format!("XDG_{key}_DIR="))
-                    .is_some_and(|v| matches!(v.trim_matches('"'), "$HOME" | "$HOME/"))
-            })
+    user_dirs(home)
+        .into_iter()
+        .filter(|(name, value)| {
+            matches!(*name, "Desktop" | "Downloads") && matches!(value.as_str(), "$HOME" | "$HOME/")
         })
-        .map(|(_, name)| (*name).to_string())
+        .map(|(name, _)| name.to_string())
         .collect()
 }
 
@@ -673,8 +683,7 @@ impl Default for Limits {
 
 impl Limits {
     /// Backend options that enforce these limits: `bandwidth` on any
-    /// backend, `connections` on opendal ones. Set on any repository: its location may arrive later,
-    /// sealed with the key, and the engine carries these over to it.
+    /// backend, `connections` on bucket ones (the network's gateway).
     fn apply(&self, repo: &mut RepoSpec) {
         if let Some(bw) = &self.bandwidth {
             // a token bucket around the backend (throttle.rs), which also
@@ -699,13 +708,19 @@ impl Paths {
         let home = std::env::var_os("HOME").map(PathBuf::from).context("HOME not set")?;
         let xdg = |var: &str, fallback: &str| std::env::var_os(var).map_or_else(|| home.join(fallback), PathBuf::from);
         let config = config.unwrap_or_else(|| xdg("XDG_CONFIG_HOME", ".config").join("omacloud/config.toml"));
-        // a custom config file gets its own data directory beside it
-        let data = if config.file_name().is_some_and(|n| n == "config.toml") {
-            xdg("XDG_DATA_HOME", ".local/share").join("omacloud")
-        } else {
-            config.with_extension("d")
+        let paths = Self {
+            data: config.with_extension("d"),
+            config,
         };
-        Ok(Self { config, data })
+        // a custom config file gets its own data directory beside it
+        Ok(if paths.is_default() {
+            Self {
+                data: xdg("XDG_DATA_HOME", ".local/share").join("omacloud"),
+                ..paths
+            }
+        } else {
+            paths
+        })
     }
     /// Whether this is the default configuration, the one the packaged
     /// systemd unit runs.
@@ -727,7 +742,7 @@ impl Paths {
     }
     /// The user's ignore rules, beside the config file.
     fn ignore(&self) -> PathBuf {
-        if self.config.file_name().is_some_and(|n| n == "config.toml") {
+        if self.is_default() {
             self.config.with_file_name("ignore")
         } else {
             self.config.with_extension("ignore")
@@ -792,16 +807,7 @@ fn save(paths: &Paths, config: &Config) -> Result<()> {
     if let Some(dir) = paths.config.parent() {
         fs::create_dir_all(dir)?;
     }
-    let tmp = paths.config.with_extension("toml.tmp");
-    fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)?
-        .write_all(toml::to_string_pretty(config)?.as_bytes())?;
-    fs::rename(&tmp, &paths.config)?;
-    Ok(())
+    net::write_private(&paths.config, toml::to_string_pretty(config)?.as_bytes())
 }
 
 /// Where `config`'s computers keep in step.
@@ -813,7 +819,7 @@ fn coordinator(paths: &Paths, config: &Config) -> Result<Arc<dyn Coordinator>> {
 }
 
 fn network_coordinator(paths: &Paths, config: &Config) -> Result<Option<Arc<omacloud_net::coord::NetworkCoordinator>>> {
-    let Some(net) = config.network.as_ref().filter(|_| config.coordinator == NETWORK) else {
+    let Some(net) = config.net() else {
         return Ok(None);
     };
     let account = omacloud_net::coord::Account::from_seed(read_seed(paths)?);
@@ -831,11 +837,7 @@ fn network_coordinator(paths: &Paths, config: &Config) -> Result<Option<Arc<omac
 /// them. The write capability comes from the key this computer holds, not
 /// from the Worker, which may have nothing.
 fn republish(paths: &Paths, config: &Config, e: &Engine) -> Result<(u64, u64)> {
-    let net = config
-        .network
-        .as_ref()
-        .filter(|_| config.coordinator == NETWORK)
-        .ok_or_else(|| fail::unsupported("this account isn't on the Omacloud network"))?;
+    let net = config.require_net()?;
     let password = &e
         .state()
         .secret
@@ -873,12 +875,10 @@ fn publish_node(paths: &Paths, config: &Config, engine: &Engine, c: &net::Contri
 /// Where the files live: the network's bucket through this run's gateway,
 /// or the path set up with.
 fn repo_spec(paths: &Paths, config: &Config) -> Result<RepoSpec> {
-    Ok(
-        match config.network.as_ref().filter(|_| config.coordinator == NETWORK) {
-            Some(net) => session(paths, net)?.repo("/omacloud"),
-            None => config.repo.clone(),
-        },
-    )
+    Ok(match config.net() {
+        Some(net) => session(paths, net)?.repo("/omacloud"),
+        None => config.repo.clone(),
+    })
 }
 
 fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
@@ -973,7 +973,7 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<String>, new_code: O
     let network_coord = network_coordinator(paths, &config)?;
     let coord: Arc<dyn Coordinator> = match &network_coord {
         Some(c) => c.clone(),
-        None => coordinator(paths, &config)?,
+        None => Arc::new(DirCoordinator::new(&config.coordinator)?),
     };
     let anchor = coord.anchor()?;
     let creating = anchor.is_none();
@@ -1088,7 +1088,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     power::be_nice();
     let mut engine = engine(paths, config)?;
     // on the network: the space given others, and this account's copies
-    let mut contribution = match config.network.as_ref().filter(|_| config.coordinator == NETWORK) {
+    let mut contribution = match config.net() {
         Some(n) => {
             let s = session(paths, n)?;
             match net::Contribution::start(s, &paths.data, n.give) {
@@ -1397,21 +1397,12 @@ fn run_sync(
             }
         }
         // a rotation in progress, or a grant not written yet: wait
-        Err(e)
-            if matches!(
-                e.downcast_ref::<EpochError>(),
-                Some(EpochError::Pending { .. } | EpochError::NoKey { .. })
-            ) =>
-        {
+        Err(e) if fail::is_waiting(&e) => {
             info!("waiting: {e}");
         }
         // older records than this computer saw: if the Worker lost them,
         // this computer's copy puts them back, and the next sync goes on
-        Err(e)
-            if matches!(e.downcast_ref::<HeadError>(), Some(HeadError::Rollback { .. }))
-                || matches!(e.downcast_ref::<DeviceError>(), Some(DeviceError::Rollback { .. }))
-                || matches!(e.downcast_ref::<EpochError>(), Some(EpochError::Rollback { .. })) =>
-        {
+        Err(e) if fail::is_rollback(&e) => {
             match republish(engine) {
                 Ok((records, entries)) if records + entries > 0 => {
                     warn!("the Worker had lost records ({e}): put back {records} records and {entries} index entries");
@@ -1424,12 +1415,7 @@ fn run_sync(
         }
         // removed from the account, or a coordinator we can't verify: stop
         // until a human looks
-        Err(e)
-            if e.downcast_ref::<Membership>().is_some()
-                || e.downcast_ref::<HeadError>().is_some()
-                || e.downcast_ref::<DeviceError>().is_some()
-                || e.downcast_ref::<EpochError>().is_some() =>
-        {
+        Err(e) if e.downcast_ref::<Membership>().is_some() || fail::is_unverified(&e) => {
             log::error!("refusing to sync: {e}");
             if e.downcast_ref::<Membership>() == Some(&Membership::Revoked)
                 && let Some(a) = alerts
@@ -1742,9 +1728,7 @@ fn run(cli: Cli) -> Out {
                     out,
                     "{:>6}  {}  {:<12}  {what}",
                     v.seq,
-                    v.time
-                        .to_zoned(omacloud_core::jiff::tz::TimeZone::system())
-                        .strftime("%Y-%m-%d %H:%M:%S"),
+                    local_time(v.time, "%Y-%m-%d %H:%M:%S"),
                     v.device
                 );
                 data.push(json!({
@@ -1775,9 +1759,7 @@ fn run(cli: Cli) -> Out {
                 say!(
                     out,
                     "{}  {:<12}  {}",
-                    d.time
-                        .to_zoned(omacloud_core::jiff::tz::TimeZone::system())
-                        .strftime("%Y-%m-%d %H:%M"),
+                    local_time(d.time, "%Y-%m-%d %H:%M"),
                     d.device,
                     d.path.display()
                 );
@@ -1882,15 +1864,15 @@ fn run(cli: Cli) -> Out {
             if !copy && !output::to_terminal(mode()) {
                 return Err(fail::terminal_required("a share link (it opens the file)").into());
             }
-            let size = fs::metadata(&file)
-                .map_err(|e| fail::not_found(format!("{}: {e}", file.display())))?
-                .len();
-            if !fs::metadata(&file)?.is_file() || size > omacloud_net::share::MAX {
-                return Err(
-                    fail::usage(format!("{} isn't a file of 256 MiB or less", file.display()))
-                        .hint("share one file at a time; zip a folder first")
-                        .into(),
-                );
+            let meta = fs::metadata(&file).map_err(|e| fail::not_found(format!("{}: {e}", file.display())))?;
+            if !meta.is_file() || meta.len() > omacloud_net::share::MAX {
+                return Err(fail::usage(format!(
+                    "{} isn't a file of {} MiB or less",
+                    file.display(),
+                    omacloud_net::share::MAX >> 20
+                ))
+                .hint("share one file at a time; zip a folder first")
+                .into());
             }
             let name = file
                 .file_name()
@@ -1950,9 +1932,10 @@ fn run(cli: Cli) -> Out {
             let mut out = String::new();
             let mut data = Vec::new();
             for s in &shares {
-                let until = omacloud_core::jiff::Timestamp::from_second(i64::try_from(s.until)?)?
-                    .to_zoned(omacloud_core::jiff::tz::TimeZone::system())
-                    .strftime("%Y-%m-%d %H:%M");
+                let until = local_time(
+                    omacloud_core::jiff::Timestamp::from_second(i64::try_from(s.until)?)?,
+                    "%Y-%m-%d %H:%M",
+                );
                 say!(out, "{until}  {}", s.name);
                 data.push(json!({ "name": s.name, "until": s.until, "made": s.made }));
             }
@@ -1966,9 +1949,7 @@ fn run(cli: Cli) -> Out {
                 .ids(ids))
         }
         Cmd::Unshare => {
-            let link = read_secret("OMACLOUD_LINK", "share link")?;
-            let (url, secret) = omacloud_net::share::parse(&link).map_err(|e| fail::usage(format!("{e:#}")))?;
-            let net = share_network(&paths, Some(url));
+            let (net, secret) = share_link(&paths)?;
             let removed = session(&paths, &net)?.unshare(&secret);
             // ours or not, a link taken back is no longer kept
             let mut shares = net::read_shares(&paths.data);
@@ -1981,9 +1962,7 @@ fn run(cli: Cli) -> Out {
             ))
         }
         Cmd::Receive { to } => {
-            let link = read_secret("OMACLOUD_LINK", "share link")?;
-            let (url, secret) = omacloud_net::share::parse(&link).map_err(|e| fail::usage(format!("{e:#}")))?;
-            let net = share_network(&paths, Some(url));
+            let (net, secret) = share_link(&paths)?;
             let (name, data) = session(&paths, &net)?
                 .receive(&secret)
                 .map_err(|e| fail::unavailable(format!("{e:#}")))?;
@@ -2015,7 +1994,11 @@ fn run(cli: Cli) -> Out {
                 format!(
                     "put back {} and {} of the index",
                     counted(usize::try_from(records)?, "record"),
-                    counted(usize::try_from(entries)?, "entry").replace("entrys", "entries")
+                    if entries == 1 {
+                        "1 entry".to_string()
+                    } else {
+                        format!("{entries} entries")
+                    }
                 ),
             ))
         }
@@ -2053,14 +2036,10 @@ fn run(cli: Cli) -> Out {
                 return Err(fail::terminal_required("a join code (it opens your account's records)").into());
             }
             let config = load(&paths)?;
-            let net = config
-                .network
-                .as_ref()
-                .filter(|_| config.coordinator == NETWORK)
-                .ok_or_else(|| {
-                    fail::unsupported("this account keeps in step through a shared directory, not the network")
-                        .hint("other computers join with `omacloud init --repo <path> --coordinator <directory>`")
-                })?;
+            let net = config.net().ok_or_else(|| {
+                fail::unsupported("this account keeps in step through a shared directory, not the network")
+                    .hint("other computers join with `omacloud init --repo <path> --coordinator <directory>`")
+            })?;
             let blob = serde_json::to_vec(&json!({
                 "seed": hex::encode(read_seed(&paths)?),
                 "url": net.url,
@@ -2221,26 +2200,20 @@ fn run(cli: Cli) -> Out {
             }
             say!(out, "password:   {password}");
             say!(out);
-            if repo.starts_with("opendal:") {
-                // restic can't read opendal URLs; rustic can, from a profile
-                say!(
-                    out,
-                    "# save as ~/.config/rustic/rustic.toml (the default profile), then: rustic restore latest <dir>"
-                );
-                say!(out, "[repository]\nrepository = \"{repo}\"\npassword = \"{password}\"");
-                say!(out, "\n[repository.options]");
-                for (k, v) in &spec.options {
-                    say!(out, "{k} = \"{v}\"");
-                }
-            } else {
-                say!(
-                    out,
-                    "RESTIC_PASSWORD='{password}' restic -r {repo} restore latest --target <dir>"
-                );
-            }
+            say!(
+                out,
+                "RESTIC_PASSWORD='{password}' restic -r {repo} restore latest --target <dir>"
+            );
             Ok(Response::new(Value::Null, "export").human(out.trim_end()))
         }
     }
+}
+
+/// `t` in this computer's time zone, as `fmt` lays it out.
+fn local_time(t: omacloud_core::jiff::Timestamp, fmt: &str) -> String {
+    t.to_zoned(omacloud_core::jiff::tz::TimeZone::system())
+        .strftime(fmt)
+        .to_string()
 }
 
 /// `n` things, as "1 device" or "2 devices".
@@ -2262,6 +2235,20 @@ fn missing_version(e: anyhow::Error, rel: &Path, at: u64) -> anyhow::Error {
             .into();
     }
     e
+}
+
+/// Devices by key, as `devices` and `status` give them: `me` marks this one.
+fn device_list(m: &BTreeMap<String, String>, me: &str) -> Vec<Value> {
+    m.iter()
+        .map(|(k, name)| json!({ "fingerprint": fingerprint(k), "name": name, "this": k == me }))
+        .collect()
+}
+
+fn request_list(requests: &[omacloud_core::JoinRequest]) -> Vec<Value> {
+    requests
+        .iter()
+        .map(|r| json!({ "fingerprint": fingerprint(&r.device), "name": r.name }))
+        .collect()
 }
 
 fn devices(paths: &Paths, action: DevicesCmd) -> Out {
@@ -2311,19 +2298,11 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
                     say!(out, "  {}  {}", fingerprint(&r.device), r.name);
                 }
             }
-            let list = |m: &BTreeMap<String, String>| -> Vec<Value> {
-                m.iter()
-                    .map(|(k, name)| json!({ "fingerprint": fingerprint(k), "name": name, "this": *k == me }))
-                    .collect()
-            };
             let data = json!({
                 "account_fingerprint": fingerprint(&chain.root),
-                "devices": list(&members.valid),
-                "removed": list(&members.revoked),
-                "requests": requests
-                    .iter()
-                    .map(|r| json!({ "fingerprint": fingerprint(&r.device), "name": r.name }))
-                    .collect::<Vec<_>>(),
+                "devices": device_list(&members.valid, &me),
+                "removed": device_list(&members.revoked, &me),
+                "requests": request_list(&requests),
             });
             let ids: Vec<String> = members.valid.keys().map(|k| fingerprint(k)).collect();
             let summary = format!(
@@ -2690,6 +2669,7 @@ fn groups_text(groups: &[omacloud_core::merged::Item], indent: &str) -> String {
             (_, "refused") => "not applied",
             (_, "failed") => "can't write",
             (_, "conflict") => "to resolve",
+            (_, "unavailable") => "not available",
             (_, other) => other,
         };
         say!(out, "{indent}{:<22} {state}: {}", g.title, g.detail);
@@ -3015,7 +2995,7 @@ fn status(paths: &Paths) -> Out {
     _ = e.load_folders();
     let st = e.state();
     let repo = e.repository().map_or_else(|_| config.repo.clone(), |r| r.0);
-    let network = config.network.as_ref().filter(|_| config.coordinator == NETWORK);
+    let network = config.net();
     let kind = if network.is_some() { "network" } else { "path" };
     let role = if members.valid.contains_key(&me) {
         "member"
@@ -3024,17 +3004,7 @@ fn status(paths: &Paths) -> Out {
     } else {
         "waiting"
     };
-    let list = |m: &BTreeMap<String, String>| -> Vec<Value> {
-        m.iter()
-            .map(|(k, name)| json!({ "fingerprint": fingerprint(k), "name": name, "this": *k == me }))
-            .collect()
-    };
-    let requests: Vec<_> = e
-        .requests()
-        .unwrap_or_default()
-        .iter()
-        .map(|r| json!({ "fingerprint": fingerprint(&r.device), "name": r.name }))
-        .collect();
+    let requests = request_list(&e.requests().unwrap_or_default());
     let settings = e.settings_status();
     let daemon = std::process::Command::new("systemctl")
         .args(["--user", "is-active", "--quiet", "omacloud"])
@@ -3133,8 +3103,8 @@ fn status(paths: &Paths) -> Out {
         "synced_at": (st.synced_at > 0).then_some(st.synced_at),
         "epoch": st.secret.as_ref().map(|s| s.0),
         "this_device": { "fingerprint": fingerprint(&me), "role": role },
-        "devices": list(&members.valid),
-        "removed": list(&members.revoked),
+        "devices": device_list(&members.valid, &me),
+        "removed": device_list(&members.revoked, &me),
         "requests": requests,
         "settings": {
             "on": settings.on,
@@ -3224,11 +3194,7 @@ fn node(paths: &Paths, action: NodeCmd) -> Out {
     match action {
         NodeCmd::Status => {
             let config = load(paths)?;
-            let net = config
-                .network
-                .as_ref()
-                .filter(|_| config.coordinator == NETWORK)
-                .ok_or_else(|| fail::unsupported("this account isn't on the Omacloud network"))?;
+            let net = config.require_net()?;
             let key = omacloud_net::session::node_key(&paths.node_key())?;
             let id = hex::encode(key.public().as_bytes());
             let summary = format!("giving {}", net::human(net.give));

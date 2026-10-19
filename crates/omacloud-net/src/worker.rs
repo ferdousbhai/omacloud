@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroh::{EndpointAddr, SecretKey};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -28,6 +28,27 @@ pub struct Worker {
 struct Answer {
     status: u16,
     body: Value,
+}
+
+impl Answer {
+    /// A create-only write's answer: true when made, false when taken
+    /// already.
+    fn created(self, what: &str) -> Result<bool> {
+        match self.status {
+            201 => Ok(true),
+            409 => Ok(false),
+            s => anyhow::bail!("the network refused {what} ({s}): {}", message(&self.body)),
+        }
+    }
+
+    /// A read's answer: its body, or `None` when there's nothing there.
+    fn found(self, what: &str) -> Result<Option<Value>> {
+        match self.status {
+            404 => Ok(None),
+            200 => Ok(Some(self.body)),
+            s => anyhow::bail!("the network refused {what} ({s}): {}", message(&self.body)),
+        }
+    }
 }
 
 impl Worker {
@@ -83,12 +104,12 @@ impl Worker {
     }
 
     /// Tell the directory this node is up, where, and how much room it
-    /// has. Answers the network and prefix the Worker saw it on.
+    /// has.
     ///
     /// # Errors
     ///
     /// If the Worker can't be reached or refuses it.
-    pub fn heartbeat(&self, key: &SecretKey, addr: &EndpointAddr, capacity: u64) -> Result<(u32, String)> {
+    pub fn heartbeat(&self, key: &SecretKey, addr: &EndpointAddr, capacity: u64) -> Result<()> {
         let path = "/api/net/nodes";
         let body = json!({ "addr": addr, "capacity": capacity });
         let bytes = serde_json::to_vec(&body)?;
@@ -103,11 +124,8 @@ impl Worker {
             ("x-time", time),
             ("x-sig", hex::encode(sig.to_bytes())),
         ];
-        let v = self.ok("POST", path, &headers, Some(&body))?;
-        Ok((
-            u32::try_from(v["asn"].as_u64().unwrap_or(0))?,
-            v["prefix"].as_str().unwrap_or_default().to_string(),
-        ))
+        self.ok("POST", path, &headers, Some(&body))?;
+        Ok(())
     }
 
     /// The Worker's token key.
@@ -183,7 +201,7 @@ struct Nodes {
     nodes: Vec<Listed>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 struct Sealed {
     id: Option<String>,
     sealed: String,
@@ -233,11 +251,9 @@ impl Registry for Worker {
             &[("x-scope", scope.to_string())],
             None,
         )?;
-        match a.status {
-            404 => Ok(None),
-            200 => Ok(Some(STANDARD.decode(from::<Sealed>(a.body)?.sealed)?)),
-            s => anyhow::bail!("the network refused the index entry ({s}): {}", message(&a.body)),
-        }
+        a.found("the index entry")?
+            .map(|v| Ok(STANDARD.decode(from::<Sealed>(v)?.sealed)?))
+            .transpose()
     }
     fn put_entry(&self, scope: &str, id: &str, sealed: &[u8]) -> Result<()> {
         self.ok(
@@ -267,11 +283,7 @@ impl Records for Worker {
             &[("x-cap", cap.to_string())],
             None,
         )?;
-        match a.status {
-            201 => Ok(true),
-            409 => Ok(false),
-            s => anyhow::bail!("the network refused the account ({s}): {}", message(&a.body)),
-        }
+        a.created("the account")
     }
     fn replace_cap(&self, account: &str, cap: &str, new: &str) -> Result<()> {
         self.ok(
@@ -301,19 +313,12 @@ impl Records for Worker {
             &[("x-cap", cap.to_string())],
             Some(&json!({ "body": body })),
         )?;
-        match a.status {
-            201 => Ok(true),
-            409 => Ok(false),
-            s => anyhow::bail!("the network refused {log} {seq} ({s}): {}", message(&a.body)),
-        }
+        a.created(&format!("{log} {seq}"))
     }
     fn anchor(&self, account: &str) -> Result<Option<String>> {
         let a = self.call("GET", &format!("/api/net/coord/{account}/anchor"), &[], None)?;
-        match a.status {
-            404 => Ok(None),
-            200 => Ok(a.body["body"].as_str().map(str::to_string)),
-            s => anyhow::bail!("the network refused the anchor ({s}): {}", message(&a.body)),
-        }
+        Ok(a.found("the anchor")?
+            .and_then(|v| v["body"].as_str().map(str::to_string)))
     }
     fn set_anchor(&self, account: &str, cap: &str, body: &str) -> Result<bool> {
         let a = self.call(
@@ -322,11 +327,7 @@ impl Records for Worker {
             &[("x-cap", cap.to_string())],
             Some(&json!({ "body": body })),
         )?;
-        match a.status {
-            201 => Ok(true),
-            409 => Ok(false),
-            s => anyhow::bail!("the network refused the anchor ({s}): {}", message(&a.body)),
-        }
+        a.created("the anchor")
     }
     fn named(&self, account: &str, kind: &str, prefix: &str) -> Result<Vec<(String, String)>> {
         let query = if prefix.is_empty() {

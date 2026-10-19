@@ -10,8 +10,9 @@ ConditionPathExists=%h/.config/omacloud/config.toml
 ExecStart=/usr/bin/omacloud watch
 Restart=on-failure
 RestartSec=10
-# exit code 2: removed from the account, or the coordinator served a history
-# this device refuses; a human has to look, so don't restart into it
+# exit code 2: removed from the account, the coordinator served a history
+# this device refuses, or set up on storage Omacloud no longer uses; a human
+# has to look, so don't restart into it
 RestartPreventExitStatus=2
 
 [Install]

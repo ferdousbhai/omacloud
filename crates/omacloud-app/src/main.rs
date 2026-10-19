@@ -149,8 +149,8 @@ fn cli(argv: &[String], env: &[(String, String)]) -> Result<Value, Failure> {
 /// Neither descriptor survives an exec (`O_CLOEXEC` from the start, so no
 /// process another thread starts meanwhile gets one either): only the
 /// child's stdin and stdout, dup2ed onto it, are the terminal. Otherwise
-/// the child, and a browser it opens, would keep the terminal side open
-/// (and the reading here would wait for the browser to quit), and the
+/// the child, and a process it leaves running, would keep the terminal side
+/// open (and the reading here would wait for that process to end), and the
 /// controlling side, which reads what the child prints.
 fn pty() -> std::io::Result<(File, OwnedFd)> {
     let flags = libc::O_RDWR | libc::O_NOCTTY | libc::O_CLOEXEC;
@@ -698,6 +698,25 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     page
 }
 
+/// A button that opens `path` in the file manager.
+fn open_button(window: &adw::ApplicationWindow, path: String) -> gtk::Button {
+    let open = gtk::Button::builder()
+        .icon_name("folder-open-symbolic")
+        .tooltip_text("Open")
+        .valign(gtk::Align::Center)
+        .css_classes(["flat"])
+        .build();
+    let window = window.clone();
+    open.connect_clicked(move |_| {
+        gtk::FileLauncher::new(Some(&gio::File::for_path(&path))).launch(
+            Some(&window),
+            None::<&gio::Cancellable>,
+            |_| {},
+        );
+    });
+    open
+}
+
 fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
 
@@ -719,23 +738,6 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     });
     search.add_suffix(&launch);
     sync.add(&search);
-    let open_button = |path: String| {
-        let open = gtk::Button::builder()
-            .icon_name("folder-open-symbolic")
-            .tooltip_text("Open")
-            .valign(gtk::Align::Center)
-            .css_classes(["flat"])
-            .build();
-        let window = ui.window.clone();
-        open.connect_clicked(move |_| {
-            gtk::FileLauncher::new(Some(&gio::File::for_path(&path))).launch(
-                Some(&window),
-                None::<&gio::Cancellable>,
-                |_| {},
-            );
-        });
-        open
-    };
     let folders = &s["folders"];
     let mut folders_group = None;
     let mut folder_group_row = None;
@@ -744,7 +746,7 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     } else {
         let folder = text(&s["folder"]);
         let folder_row = row("Folder", &folder);
-        folder_row.add_suffix(&open_button(folder));
+        folder_row.add_suffix(&open_button(&ui.window, folder));
         folder_group_row = Some(folder_row);
     }
     let daemon = s["daemon"].as_bool().unwrap_or(false);
@@ -1181,21 +1183,7 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
         });
         subtitle_with_size(&r, &path);
         if state == "synced" {
-            let open = gtk::Button::builder()
-                .icon_name("folder-open-symbolic")
-                .tooltip_text("Open")
-                .valign(gtk::Align::Center)
-                .css_classes(["flat"])
-                .build();
-            let (window, path) = (ui.window.clone(), path.clone());
-            open.connect_clicked(move |_| {
-                gtk::FileLauncher::new(Some(&gio::File::for_path(&path))).launch(
-                    Some(&window),
-                    None::<&gio::Cancellable>,
-                    |_| {},
-                );
-            });
-            r.add_prefix(&open);
+            r.add_prefix(&open_button(&ui.window, path.clone()));
         }
         g.add(&r);
     }
@@ -1579,7 +1567,7 @@ fn secrets(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     if s["settings"]["on"].as_bool() != Some(true) {
         let g = group(
             "Secrets",
-            "ssh and gpg keys and tokens travel with settings sync. Turn it on under Settings.",
+            "ssh and gpg keys and tokens travel with settings sync. Turn it on under Omarchy.",
         );
         page.add(&g);
         return page;
@@ -1743,7 +1731,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     /// `cli_tty` against a stand-in CLI that starts a child holding none of
-    /// its stdio (as `xdg-open` starting a browser does), checks it has a
+    /// its stdio (a process it leaves running), checks it has a
     /// terminal, and asks a question nobody answers. It must come back as
     /// soon as the CLI is done, not when that child is.
     #[test]
@@ -1759,7 +1747,7 @@ mod tests {
              read answer\n\
              echo \"answer: [$answer]\"\n\
              case \"$1\" in fail) echo 'error: it broke' >&2; echo 'hint: do this' >&2; exit 3;; esac\n\
-             echo the-card\n",
+             echo the-secret\n",
         )
         .unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1773,7 +1761,7 @@ mod tests {
         let out =
             super::cli_tty(&super::owned(&["omacloud", "recovery"]), &[]).unwrap_or_else(|e| panic!("{}", e.shown()));
         assert!(start.elapsed() < Duration::from_secs(3), "waited {:?}", start.elapsed());
-        assert_eq!(out, "on a terminal\nanswer: []\nthe-card\n");
+        assert_eq!(out, "on a terminal\nanswer: []\nthe-secret\n");
 
         let e = super::cli_tty(&super::owned(&["omacloud", "fail"]), &[]).err().unwrap();
         assert_eq!(e.shown(), "it broke. Do this");

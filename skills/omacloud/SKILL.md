@@ -66,7 +66,7 @@ unasked.
 
 The owner must retain the recovery code privately. Commands that print a
 secret (`init` creating an account, `join-code`, `export`, `gateway`,
-`recovery split|combine`) refuse with `terminal_required`
+`share` printing its link, `recovery split|combine`) refuse with `terminal_required`
 off a terminal: have the owner run them in their own terminal. Never work
 around that refusal (no pseudo-terminals, no `script`), and never run them
 yourself, even where your shell has a terminal and nothing refuses. Joining with a join code or recovery code prints none.
@@ -84,7 +84,7 @@ omacloud sync
 omacloud versions 'notes.md'
 omacloud deleted                # deleted lately, with the version to restore
 omacloud mount                  # every file read-only in ~/Omacloud, fetched on open; runs until Ctrl-C
-omacloud share 'photo.jpg'      # a link that opens the file for 7 days (prints to a terminal only; --copy to the clipboard)
+omacloud share --copy 'photo.jpg'  # a link on the clipboard that opens the file for 7 days (--days up to 365; `unshare` takes it back)
 omacloud restore 'notes.md' --at 3 --to './notes-restored.md'
 ```
 

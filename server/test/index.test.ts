@@ -9,7 +9,7 @@ const get = (path: string, method = "GET") =>
 
 test("the pages are served, and nothing else", async () => {
 	for (const path of ["/", "/privacy", "/terms", "/llms.txt", "/s", "/health"]) assert.equal((await get(path)).status, 200, path);
-	for (const path of ["/signin", "/waitlist", "/api/keys", "/auth/google/callback"]) assert.equal((await get(path)).status, 404, path);
+	assert.equal((await get("/signin")).status, 404);
 	assert.equal((await get("/", "POST")).status, 404);
 });
 
@@ -20,7 +20,7 @@ test("/install.sh sends to the latest release's installer", async () => {
 });
 
 test("no page mentions what was dropped", async () => {
-	for (const path of ["/", "/privacy", "/terms", "/llms.txt"]) {
+	for (const path of ["/", "/privacy", "/terms", "/llms.txt", "/s"]) {
 		const text = await (await get(path)).text();
 		assert.doesNotMatch(text, /google|waitlist|invit|dropbox|hetzner|\bR2\b|bucket|quota|turnstile/i, path);
 	}

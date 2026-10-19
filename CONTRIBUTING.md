@@ -17,13 +17,11 @@ libadwaita-1-dev`). After changing `server/`, run `npm run check` there
 
 ## Storage backend features
 
-Default builds include local files and S3-compatible storage through
-OpenDAL; S3 is how the sync engine reaches the Omacloud network, through
-the gateway each run serves on loopback.
-For an existing repository using another OpenDAL provider, REST or rclone,
-build with `cargo build --release -p omacloud --features full-backends`.
-These optional backends are kept out of normal builds to avoid their unused
-protocol stacks. The manifest-only patch is documented in
+Builds include one OpenDAL service, S3: it is how the sync engine reaches
+the Omacloud network, through the gateway each run serves on loopback.
+Local repository paths (development and tests) need none. Other OpenDAL
+providers, REST and rclone are left out, to keep their protocol stacks out
+of the build; the manifest-only patch that allows it is documented in
 `vendor/rustic_backend/OMACLOUD.md`.
 
 ## The network in development

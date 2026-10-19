@@ -27,7 +27,8 @@ pub struct BlobId(#[serde(with = "hex::serde")] pub [u8; 32]);
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
     /// Keep a blob, `size` bytes, which follow on the stream. It's kept
-    /// for a first, short lease, unpaid; a renewal pays for longer.
+    /// for a first, short lease, unpaid; a renewal keeps it longer, paying
+    /// for the time it was kept.
     Store { blob: BlobId, size: u64 },
     /// Keep these blobs until `until` (unix seconds), paying with `tokens`
     /// for the time they were kept since last paid for: a holder is paid
@@ -38,9 +39,6 @@ pub enum Request {
         until: u64,
         tokens: Vec<Token>,
     },
-    /// Which of these blobs the holder has. A cheap look, not a proof:
-    /// audits read ranges instead.
-    Has { blobs: Vec<BlobId> },
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -50,9 +48,6 @@ pub enum Reply {
     /// Per blob asked, whether it's kept now.
     Renewed {
         kept: Vec<bool>,
-    },
-    Have {
-        have: Vec<bool>,
     },
     Refused {
         why: String,

@@ -97,11 +97,6 @@ impl NetworkCoordinator {
             .context("this computer can't write the account's records yet")
     }
 
-    #[must_use]
-    pub fn account(&self) -> &Account {
-        &self.account
-    }
-
     fn seal<T: Serialize>(&self, place: &str, value: &T) -> Result<String> {
         Ok(STANDARD.encode(self.account.seal.seal(place, &serde_json::to_vec(value)?)))
     }

@@ -114,7 +114,7 @@ seed nodes do.
 
 - **Folders:** you choose, as on iCloud: setup shows switches for Desktop,
   Documents, Pictures, Music, Videos and Downloads with their sizes
-  (Documents and Pictures start on), and Overview has the same switches
+  (Desktop, Documents and Pictures start on), and Overview has the same switches
   later, plus Add Folder for any other folder in your home. Switching one
   off on a computer keeps its files there and stops syncing it there only.
   Folders match by what they are, so a German computer's `Dokumente` is
@@ -166,16 +166,16 @@ seed nodes do.
   goes to all. Enterprise (802.1X) and WEP networks stay put, and with iwd
   Wi-Fi doesn't sync. Like everything else, the keys are encrypted before they
   leave the computer, and every computer of yours can read them.
-
-`omacloud settings` (and the app's Omarchy page) shows each of these and
-how it stands: in sync, waiting for Chromium to close, extensions to
-install, edits settled lately, a change to choose, or not available here
-and why.
 - **Packages:** each computer's package list, so `omacloud packages restore
   --from laptop` installs what the laptop has and this one doesn't.
 - **Keys:** `omacloud secrets save` (or Keys in the app) seals `~/.ssh`,
   `~/.gnupg` and token files to your recovery code. They travel with the
   rest, but only the recovery code opens them.
+
+`omacloud settings` (and the app's Omarchy page) shows each of these and
+how it stands: in sync, waiting for Chromium to close, extensions to
+install, edits settled lately, a change to choose, or not available here
+and why.
 
 A fresh machine catches up in one go:
 
@@ -190,7 +190,7 @@ Earlier versions and deleted files stay for 30 days, the least of what
 iCloud, Dropbox and Google Drive keep, which keeps what your account
 stores (and spends credits on) small: `omacloud versions notes.md` lists
 a file's versions, and `omacloud restore notes.md --at 3` brings one back. `omacloud deleted`
-lists the files deleted in the last 30 days (`--days` for longer) with the
+lists the files deleted in the last 30 days with the
 version to restore, and the app's Recently Deleted, under Overview, puts
 one back where it was.
 
@@ -211,7 +211,7 @@ they run `omacloud receive` and paste the link (or put it in
 `OMACLOUD_LINK`). The file is encrypted with a key that lives only in the
 link, after the `#`, which browsers never send: opened in a browser, the
 link shows how to get the file, and omacloud.computer can't read it. A
-share holds up to 256 MiB. `omacloud share --copy` puts the link on the
+share holds up to 128 MiB. `omacloud share --copy` puts the link on the
 clipboard instead of printing it, and so does Share a File in the app's
 Overview. `omacloud unshare`, given the link the same way, takes it back
 before it expires: it opens nothing from then on. `omacloud shares` lists
@@ -297,8 +297,9 @@ in a script's or an agent's captured output; it is no wall against a program
 that gives a command a whole terminal (see docs/design.md).
 
 `omacloud watch`, which the systemd unit runs, keeps its own exit codes: 2
-when this computer was removed or the account can't be verified (the unit
-doesn't restart into that), 75 after an upgrade (it restarts into the new
+when this computer was removed, the account can't be verified, or the
+computer was set up on storage Omacloud no longer uses (the unit doesn't
+restart into that), 75 after an upgrade (it restarts into the new
 binary), 1 for anything else.
 
 ## Configuration
@@ -324,10 +325,11 @@ Ignore rules use gitignore syntax, from three places: built-in defaults
 computer only, and `.omacloudignore` at the folder root, which syncs so every
 computer follows it. Ignored paths are neither pushed nor pulled.
 
-The daemon runs at nice 10 with idle I/O priority. The bandwidth cap is
-opendal's throttle with a 256 MiB burst (a single pack upload must fit in the
-burst), so it bites on large transfers such as a first sync, not on everyday
-edits.
+The daemon runs at nice 10 with idle I/O priority. The bandwidth cap
+holds on average across all transfers: each one, large or small, waits for
+its turn at that rate, and after a quiet spell up to a second's worth goes
+out at once. So it bites on large transfers such as a first sync, not on
+everyday edits.
 
 ## Layout
 

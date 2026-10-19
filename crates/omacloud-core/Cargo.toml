@@ -6,13 +6,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[features]
-# For existing repositories using providers beyond S3 and local files.
-full-backends = ["rustic_backend/default"]
-
 [dependencies]
 opendal.workspace = true
-tokio.workspace = true
 rustic_core.workspace = true
 rustic_backend.workspace = true
 anyhow.workspace = true
@@ -28,7 +23,6 @@ log.workspace = true
 bytes = "1"
 ignore.workspace = true
 libc.workspace = true
-rayon.workspace = true
 diffy = "0.5.2"
 # rustic_core's pack size settings take its ByteSize
 bytesize = "2"
@@ -42,9 +36,5 @@ md-5 = "0.11"
 toml_edit = "0.25"
 
 [dev-dependencies]
-serde_json.workspace = true
 env_logger.workspace = true
 tempfile.workspace = true
-ed25519-dalek.workspace = true
-rand.workspace = true
-hex.workspace = true

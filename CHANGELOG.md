@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A holder charges only for the lease it kept a blob for, not the grace
+  after it, so a computer back after months renews normally instead of
+  finding every holder over its limit.
+- A shared file holds up to 128 MiB (the largest object a holder takes).
+- Cleanup: the own-bucket leftovers (sealed storage settings, the
+  `full-backends` build feature and the filesystem backend), the unused
+  `Has` holder request, unused dependencies and dead code are gone.
 - Earlier versions and deleted files stay for 30 days, then go, so an
   account's storage no longer grows with every edit. Once a day one of
   the account's computers lets older versions go (rustic's lock-free

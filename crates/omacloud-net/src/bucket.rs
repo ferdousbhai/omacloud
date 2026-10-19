@@ -75,6 +75,31 @@ fn blob_name(key: &str, shard: Option<u8>) -> String {
     }
 }
 
+/// Up to `want` new holders among `all` (listed in `nodes`), on networks
+/// none of `held` is on, never one in `refused`: fewer, on as many
+/// networks as there are, when the network is short of independent nodes.
+fn pick<'a>(
+    nodes: &'a [Listed],
+    all: &[place::Node],
+    refused: &BTreeSet<NodeId>,
+    held: &[Held],
+    want: usize,
+) -> Vec<&'a Listed> {
+    let taken: Vec<_> = nodes
+        .iter()
+        .filter(|n| held.iter().any(|h| h.node == n.node.id))
+        .map(|n| n.node.clone())
+        .collect();
+    let chosen = match place::choose(all, refused, &taken, want) {
+        Ok(c) => c,
+        Err(PlaceError::TooFew { found, .. }) => place::choose(all, refused, &taken, found).unwrap_or_default(),
+    };
+    chosen
+        .iter()
+        .map(|c| nodes.iter().find(|n| n.node.id == c.id).expect("listed"))
+        .collect()
+}
+
 /// How long a directory read is used before reading it again.
 const DIRECTORY_FRESH: Duration = Duration::from_secs(60);
 /// How long a holder that didn't answer is asked last.
@@ -214,6 +239,38 @@ impl Bucket {
         .await
     }
 
+    /// What placing new holders next to `held` starts from: the directory,
+    /// its nodes, and who may not hold another (`avoid`, and `held`'s).
+    async fn placing(
+        &self,
+        held: &[Held],
+        avoid: &BTreeSet<NodeId>,
+    ) -> Result<(Vec<Listed>, Vec<place::Node>, BTreeSet<NodeId>)> {
+        let nodes = self.directory(false).await?;
+        let all = nodes.iter().map(|n| n.node.clone()).collect();
+        let mut refused = self.refused(avoid);
+        refused.extend(held.iter().map(|h| h.node));
+        Ok((nodes, all, refused))
+    }
+
+    /// Scramble `data` for `to` and give it to it; `None` when it didn't
+    /// take it.
+    async fn store(&self, key: &str, shard: Option<u8>, data: &[u8], to: &Listed) -> Option<Held> {
+        let mut blob = data.to_vec();
+        self.keys.blob.apply(&blob_name(key, shard), &to.node.id, &mut blob);
+        match client::store(&self.ep, &to.addr, &blob).await {
+            Ok(id) => Some(Held {
+                node: to.node.id,
+                blob: id,
+                shard,
+            }),
+            Err(e) => {
+                log::debug!("{e:#}");
+                None
+            }
+        }
+    }
+
     /// Give each of `shards` (index, bytes) a holder on a network none of
     /// `held` or the others is on, never a node in `avoid`. Returns `held`
     /// with the new ones; short of some when the network is.
@@ -224,53 +281,30 @@ impl Bucket {
         mut held: Vec<Held>,
         avoid: &BTreeSet<NodeId>,
     ) -> Result<Vec<Held>> {
-        let nodes = self.directory(false).await?;
-        let all: Vec<_> = nodes.iter().map(|n| n.node.clone()).collect();
-        let mut refused = self.refused(avoid);
-        refused.extend(held.iter().map(|h| h.node));
+        let (nodes, all, mut refused) = self.placing(&held, avoid).await?;
         // all or none of a new object's shards: there's no use for some
-        if held.is_empty() && place::choose(&all, &refused, &[], shards.len(), 0).is_err() {
+        if held.is_empty() && place::choose(&all, &refused, &[], shards.len()).is_err() {
             return Ok(held);
         }
         while !shards.is_empty() {
-            let taken: Vec<_> = nodes
-                .iter()
-                .filter(|n| held.iter().any(|h| h.node == n.node.id))
-                .map(|n| n.node.clone())
-                .collect();
-            let chosen = match place::choose(&all, &refused, &taken, shards.len(), 0) {
-                Ok(c) => c,
-                Err(PlaceError::TooFew { found, .. }) => {
-                    place::choose(&all, &refused, &taken, found, 0).unwrap_or_default()
-                }
-            };
+            let chosen = pick(&nodes, &all, &refused, &held, shards.len());
             if chosen.is_empty() {
                 break;
             }
             let mut left = Vec::new();
-            for ((i, shard), node) in shards
+            for ((i, shard), to) in shards
                 .drain(..)
-                .zip(chosen.iter().map(Some).chain(std::iter::repeat(None)))
+                .zip(chosen.into_iter().map(Some).chain(std::iter::repeat(None)))
             {
-                let Some(node) = node else {
+                let Some(to) = to else {
                     left.push((i, shard));
                     continue;
                 };
-                let addr = &nodes.iter().find(|n| n.node.id == node.id).expect("listed").addr;
-                let mut blob = shard.clone();
-                self.keys.blob.apply(&blob_name(key, Some(i)), &node.id, &mut blob);
-                match client::store(&self.ep, addr, &blob).await {
-                    Ok(id) => held.push(Held {
-                        node: node.id,
-                        blob: id,
-                        shard: Some(i),
-                    }),
-                    Err(e) => {
-                        log::debug!("{e:#}");
-                        left.push((i, shard));
-                    }
+                match self.store(key, Some(i), &shard, to).await {
+                    Some(h) => held.push(h),
+                    None => left.push((i, shard)),
                 }
-                refused.insert(node.id);
+                refused.insert(to.node.id);
             }
             shards = left;
         }
@@ -282,42 +316,31 @@ impl Bucket {
     /// never on a node in `avoid`. Returns all the copies; fewer than
     /// wanted when the network is short of independent nodes.
     async fn place(&self, key: &str, data: &[u8], mut held: Vec<Held>, avoid: &BTreeSet<NodeId>) -> Result<Vec<Held>> {
-        let nodes = self.directory(false).await?;
-        let mut refused = self.refused(avoid);
-        refused.extend(held.iter().map(|h| h.node));
+        let (nodes, all, mut refused) = self.placing(&held, avoid).await?;
         while held.len() < self.copies {
-            let taken: Vec<_> = nodes
-                .iter()
-                .filter(|n| held.iter().any(|h| h.node == n.node.id))
-                .map(|n| n.node.clone())
-                .collect();
-            let all: Vec<_> = nodes.iter().map(|n| n.node.clone()).collect();
-            let chosen = match place::choose(&all, &refused, &taken, self.copies - held.len(), 0) {
-                Ok(c) => c,
-                // fewer copies than wanted, on as many networks as there are
-                Err(PlaceError::TooFew { found, .. }) => {
-                    place::choose(&all, &refused, &taken, found, 0).unwrap_or_default()
-                }
-            };
+            let chosen = pick(&nodes, &all, &refused, &held, self.copies - held.len());
             if chosen.is_empty() {
                 break;
             }
-            for node in chosen {
-                let addr = &nodes.iter().find(|n| n.node.id == node.id).expect("listed").addr;
-                let mut copy = data.to_vec();
-                self.keys.blob.apply(key, &node.id, &mut copy);
-                match client::store(&self.ep, addr, &copy).await {
-                    Ok(blob) => held.push(Held {
-                        node: node.id,
-                        blob,
-                        shard: None,
-                    }),
-                    Err(e) => log::debug!("{e:#}"),
-                }
-                refused.insert(node.id);
+            for to in chosen {
+                held.extend(self.store(key, None, data, to).await);
+                refused.insert(to.node.id);
             }
         }
         Ok(held)
+    }
+
+    /// Put `holders` in `entry`'s place. True when they differ from its own.
+    async fn replace_holders(&self, entry: &Entry, holders: Vec<Held>) -> Result<bool> {
+        if holders == entry.holders {
+            return Ok(false);
+        }
+        self.put_entry(&Entry {
+            holders,
+            ..entry.clone()
+        })
+        .await?;
+        Ok(true)
     }
 
     /// Drop the copies on `gone` and add new ones from a good copy until
@@ -349,15 +372,7 @@ impl Bucket {
                 .collect();
             let avoid: BTreeSet<NodeId> = gone.union(avoid).copied().collect();
             let holders = self.place_shards(&entry.key, missing, good, &avoid).await?;
-            if holders == entry.holders {
-                return Ok(false);
-            }
-            self.put_entry(&Entry {
-                holders,
-                ..entry.clone()
-            })
-            .await?;
-            return Ok(true);
+            return self.replace_holders(entry, holders).await;
         }
         if good.len() >= self.copies && good.len() == entry.holders.len() {
             return Ok(false);
@@ -377,15 +392,7 @@ impl Bucket {
         };
         let avoid: BTreeSet<NodeId> = gone.union(avoid).copied().collect();
         let holders = self.place(&entry.key, &data, good, &avoid).await?;
-        if holders == entry.holders {
-            return Ok(false);
-        }
-        self.put_entry(&Entry {
-            holders,
-            ..entry.clone()
-        })
-        .await?;
-        Ok(true)
+        self.replace_holders(entry, holders).await
     }
 
     /// The node directory, read again.

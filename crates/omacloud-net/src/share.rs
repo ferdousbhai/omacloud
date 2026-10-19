@@ -1,8 +1,9 @@
 //! One file shared by link. The file is sealed under a random secret and
 //! kept in a bucket of its own that the secret alone reaches: its holders
 //! and the Worker see ciphertext under ids derived from it, and the secret
-//! travels after the link's `#`, which browsers never send. Nobody renews
-//! it, so it lasts a first lease (7 days).
+//! travels after the link's `#`, which browsers never send. It lasts its
+//! first lease (7 days) unless its sharer's daemon renews it to the end
+//! `share --days` set (up to 365).
 
 use anyhow::{Context, Result};
 
@@ -12,8 +13,10 @@ use crate::{bucket::Bucket, seal::Keys};
 const OBJECT: &str = "share";
 /// What the sealed file is bound to.
 const SEALED_FOR: &str = "omacloud share v1";
-/// Larger files go another way: a share is held in memory whole.
-pub const MAX: u64 = 256 << 20;
+/// Larger files go another way: a share is held in memory whole, and on a
+/// network too small for erasure coding it's kept as whole copies, which
+/// holders take up to this size.
+pub const MAX: u64 = crate::proto::MAX_OBJECT;
 
 /// A new share's secret: what the link carries.
 #[must_use]
@@ -33,7 +36,7 @@ pub fn bucket_key(secret: &str) -> String {
 ///
 /// If no holder takes it.
 pub async fn put(bucket: &Bucket, secret: &str, name: &str, data: &[u8]) -> Result<()> {
-    anyhow::ensure!(data.len() as u64 <= MAX, "a share holds up to 256 MiB");
+    anyhow::ensure!(data.len() as u64 <= MAX, "a share holds up to 128 MiB");
     let mut plain = Vec::with_capacity(2 + name.len() + data.len());
     plain.extend_from_slice(
         &u16::try_from(name.len())
@@ -55,7 +58,7 @@ pub async fn get(bucket: &Bucket, secret: &str) -> Result<(String, Vec<u8>)> {
     let sealed = bucket
         .get(OBJECT, None)
         .await?
-        .context("nothing is shared under this link: it may have expired (links last 7 days)")?;
+        .context("nothing is shared under this link: it may have expired or been taken back")?;
     let plain = Keys::from_secret(&bucket_key(secret))
         .open(SEALED_FOR, &sealed)
         .context("the shared file doesn't verify")?;
@@ -80,7 +83,7 @@ pub async fn get(bucket: &Bucket, secret: &str) -> Result<(String, Vec<u8>)> {
 pub async fn remove(bucket: &Bucket) -> Result<()> {
     anyhow::ensure!(
         bucket.entry(OBJECT).await?.is_some(),
-        "nothing is shared under this link: it may have expired"
+        "nothing is shared under this link: it may have expired or been taken back"
     );
     bucket.delete(OBJECT).await
 }

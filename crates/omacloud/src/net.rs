@@ -27,7 +27,8 @@ const HEARTBEAT: Duration = Duration::from_secs(15 * 60);
 const UPKEEP: Duration = Duration::from_secs(6 * 3600);
 /// Copies read back each round.
 const AUDITS: usize = 32;
-/// Renewals pay this far ahead, and come again when less than a month is left.
+/// Renewals keep copies this far ahead, and come again when less than a
+/// month is left; holders are paid for the time they served.
 const LEASE: u64 = 2 * MONTH;
 /// Tokens asked for when the wallet runs short and nothing else pays.
 const STARTER: usize = 10;
@@ -216,8 +217,8 @@ pub struct Shared {
 
 impl Shared {
     /// Until when to renew it now, if it's due: the first lease covers a
-    /// week, then renewals pay up to two months ahead, coming again when
-    /// less than one is left, never past `until`.
+    /// week, then renewals keep it up to two months ahead, coming again
+    /// when less than one is left, never past `until`.
     #[must_use]
     pub fn renewal(&self, now: u64) -> Option<u64> {
         let covered = self.paid_until.max(self.made + FIRST_LEASE);
@@ -232,10 +233,7 @@ fn shares_path(data: &Path) -> PathBuf {
 /// This computer's shares, ended ones included until the daemon forgets them.
 #[must_use]
 pub fn read_shares(data: &Path) -> Vec<Shared> {
-    fs::read(shares_path(data))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    read_json(&shares_path(data))
 }
 
 /// Save this computer's shares.
@@ -253,10 +251,7 @@ pub fn write_shares(data: &Path, shares: &[Shared]) -> Result<()> {
 /// far that pays. Nulls before the first round.
 #[must_use]
 pub fn space(data: &Path) -> serde_json::Value {
-    let last: serde_json::Value = fs::read(data.join("space.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
+    let last: serde_json::Value = read_json(&data.join("space.json"));
     let tokens = read_wallet(&data.join("wallet.json")).len() as u64;
     let monthly = last["monthly"].as_u64();
     let renewed = read_number(&data.join("renewed"));
@@ -293,6 +288,12 @@ fn take(wallet: &Path, n: u64, starter: impl FnOnce() -> Result<Vec<Token>>) -> 
 }
 
 fn read_wallet(path: &Path) -> Vec<Token> {
+    read_json(path)
+}
+
+/// A JSON file this computer keeps, or its default when there's none yet
+/// or it can't be read.
+fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
     fs::read(path)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
@@ -302,10 +303,7 @@ fn read_wallet(path: &Path) -> Vec<Token> {
 /// Holders that failed this computer, and until when they're passed over;
 /// those whose time is up are left out.
 fn read_suspects(data: &Path) -> std::collections::BTreeMap<omacloud_net::blob::NodeId, u64> {
-    let kept: std::collections::BTreeMap<String, u64> = fs::read(data.join("suspects.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
+    let kept: std::collections::BTreeMap<String, u64> = read_json(&data.join("suspects.json"));
     kept.into_iter()
         .filter(|(_, until)| *until > now())
         .filter_map(|(id, until)| Some((hex::decode(id).ok()?.try_into().ok()?, until)))
@@ -325,8 +323,12 @@ fn read_number(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
-fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    let tmp = path.with_extension("tmp");
+/// Write a file only its owner reads, whole or not at all: a crash midway
+/// leaves the old one.
+pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
     fs::OpenOptions::new()
         .write(true)
         .create(true)
