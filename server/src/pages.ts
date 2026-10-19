@@ -55,7 +55,7 @@ export const home = () =>
 <li>Your AI agent settings and your Wi-Fi networks</li>
 <li>Your SSH and GPG keys.</li>
 </ul>
-<p>Omacloud keeps all the versions of each file.</p>
+<p>You can get back an earlier version of a file, or a file that you deleted.</p>
 <p>Omacloud encrypts your files on your computer. Other Omarchy computers keep each encrypted
 file, on more than one computer. Your computer keeps files for other persons. No computer can read the files
 that it keeps for other persons.</p>
@@ -121,7 +121,7 @@ export const llms = (env: Env) => {
 
 > Your files and settings on every Omarchy computer, end to end encrypted. The folders
 > you choose sync in place; Omarchy settings, AI agent settings, Chromium, Wi-Fi, package lists
-> and ssh and gpg keys follow; every version is kept. Its storage network is held by Omarchy
+> and ssh and gpg keys follow; earlier versions and deleted files come back. Its storage network is held by Omarchy
 > computers themselves, untrusted, with no accounts or sign-in. Underneath it is plain
 > restic, so restic or rustic restore everything without Omacloud.
 

@@ -4,7 +4,7 @@ Your files and settings on every Omarchy computer, end to end encrypted.
 The folders you choose (Desktop, Documents, Pictures, Music, any other in
 home) sync in place, as iCloud does; Omarchy settings, AI agent settings,
 Chromium's bookmarks and extensions, Wi-Fi networks, package lists and ssh
-and gpg keys follow; every version is kept.
+and gpg keys follow; earlier versions and deleted files come back.
 
 Everything is encrypted on your computer before it leaves it: the storage
 only ever holds what it can't read. Underneath it's plain restic, so you can
