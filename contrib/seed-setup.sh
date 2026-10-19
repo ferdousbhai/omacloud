@@ -66,6 +66,11 @@ Wants=network-online.target
 ExecStart=/usr/local/bin/iroh-relay --config-path /etc/iroh-relay/relay.toml
 Restart=on-failure
 RestartSec=5
+# a public relay holds many connections; past the default 1024 it fails
+# every accept, and logs each failure
+LimitNOFILE=65536
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=200
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 DynamicUser=yes
 StateDirectory=iroh-relay
@@ -89,6 +94,9 @@ Environment=HOME=$DATA
 ExecStart=/usr/local/bin/omacloud node run --give $GIVE --relay https://$RELAY_HOST
 Restart=on-failure
 RestartSec=10
+LimitNOFILE=65536
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=200
 NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=$DATA
@@ -98,6 +106,13 @@ PrivateTmp=yes
 WantedBy=multi-user.target
 EOF
 
+# rotate syslog by size too, not only weekly
+if [ -f /etc/logrotate.d/rsyslog ] && ! grep -q maxsize /etc/logrotate.d/rsyslog; then
+  sed -i 's/^\(\s*\)rotate \([0-9]*\)/\1rotate \2\n\1maxsize 200M/' /etc/logrotate.d/rsyslog
+fi
+
 systemctl daemon-reload
-systemctl enable --now iroh-relay omacloud-seed
+systemctl enable iroh-relay omacloud-seed
+# a rerun (an upgrade) starts the new binaries and settings
+systemctl restart iroh-relay omacloud-seed
 systemctl --no-pager --lines=5 status iroh-relay omacloud-seed || true
