@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.18 (2026-10-19)
 
 - Erasure coding: objects of 1 MiB or more are kept as 4 data and 2
   parity shards on six holders on different networks, 1.5 times their
