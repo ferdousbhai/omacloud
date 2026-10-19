@@ -115,6 +115,13 @@ seed nodes do.
   Folders match by what they are, so a German computer's `Dokumente` is
   another's `Documents`. From the terminal: `omacloud folders add Music`,
   `omacloud folders skip Pictures`.
+- **Every file, not kept here:** `omacloud mount` (or Every File in the
+  app's Overview) shows all your folders in `~/Omacloud`, read-only,
+  including those skipped on this computer; each file is downloaded when
+  it's opened, as iCloud's online-only files are. So a small laptop can
+  skip Pictures and still open any photo. It needs `fuse3` (Omarchy has
+  it); Ctrl-C or `fusermount3 -u ~/Omacloud` unmounts it, and the app
+  keeps it running as the `omacloud-mount` user unit.
 - **Not this file:** anything named like `name.nosync` stays on its
   computer, as on iCloud.
 - **Omarchy settings:** the shared files in Omarchy's dots manifest

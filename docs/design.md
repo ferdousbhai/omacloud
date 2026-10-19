@@ -247,7 +247,9 @@ Elsewhere:
 - Key transparency for device keys; until then, approvals compare
   fingerprints out of band.
 - Direct computer-to-computer sync on a local network.
-- Online-only files fetched on open (#7).
+- Online-only files you can edit in place (#7): `omacloud mount` shows
+  every file read-only, fetched on open, but a folder is either kept here
+  in full or skipped, not freed file by file.
 - Sharing a file by link (#15) or a folder with other people (#8).
 - Reaching files from a phone or a browser.
 - An outside review of this design (#18).

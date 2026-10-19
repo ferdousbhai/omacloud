@@ -34,6 +34,7 @@ clap = { version = "4", features = ["derive", "env"] }
 log = "0.4"
 env_logger = "0.11"
 tempfile = "3"
+fuser = { version = "0.18", default-features = false }
 
 # rustic_core 0.13 plus pack padding and splice_tree, see vendor/rustic_core/OMACLOUD.md
 [patch.crates-io]

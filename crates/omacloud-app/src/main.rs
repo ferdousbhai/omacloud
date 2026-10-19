@@ -765,6 +765,15 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     if let Some(r) = folder_group_row {
         sync.add(&r);
     }
+    let online = row(
+        "Every File",
+        "All your folders in ~/Omacloud, those not kept here too, each downloaded when opened",
+    );
+    let browse = button("Browse…", None);
+    let ui2 = ui.clone();
+    browse.connect_clicked(move |_| browse_online(&ui2));
+    online.add_suffix(&browse);
+    sync.add(&online);
     let deleted = row("Recently Deleted", "Files deleted in the last 30 days, to put back");
     let show = button("Show…", None);
     let ui2 = ui.clone();
@@ -815,6 +824,54 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     more.add(&details);
     page.add(&more);
     page
+}
+
+/// Mount every file at ~/Omacloud (`omacloud mount`, kept running as a
+/// user unit after the app closes), then open it.
+fn browse_online(ui: &Rc<Ui>) {
+    let dir = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("Omacloud");
+    let mut argv = owned(&["systemd-run", "--user", "--unit=omacloud-mount", "--collect", "--quiet"]);
+    argv.push(std::env::var("OMACLOUD_BIN").unwrap_or_else(|_| "omacloud".into()));
+    if let Ok(config) = std::env::var("OMACLOUD_CONFIG") {
+        argv.extend(["--config".to_string(), config]);
+    }
+    argv.extend(["mount".to_string(), dir.to_string_lossy().into_owned()]);
+    let (ui, dir2) = (ui.clone(), dir.clone());
+    ui.toast("Opening every file…");
+    in_background(
+        move || {
+            if !mounted(&dir2) {
+                run(&argv)?;
+                let start = std::time::Instant::now();
+                while !mounted(&dir2) {
+                    if start.elapsed().as_secs() > 60 {
+                        return Err(Failure::new(
+                            "couldn't show every file: `journalctl --user -u omacloud-mount` says why",
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            }
+            Ok(())
+        },
+        move |r| match r {
+            Ok(()) => gtk::FileLauncher::new(Some(&gio::File::for_path(&dir))).launch(
+                Some(&ui.window),
+                None::<&gio::Cancellable>,
+                |_| {},
+            ),
+            Err(e) => ui.toast(&e.shown()),
+        },
+    );
+}
+
+/// Whether a filesystem is mounted at `dir`.
+fn mounted(dir: &std::path::Path) -> bool {
+    std::fs::read_to_string("/proc/self/mountinfo").is_ok_and(|m| {
+        m.lines()
+            .filter_map(|l| l.split(' ').nth(4))
+            .any(|p| std::path::Path::new(p) == dir)
+    })
 }
 
 /// Files deleted in the last 30 days, each with a button that writes its

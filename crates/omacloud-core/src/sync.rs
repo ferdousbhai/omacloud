@@ -1687,6 +1687,25 @@ impl Engine {
         Ok(out)
     }
 
+    /// The account's files as the latest head has them, every folder
+    /// included (those skipped here too), read on demand.
+    ///
+    /// # Errors
+    ///
+    /// On repository errors, or a history that fails verification.
+    pub fn browse(&mut self) -> Result<crate::browse::Browse> {
+        let heads = self.verified_history()?;
+        let repo = self.open_repo()?;
+        let Some((seq, id)) = heads.iter().rev().find_map(|h| Some((h.seq, self.snapshot_now(h)?))) else {
+            return Ok(crate::browse::Browse::new(repo, None, 0));
+        };
+        let snap = repo
+            .get_snapshots(&[id.as_str()])?
+            .pop()
+            .ok_or_else(|| anyhow!("snapshot of head {seq} missing"))?;
+        Ok(crate::browse::Browse::new(repo, Some(snap.tree), seq))
+    }
+
     /// Write `path` as it was at head `seq` to `dest`, outside the synced
     /// folder or inside it (then it syncs like any new file).
     ///

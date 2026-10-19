@@ -18,6 +18,7 @@ use std::{
 mod agent_skill;
 mod alerts;
 mod fail;
+mod mount;
 mod net;
 mod output;
 mod power;
@@ -164,6 +165,12 @@ enum Cmd {
         /// How many days back to look
         #[arg(long, default_value_t = 30)]
         days: u32,
+    },
+    /// Show every file of the account as a read-only folder, each
+    /// fetched when it's opened (folders skipped here too), until Ctrl-C
+    Mount {
+        /// An empty folder outside the synced ones [default: ~/Omacloud]
+        dir: Option<PathBuf>,
     },
     /// Write a file as it was at a given version
     Restore {
@@ -1619,6 +1626,61 @@ fn run(cli: Cli) -> Out {
                 out.trim_end().to_string()
             })
             .ids(ids))
+        }
+        Cmd::Mount { dir } => {
+            // before any thread starts, so Ctrl-C reaches the unmount
+            mount::block_signals();
+            let config = load(&paths)?;
+            let dir = match dir {
+                Some(d) => std::path::absolute(d)?,
+                None => home_dir()?.join("Omacloud"),
+            };
+            let mut e = engine(&paths, &config)?;
+            e.load_folders()?;
+            let inside = if config.folders.is_some() {
+                e.synced_folders().iter().any(|f| dir.starts_with(f))
+            } else {
+                dir.starts_with(&config.folder)
+            };
+            if inside {
+                return Err(fail::usage(format!("{} is inside a synced folder", dir.display()))
+                    .hint("mount outside the folders that sync, such as ~/Omacloud")
+                    .into());
+            }
+            fs::create_dir_all(&dir)?;
+            if fs::read_dir(&dir)?.next().is_some() {
+                return Err(fail::usage(format!("{} isn't empty", dir.display()))
+                    .hint("give an empty folder, or a new one")
+                    .into());
+            }
+            let browse = e.browse()?;
+            let mut seq = browse.seq;
+            eprintln!(
+                "{} shows every file as of version {seq}, read-only; each is fetched when opened.\n\
+                 Ctrl-C (or `fusermount3 -u {}`) unmounts it.",
+                dir.display(),
+                dir.display()
+            );
+            mount::run(
+                mount::View::new(browse),
+                &dir,
+                std::time::Duration::from_secs(300),
+                &mut || match e.browse() {
+                    Ok(b) if b.seq != seq => {
+                        seq = b.seq;
+                        Some(b)
+                    }
+                    Ok(_) => None,
+                    Err(err) => {
+                        warn!("couldn't refresh the view: {err:#}");
+                        None
+                    }
+                },
+            )?;
+            Ok(Response::new(
+                json!({ "dir": dir }),
+                format!("unmounted {}", dir.display()),
+            ))
         }
         Cmd::Restore { path, at, to, yes } => {
             let config = load(&paths)?;

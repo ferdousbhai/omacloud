@@ -486,6 +486,46 @@ fn a_deleted_file_is_listed_and_put_back() {
 }
 
 #[test]
+fn mount_shows_every_file_read_only() {
+    let fuse = std::path::Path::new("/dev/fuse").exists()
+        && std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("fusermount3").exists()));
+    if !fuse {
+        eprintln!("skipped: no FUSE here");
+        return;
+    }
+    let h = Home::new();
+    h.create();
+    std::fs::create_dir_all(h.path("A/trip")).unwrap();
+    std::fs::write(h.path("A/trip/photo.jpg"), "jpeg bytes").unwrap();
+    assert_eq!(code(&h.run("a", &["sync"])), 0);
+
+    let dir = h.path("view");
+    let mut child = h
+        .cmd("a", &["mount", &dir.to_string_lossy()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let photo = dir.join("trip/photo.jpg");
+    let start = std::time::Instant::now();
+    while !photo.exists() {
+        assert!(start.elapsed().as_secs() < 30, "not mounted");
+        assert!(child.try_wait().unwrap().is_none(), "mount exited");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert_eq!(std::fs::read_to_string(&photo).unwrap(), "jpeg bytes");
+    let e = std::fs::write(&photo, "changed").unwrap_err();
+    assert_eq!(e.raw_os_error(), Some(libc::EROFS), "{e}");
+    assert!(!dir.join(".omacloud").exists());
+
+    // SAFETY: a signal to the child started here
+    unsafe { libc::kill(i32::try_from(child.id()).unwrap(), libc::SIGTERM) };
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(std::fs::read_dir(&dir).unwrap().next().is_none(), "still mounted");
+}
+
+#[test]
 fn restore_over_an_existing_file_needs_yes() {
     let h = Home::new();
     h.create();

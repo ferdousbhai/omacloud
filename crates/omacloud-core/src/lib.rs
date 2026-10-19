@@ -7,6 +7,7 @@
 
 pub mod account;
 pub mod agents;
+pub mod browse;
 pub mod chromium;
 pub mod devices;
 pub mod epoch;

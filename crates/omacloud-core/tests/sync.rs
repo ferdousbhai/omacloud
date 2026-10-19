@@ -737,6 +737,34 @@ fn recently_deleted_lists_what_is_still_gone() -> Result<()> {
 }
 
 #[test]
+fn browsing_reads_the_latest_head_on_demand() -> Result<()> {
+    use omacloud_core::browse::Kind;
+    let w = World::new(&["a", "b"])?;
+    let (mut a, mut b) = (w.engine("a")?, w.engine("b")?);
+    write(&w.dir("a"), "notes.md", "from a\n");
+    a.sync()?;
+    write(&w.dir("b"), "trip/photo.jpg", "jpeg bytes");
+    b.sync()?;
+
+    // a hasn't pulled b's photo, but sees it
+    let view = a.browse()?;
+    let mut top: Vec<_> = view
+        .list(Path::new(""))?
+        .into_iter()
+        .map(|e| (e.name, e.kind))
+        .collect();
+    top.sort_by(|x, y| x.0.cmp(&y.0));
+    assert_eq!(top, [("notes.md".into(), Kind::File), ("trip".into(), Kind::Dir)]);
+    let photo = Path::new("trip/photo.jpg");
+    assert_eq!(view.entry(photo)?.unwrap().size, 10);
+    let f = view.open(photo)?;
+    assert_eq!(view.read(&f, 5, 100)?, b"bytes");
+    assert!(view.entry(Path::new(".omacloud"))?.is_none());
+    assert!(view.open(Path::new("trip")).is_err());
+    Ok(())
+}
+
+#[test]
 fn ignore_rules_hold_in_both_directions() -> Result<()> {
     let w = World::new(&["a", "b"])?;
     let (mut a, mut b) = (w.engine("a")?, w.engine("b")?);

@@ -83,6 +83,7 @@ device. Do not approve an unknown device based on its name alone.
 omacloud sync
 omacloud versions 'notes.md'
 omacloud deleted                # deleted lately, with the version to restore
+omacloud mount                  # every file read-only in ~/Omacloud, fetched on open; runs until Ctrl-C
 omacloud restore 'notes.md' --at 3 --to './notes-restored.md'
 ```
 

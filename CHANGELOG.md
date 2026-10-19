@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Every file, online only: `omacloud mount` shows all the account's
+  folders read-only in `~/Omacloud`, those skipped here too, each file
+  fetched when it's opened (FUSE; `fuse3` is an optional dependency). The
+  app's Overview opens it with Every File.
 - Recently Deleted: `omacloud deleted` lists files deleted in the last 30
   days and not made again, with the version that brings each back; the
   app shows them under Overview, with Put Back.

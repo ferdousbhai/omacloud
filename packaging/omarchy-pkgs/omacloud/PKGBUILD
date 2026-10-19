@@ -9,7 +9,8 @@ license=('MIT')
 depends=('glibc' 'libgcc' 'gtk4' 'libadwaita' 'libsecret')
 makedepends=('cargo')
 options=('!debug' '!lto')
-optdepends=('restic: restore without omacloud (see `omacloud export`)')
+optdepends=('restic: restore without omacloud (see `omacloud export`)'
+            'fuse3: every file in ~/Omacloud, each fetched when opened (`omacloud mount`)')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('cadbff26ac0cc3d23e8f0fc85f57efbc9fbdbca90f1d8a0563ee967f2e5e6729')
 
