@@ -765,6 +765,12 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     if let Some(r) = folder_group_row {
         sync.add(&r);
     }
+    let deleted = row("Recently Deleted", "Files deleted in the last 30 days, to put back");
+    let show = button("Show…", None);
+    let ui2 = ui.clone();
+    show.connect_clicked(move |_| show_deleted(&ui2));
+    deleted.add_suffix(&show);
+    sync.add(&deleted);
     page.add(&sync);
     if let Some(g) = folders_group {
         page.add(&g);
@@ -809,6 +815,70 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     more.add(&details);
     page.add(&more);
     page
+}
+
+/// Files deleted in the last 30 days, each with a button that writes its
+/// last version back where it was.
+fn show_deleted(ui: &Rc<Ui>) {
+    let page = adw::PreferencesPage::new();
+    let list = group("", "Looking through your history…");
+    page.add(&list);
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.set_content(Some(&page));
+    let dialog = adw::Dialog::builder()
+        .title("Recently Deleted")
+        .content_width(560)
+        .content_height(520)
+        .child(&view)
+        .build();
+    dialog.present(Some(&ui.window));
+    let ui = ui.clone();
+    cli_then(&["omacloud", "deleted"], Vec::new(), move |r| {
+        let files = match r {
+            Ok(Value::Array(files)) => files,
+            Ok(_) => Vec::new(),
+            Err(e) => {
+                list.set_description(Some(&e.shown()));
+                return;
+            }
+        };
+        list.set_description(Some(if files.is_empty() {
+            "Nothing was deleted in the last 30 days."
+        } else {
+            "Put Back writes the last version where it was. Older versions stay under `omacloud versions`."
+        }));
+        for f in files {
+            let size = f["size"].as_u64().unwrap_or(0);
+            let rw = row(
+                &text(&f["relative"]),
+                &format!("Deleted on {} · {}", text(&f["device"]), human(size)),
+            );
+            let put = button("Put Back", Some("flat"));
+            let (ui, group, rw2) = (ui.clone(), list.clone(), rw.clone());
+            let (path, version) = (text(&f["path"]), f["version"].to_string());
+            put.connect_clicked(move |b| {
+                b.set_sensitive(false);
+                let (ui, list, rw, b) = (ui.clone(), group.clone(), rw2.clone(), b.clone());
+                cli_then(
+                    &["omacloud", "restore", &path, "--at", &version, "--to", &path],
+                    Vec::new(),
+                    move |r| match r {
+                        Ok(_) => {
+                            list.remove(&rw);
+                            ui.toast("Put back");
+                        }
+                        Err(e) => {
+                            b.set_sensitive(true);
+                            ui.toast(&e.shown());
+                        }
+                    },
+                );
+            });
+            rw.add_suffix(&put);
+            list.add(&rw);
+        }
+    });
 }
 
 const GIB: u64 = 1 << 30;

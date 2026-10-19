@@ -306,6 +306,19 @@ pub struct Version {
     pub size: Option<u64>,
 }
 
+/// A file deleted and not made again since, see [`Engine::deleted`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Deleted {
+    pub path: PathBuf,
+    /// The head that deleted it.
+    pub seq: u64,
+    pub time: Timestamp,
+    pub device: String,
+    /// The last head that had it, the version to restore.
+    pub last: u64,
+    pub size: u64,
+}
+
 /// A local change found against `base`.
 #[derive(Debug)]
 enum Local {
@@ -1613,6 +1626,64 @@ impl Engine {
             }
             last = node;
         }
+        Ok(out)
+    }
+
+    /// Files deleted at `since` or later and not made again since, newest
+    /// deletion first. Omacloud's own files (settings, package lists,
+    /// secrets) are left out.
+    ///
+    /// # Errors
+    ///
+    /// On repository errors, or a history that fails verification.
+    pub fn deleted(&mut self, since: Timestamp) -> Result<Vec<Deleted>> {
+        let heads = self.verified_history()?;
+        let repo = self.open_repo()?;
+        let ids: Vec<String> = heads.iter().filter_map(|h| self.snapshot_now(h)).collect();
+        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let mut snaps: BTreeMap<String, _> = repo
+            .get_snapshots(&ids)?
+            .into_iter()
+            .map(|s| (snapshot_hex(&s.id), s))
+            .collect();
+        // heads whose snapshot wasn't kept are passed over
+        let history: Vec<_> = heads
+            .iter()
+            .filter_map(|h| Some((h.seq, snaps.remove(&self.snapshot_now(h)?)?)))
+            .collect();
+        let trees = Trees::new(&repo);
+        let read = |id: Option<TreeId>| id.map_or_else(|| Ok(BTreeMap::new()), |id| Ok((*trees.nodes(id)?).clone()));
+        let mut gone: BTreeMap<PathBuf, Deleted> = BTreeMap::new();
+        for pair in history.windows(2) {
+            let ((last, before), (seq, after)) = (&pair[0], &pair[1]);
+            if after.time.timestamp() < since {
+                continue;
+            }
+            let mut changes = BTreeMap::new();
+            diff_trees(&read, Some(before.tree), Some(after.tree), Path::new(""), &mut changes)?;
+            for (path, node) in changes {
+                if path.starts_with(".omacloud") {
+                    continue;
+                }
+                if node.is_some() {
+                    _ = gone.remove(&path);
+                } else if let Some(old) = trees.lookup(Some(before.tree), &path)?.filter(is_leaf) {
+                    _ = gone.insert(
+                        path.clone(),
+                        Deleted {
+                            path,
+                            seq: *seq,
+                            time: after.time.timestamp(),
+                            device: after.hostname.clone(),
+                            last: *last,
+                            size: old.meta.size,
+                        },
+                    );
+                }
+            }
+        }
+        let mut out: Vec<Deleted> = gone.into_values().collect();
+        out.sort_by(|a, b| b.seq.cmp(&a.seq).then_with(|| a.path.cmp(&b.path)));
         Ok(out)
     }
 

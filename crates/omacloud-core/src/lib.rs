@@ -27,6 +27,6 @@ pub use ignore::Ignores;
 pub use repo::RepoSpec;
 pub use rustic_core::{jiff, repofile::MasterKey};
 pub use sync::{
-    Engine, Folders, Membership, PACKAGES, Rotated, SECRETS, SettingsSetup, SettingsStatus, Setup, State, Stats,
-    Version,
+    Deleted, Engine, Folders, Membership, PACKAGES, Rotated, SECRETS, SettingsSetup, SettingsStatus, Setup, State,
+    Stats, Version,
 };

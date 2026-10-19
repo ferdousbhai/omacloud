@@ -159,6 +159,12 @@ enum Cmd {
         /// Path inside the synced folder
         path: PathBuf,
     },
+    /// List files deleted lately and not made again, newest first
+    Deleted {
+        /// How many days back to look
+        #[arg(long, default_value_t = 30)]
+        days: u32,
+    },
     /// Write a file as it was at a given version
     Restore {
         /// Path inside the synced folder
@@ -1563,6 +1569,55 @@ fn run(cli: Cli) -> Out {
                 format!("{} of {}", counted(versions.len(), "version"), rel.display()),
             )
             .human(out.trim_end())
+            .ids(ids))
+        }
+        Cmd::Deleted { days } => {
+            let config = load(&paths)?;
+            let now = omacloud_core::jiff::Timestamp::now();
+            let since = omacloud_core::jiff::Timestamp::from_second(now.as_second() - i64::from(days) * 86_400)?;
+            let gone = engine(&paths, &config)?.deleted(since)?;
+            let mut out = String::new();
+            let mut data = Vec::new();
+            for d in &gone {
+                let path = config.folder.join(&d.path);
+                say!(
+                    out,
+                    "{}  {:<12}  {}",
+                    d.time
+                        .to_zoned(omacloud_core::jiff::tz::TimeZone::system())
+                        .strftime("%Y-%m-%d %H:%M"),
+                    d.device,
+                    d.path.display()
+                );
+                data.push(json!({
+                    "path": path,
+                    "relative": d.path,
+                    "deleted_at": d.time.to_string(),
+                    "device": d.device,
+                    "seq": d.seq,
+                    "version": d.last,
+                    "size": d.size,
+                }));
+            }
+            if let Some(d) = gone.first() {
+                let path = config.folder.join(&d.path);
+                say!(
+                    out,
+                    "\nput one back: omacloud restore {p} --at {} --to {p}",
+                    d.last,
+                    p = path.display()
+                );
+            }
+            let ids = gone.iter().map(|d| d.path.display().to_string()).collect();
+            Ok(Response::new(
+                data,
+                format!("{} deleted in the last {days} days", counted(gone.len(), "file")),
+            )
+            .human(if gone.is_empty() {
+                format!("nothing deleted in the last {days} days")
+            } else {
+                out.trim_end().to_string()
+            })
             .ids(ids))
         }
         Cmd::Restore { path, at, to, yes } => {

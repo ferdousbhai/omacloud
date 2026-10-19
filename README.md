@@ -176,7 +176,10 @@ omacloud secrets restore --from laptop    # ssh and gpg keys: asks for the recov
 ## Versions and leaving
 
 Every change is kept: `omacloud versions notes.md` lists a file's versions,
-and `omacloud restore notes.md --at 3` brings one back.
+and `omacloud restore notes.md --at 3` brings one back. `omacloud deleted`
+lists the files deleted in the last 30 days (`--days` for longer) with the
+version to restore, and the app's Recently Deleted, under Overview, puts
+one back where it was.
 
 Leaving needs nothing from Omacloud but a copy: `omacloud export --to
 <folder>` copies the repository to a folder and prints its password and
@@ -220,8 +223,8 @@ Every command prints text on a terminal and a JSON envelope when piped:
 `{"ok":false,"error":{"code":"...","message":"...","hint":"..."}}` on stdout
 when it fails (text mode: `error:` and `hint:` lines on stderr). `--json`
 forces the envelope, `--styled` text, `--quiet` prints only `data`,
-`--ids-only` one id per line (device fingerprints, version numbers, folder,
-package and secrets device names) and `--count` the number of results; given
+`--ids-only` one id per line (device fingerprints, version numbers, deleted
+paths, folder, package and secrets device names) and `--count` the number of results; given
 together, ids-only wins over count, count over quiet, quiet over json, json
 over styled.
 

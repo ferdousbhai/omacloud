@@ -82,6 +82,7 @@ device. Do not approve an unknown device based on its name alone.
 ```bash
 omacloud sync
 omacloud versions 'notes.md'
+omacloud deleted                # deleted lately, with the version to restore
 omacloud restore 'notes.md' --at 3 --to './notes-restored.md'
 ```
 

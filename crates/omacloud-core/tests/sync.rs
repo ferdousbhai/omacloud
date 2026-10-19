@@ -701,6 +701,42 @@ fn versions_and_point_in_time_restore() -> Result<()> {
 }
 
 #[test]
+fn recently_deleted_lists_what_is_still_gone() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (mut a, mut b) = (w.engine("a")?, w.engine("b")?);
+    let (da, db) = (w.dir("a"), w.dir("b"));
+    let start = omacloud_core::jiff::Timestamp::now();
+    let essay = write(&da, "essay.md", "draft 1\n");
+    let back = write(&da, "back.txt", "here again soon\n");
+    let photo = write(&da, "trip/photo.jpg", "jpeg");
+    a.sync()?;
+    b.sync()?;
+    fs::remove_file(db.join(&essay))?;
+    fs::remove_file(db.join(&back))?;
+    fs::remove_dir_all(db.join("trip"))?;
+    b.notice([essay.clone(), back.clone(), photo.clone()]);
+    b.sync()?;
+    a.sync()?;
+    write(&da, "back.txt", "made again\n");
+    a.notice([back.clone()]);
+    a.sync()?;
+
+    let gone = a.deleted(start)?;
+    let summary: Vec<_> = gone
+        .iter()
+        .map(|d| (d.path.clone(), d.seq, d.last, d.device.as_str(), d.size))
+        .collect();
+    assert_eq!(summary, [(essay.clone(), 2, 1, "b", 8), (photo.clone(), 2, 1, "b", 4)]);
+    // the last version that had it brings it back
+    let out = w.tmp.path().join("restored/essay.md");
+    a.restore_version(&essay, gone[0].last, &out)?;
+    assert_eq!(fs::read_to_string(&out)?, "draft 1\n");
+    // deletions before `since` aren't listed
+    assert!(a.deleted(omacloud_core::jiff::Timestamp::now())?.is_empty());
+    Ok(())
+}
+
+#[test]
 fn ignore_rules_hold_in_both_directions() -> Result<()> {
     let w = World::new(&["a", "b"])?;
     let (mut a, mut b) = (w.engine("a")?, w.engine("b")?);

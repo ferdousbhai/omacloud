@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Recently Deleted: `omacloud deleted` lists files deleted in the last 30
+  days and not made again, with the version that brings each back; the
+  app shows them under Overview, with Put Back.
 - The Omacloud network is Omacloud's one storage: encrypted objects held
   by other Omarchy computers, with no accounts and no sign-in. `omacloud
   init` sets a computer up on it and shows the recovery code once;

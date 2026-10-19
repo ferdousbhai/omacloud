@@ -462,6 +462,30 @@ fn watch_exits_2_once_this_computer_is_removed() {
 }
 
 #[test]
+fn a_deleted_file_is_listed_and_put_back() {
+    let h = Home::new();
+    h.create();
+    let file = h.path("A/gone.txt");
+    std::fs::write(&file, "keep me").unwrap();
+    assert_eq!(code(&h.run("a", &["sync"])), 0);
+    std::fs::remove_file(&file).unwrap();
+    assert_eq!(code(&h.run("a", &["sync"])), 0);
+
+    let v = json(&h.run("a", &["deleted"]));
+    assert_eq!(v["data"].as_array().unwrap().len(), 1, "{v}");
+    assert_eq!(v["data"][0]["relative"], "gone.txt");
+    assert_eq!(v["data"][0]["path"], file.to_string_lossy().as_ref());
+    assert_eq!(stdout(&h.run("a", &["deleted", "--ids-only"])), "gone.txt\n");
+    let path = file.to_string_lossy().into_owned();
+    let at = v["data"][0]["version"].to_string();
+    let back = json(&h.run("a", &["restore", &path, "--at", &at, "--to", &path]));
+    assert_eq!(back["ok"], true, "{back}");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep me");
+    assert_eq!(code(&h.run("a", &["sync"])), 0);
+    assert_eq!(json(&h.run("a", &["deleted", "--count"])), 0);
+}
+
+#[test]
 fn restore_over_an_existing_file_needs_yes() {
     let h = Home::new();
     h.create();
