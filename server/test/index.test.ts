@@ -13,6 +13,12 @@ test("the pages are served, and nothing else", async () => {
 	assert.equal((await get("/", "POST")).status, 404);
 });
 
+test("/install.sh sends to the latest release's installer", async () => {
+	const r = await get("/install.sh");
+	assert.equal(r.status, 302);
+	assert.equal(r.headers.get("location"), "https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh");
+});
+
 test("no page mentions what was dropped", async () => {
 	for (const path of ["/", "/privacy", "/terms", "/llms.txt"]) {
 		const text = await (await get(path)).text();

@@ -17,7 +17,7 @@ when available, otherwise adds Omacloud's signed repo, then install within that
 scope (Omarchy x86_64/aarch64):
 
 ```bash
-curl -fsSL https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh | sudo bash
+curl -fsSL https://omacloud.computer/install.sh | sudo bash
 ```
 
 If sudo needs a password, have the owner run it in a terminal. Installation does

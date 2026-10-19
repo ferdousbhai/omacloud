@@ -1,8 +1,10 @@
 # Omacloud
 
 Your files and settings on every Omarchy computer, end to end encrypted.
-Desktop, Documents and Pictures sync in place, as iCloud does; Omarchy
-settings, package lists and ssh and gpg keys follow; every version is kept.
+The folders you choose (Desktop, Documents, Pictures, Music, any other in
+home) sync in place, as iCloud does; Omarchy settings, AI agent settings,
+Chromium's bookmarks and extensions, Wi-Fi networks, package lists and ssh
+and gpg keys follow; every version is kept.
 
 Everything is encrypted on your computer before it leaves it: the storage
 only ever holds what it can't read. Underneath it's plain restic, so you can
@@ -20,7 +22,7 @@ what isn't done yet.
 On Omarchy (x86_64 or aarch64):
 
 ```sh
-curl -fsSL https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh | sudo bash
+curl -fsSL https://omacloud.computer/install.sh | sudo bash
 ```
 
 Where Omarchy's own `[omarchy]` package repository carries Omacloud, the

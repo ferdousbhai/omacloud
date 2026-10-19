@@ -2,7 +2,7 @@
 # Install Omacloud on Omarchy from its signed package repository, and keep it
 # updating with the system:
 #
-#   curl -fsSL https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh | sudo bash
+#   curl -fsSL https://omacloud.computer/install.sh | sudo bash
 #
 # Every step is idempotent, so re-running is safe. When Omarchy's own
 # [omarchy] repository carries omacloud, it installs from there and adds

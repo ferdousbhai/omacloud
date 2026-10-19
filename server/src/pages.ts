@@ -49,8 +49,10 @@ export const home = () =>
 <p class="lead">Your files and settings on all your Omarchy computers. Only you can read them.</p>
 <p>Omacloud syncs:</p>
 <ul>
-<li>Your Desktop, Documents and Pictures folders</li>
+<li>The folders that you choose, such as Documents, Pictures or Music</li>
 <li>Your Omarchy settings and package lists</li>
+<li>Your Chromium bookmarks, settings and extensions</li>
+<li>Your AI agent settings and your Wi-Fi networks</li>
 <li>Your SSH and GPG keys.</li>
 </ul>
 <p>Omacloud keeps all the versions of each file.</p>
@@ -60,7 +62,7 @@ that it keeps for other persons.</p>
 <p>You do not need an account, an email address or a password. Keep your recovery code in a
 safe location. If you lose all your computers, you need this code to get your data.</p>
 <h2>Get it</h2>
-<pre>curl -fsSL https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh | sudo bash</pre>
+<pre>curl -fsSL https://omacloud.computer/install.sh | sudo bash</pre>
 <p>Then open Omacloud from the app launcher.</p>`,
 	);
 
@@ -76,7 +78,7 @@ export const shared = () =>
 <p>You don't need an account. The link works for 7 days after it was made.</p>
 <p>This site never receives the part of the link after the #, so it can't read the file.</p>
 <h2>Get Omacloud</h2>
-<pre>curl -fsSL https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh | sudo bash</pre>`,
+<pre>curl -fsSL https://omacloud.computer/install.sh | sudo bash</pre>`,
 	);
 
 export const privacy = () =>
@@ -117,8 +119,8 @@ export const llms = (env: Env) => {
 	return new Response(
 		`# Omacloud
 
-> Your files and settings on every Omarchy computer, end to end encrypted. Desktop, Documents
-> and Pictures sync in place; Omarchy settings, AI agent settings, Chromium, Wi-Fi, package lists
+> Your files and settings on every Omarchy computer, end to end encrypted. The folders
+> you choose sync in place; Omarchy settings, AI agent settings, Chromium, Wi-Fi, package lists
 > and ssh and gpg keys follow; every version is kept. Its storage network is held by Omarchy
 > computers themselves, untrusted, with no accounts or sign-in. Underneath it is plain
 > restic, so restic or rustic restore everything without Omacloud.
@@ -126,7 +128,7 @@ export const llms = (env: Env) => {
 Everything is encrypted on the computer before it is stored: whoever holds the data can't read
 it. Omacloud runs on Omarchy (Arch Linux, x86_64 and aarch64), as a GTK app and the
 \`omacloud\` command line tool that drives it. Install with
-\`curl -fsSL ${repo}/releases/latest/download/install.sh | sudo bash\` (or, where Omarchy's own repository carries it, \`omarchy pkg add omacloud\`).
+\`curl -fsSL ${site}/install.sh | sudo bash\` (or, where Omarchy's own repository carries it, \`omarchy pkg add omacloud\`).
 
 ## Docs
 

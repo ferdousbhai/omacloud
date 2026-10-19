@@ -15,6 +15,11 @@ export default {
 			if (url.pathname === "/s") return pages.shared();
 			if (url.pathname === "/llms.txt") return pages.llms(env);
 			if (url.pathname === "/health") return new Response("ok");
+			// the latest release's installer: what it installs it checks
+			// against the signing key it pins, wherever it came from
+			if (url.pathname === "/install.sh") {
+				return Response.redirect("https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh", 302);
+			}
 		}
 		return new Response("Not found\n", { status: 404 });
 	},
