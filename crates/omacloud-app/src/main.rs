@@ -298,6 +298,12 @@ impl Ui {
             match status {
                 // no config yet: this computer needs setting up
                 Ok(s) if s["set_up"] == Value::Bool(false) => {
+                    if let Some(kind) = s["storage_gone"].as_str() {
+                        ui.toast(&format!(
+                            "This computer was set up on {kind}, which Omacloud no longer uses. Set it up again: \
+                             your files here stay as they are."
+                        ));
+                    }
                     ui.overview.set_child(Some(&setup(&ui)));
                     for bin in [&ui.devices, &ui.settings, &ui.secrets, &ui.recovery] {
                         bin.set_child(Some(&not_set_up("Set up this computer first, under Overview.")));

@@ -9,7 +9,7 @@
 //! |---|---|
 //! | `error` (anything unrecognised), `verification_failed`, `pending`, `command_failed`, `cancelled` | 1 |
 //! | `usage`, `confirmation_required`, `terminal_required`, `ambiguous`, `already_set_up`, `exists`, `unsupported`, `same_key` | 2 |
-//! | `not_set_up`, `not_approved`, `removed`, `recovery_code_rejected`, `shares_rejected`, `settings_off` | 3 |
+//! | `not_set_up`, `storage_gone`, `not_approved`, `removed`, `recovery_code_rejected`, `shares_rejected`, `settings_off` | 3 |
 //! | `not_found`, `no_account` | 4 |
 //! | `unavailable` | 5 |
 
@@ -17,6 +17,16 @@ use omacloud_core::{DeviceError, HeadError, Membership, epoch::EpochError};
 
 pub use crate::output::CliError;
 use crate::output::{EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SETUP, EXIT_UNAVAILABLE, EXIT_USAGE};
+
+/// A computer set up before the network, on storage Omacloud dropped.
+pub fn storage_gone(kind: &str) -> CliError {
+    CliError::new(
+        "storage_gone",
+        EXIT_SETUP,
+        format!("this computer was set up on {kind}, which Omacloud no longer uses"),
+    )
+    .hint("run `omacloud init` to set it up again on the Omacloud network (the old config is kept aside); the files here stay as they are")
+}
 
 pub fn usage(message: impl Into<String>) -> CliError {
     CliError::new("usage", EXIT_USAGE, message)

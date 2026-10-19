@@ -731,11 +731,56 @@ impl Paths {
 }
 
 fn load(paths: &Paths) -> Result<Config> {
+    let config = read_config(paths)?;
+    if let Some(kind) = storage_gone(&config) {
+        return Err(fail::storage_gone(kind).into());
+    }
+    Ok(config)
+}
+
+fn read_config(paths: &Paths) -> Result<Config> {
     let text = match fs::read_to_string(&paths.config) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(fail::not_set_up().into()),
         other => other.with_context(|| format!("reading {}", paths.config.display()))?,
     };
     Ok(toml::from_str(&text)?)
+}
+
+/// What a config from before the network kept its files on, if it's one:
+/// own buckets, Dropbox and Omacloud storage are gone, so the computer
+/// needs setting up again.
+fn storage_gone(config: &Config) -> Option<&'static str> {
+    if config.coordinator == NETWORK || !config.repo.repository.starts_with("opendal:") {
+        return None;
+    }
+    Some(if config.repo.repository == "opendal:dropbox" {
+        "Dropbox"
+    } else if config
+        .repo
+        .options
+        .get("endpoint")
+        .is_some_and(|e| e.contains("omacloud.computer"))
+    {
+        "Omacloud storage"
+    } else {
+        "its own S3 bucket"
+    })
+}
+
+/// Before setting up again over a config from before the network: keep it
+/// and its sync state aside, under `.before-network`. True if there was one.
+fn set_aside_old_setup(paths: &Paths) -> Result<bool> {
+    if !read_config(paths).is_ok_and(|c| storage_gone(&c).is_some()) {
+        return Ok(false);
+    }
+    for path in [&paths.config, &paths.state()] {
+        if path.exists() {
+            let mut aside = path.clone().into_os_string();
+            aside.push(".before-network");
+            fs::rename(path, aside)?;
+        }
+    }
+    Ok(true)
 }
 
 fn save(paths: &Paths, config: &Config) -> Result<()> {
@@ -1374,8 +1419,11 @@ fn main() -> std::process::ExitCode {
             // the account stopped (this device was removed): a human looks
             Ok(Ended::Stopped) => std::process::exit(2),
             Err(e) => {
-                fail::classify(&e).report(mode);
-                std::process::exit(1)
+                let e = fail::classify(&e);
+                // set up on storage that's gone: restarting won't help
+                let stop = e.code == "storage_gone";
+                e.report(mode);
+                std::process::exit(if stop { 2 } else { 1 })
             }
         }
     }
@@ -1450,6 +1498,12 @@ fn run(cli: Cli) -> Out {
             recovery_code,
             join_code,
         } => {
+            if set_aside_old_setup(&paths)? {
+                eprintln!(
+                    "The old setup ({}) is kept aside as .before-network; setting up on the network.",
+                    paths.config.display()
+                );
+            }
             if paths.config.exists() {
                 return Err(already_set_up(&paths).into());
             }
@@ -2859,7 +2913,17 @@ fn status(paths: &Paths) -> Out {
         return Ok(Response::new(json!({ "set_up": false }), "this computer isn't set up")
             .human("this computer isn't set up: run `omacloud init`, or set it up in the Omacloud app"));
     }
-    let config = load(paths)?;
+    let config = read_config(paths)?;
+    if let Some(kind) = storage_gone(&config) {
+        let e = fail::storage_gone(kind);
+        return Ok(
+            Response::new(json!({ "set_up": false, "storage_gone": kind }), e.message.clone()).human(format!(
+                "{}: {}",
+                e.message,
+                e.hint.clone().unwrap_or_default()
+            )),
+        );
+    }
     let mut e = engine(paths, &config)?;
     let chain = e.refresh_devices()?.clone();
     let members = chain.members();

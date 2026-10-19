@@ -526,6 +526,34 @@ fn mount_shows_every_file_read_only() {
 }
 
 #[test]
+fn a_computer_set_up_before_the_network_is_told_and_set_up_again() {
+    let h = Home::new();
+    let config = h.path("a.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "device = \"a\"\nfolder = \"{}\"\ncoordinator = \"bucket\"\nroot = \"{}\"\n\
+             [repo]\nrepository = \"opendal:dropbox\"\n[repo.options]\nroot = \"/omacloud\"\n",
+            h.path("A").display(),
+            "ab".repeat(32)
+        ),
+    )
+    .unwrap();
+    let v = json(&h.run("a", &["status"]));
+    assert_eq!(v["data"]["set_up"], false, "{v}");
+    assert_eq!(v["data"]["storage_gone"], "Dropbox");
+    let e = machine_error(&h.run("a", &["sync"]), "storage_gone", 3);
+    assert!(e["hint"].as_str().unwrap().contains("omacloud init"), "{e}");
+    // the daemon stops for good rather than restarting into it
+    assert_eq!(code(&h.run("a", &["watch"])), 2);
+
+    // init keeps the old setup aside and sets up again
+    h.create();
+    assert!(h.path("a.toml.before-network").exists());
+    assert_eq!(json(&h.run("a", &["status"]))["data"]["repo"]["kind"], "path");
+}
+
+#[test]
 fn restore_over_an_existing_file_needs_yes() {
     let h = Home::new();
     h.create();

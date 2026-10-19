@@ -52,7 +52,13 @@
   (relay1.omacloud.computer); computers reach holders through the relay
   only, so a holder never learns their address. One seed is a single
   point until more join (docs/design.md, "Not yet").
-- Every storage alternative is gone, in favour of the network.
+- Every storage alternative is gone, in favour of the network. A computer
+  set up on its own bucket, Dropbox or Omacloud storage is told so
+  (`status` gives `storage_gone`, other commands fail with it, exit 3, and
+  the daemon stops rather than restarting); `omacloud init`, or setup in
+  the app, keeps the old config and sync state aside as `.before-network`
+  and sets it up again on the network. Files on the computer stay as they
+  are, and sync up from there.
 - Gone: your own S3 bucket (Hetzner, R2 and others) and its bucket keys
   (`omacloud bucket`, the desktop keyring, `--coordination-bucket`,
   `export --to-opt`); Dropbox; Omacloud storage with Google sign-in, its

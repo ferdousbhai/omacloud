@@ -264,7 +264,7 @@ omacloud devices --ids-only
 | 0 | done |
 | 1 | anything else failed |
 | 2 | invalid usage or request: a destructive command (`devices revoke`, `rotate`, `restore` over a file) without `--yes` where nobody can be asked, a secret asked for where no terminal shows it, an ambiguous fingerprint, already set up |
-| 3 | not set up, not approved, settings sync off, or a key, recovery code, join code or shares refused |
+| 3 | not set up (or set up on storage Omacloud no longer uses), not approved, settings sync off, or a key, recovery code, join code or shares refused |
 | 4 | not found: a device, a version, a package list, a secrets bundle |
 | 5 | out of reach: the storage, the network, or (for `restore-machine`, alongside its result) systemd |
 
