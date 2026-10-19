@@ -293,6 +293,16 @@ impl Session {
         self.rt.block_on(crate::share::get(&bucket, secret))
     }
 
+    /// Take back the share under `secret`.
+    ///
+    /// # Errors
+    ///
+    /// If it's gone already, or the Worker can't be reached.
+    pub fn unshare(&self, secret: &str) -> Result<()> {
+        let bucket = self.gateway.bucket(&crate::share::bucket_key(secret));
+        self.rt.block_on(crate::share::remove(&bucket))
+    }
+
     /// Never choose these nodes (the account's own) as holders.
     pub fn set_own(&self, own: BTreeSet<NodeId>) {
         self.gateway.set_own(own);

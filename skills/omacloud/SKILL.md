@@ -84,7 +84,7 @@ omacloud sync
 omacloud versions 'notes.md'
 omacloud deleted                # deleted lately, with the version to restore
 omacloud mount                  # every file read-only in ~/Omacloud, fetched on open; runs until Ctrl-C
-omacloud share 'photo.jpg'      # a link that opens the file for 7 days (prints to a terminal only)
+omacloud share 'photo.jpg'      # a link that opens the file for 7 days (prints to a terminal only; --copy to the clipboard)
 omacloud restore 'notes.md' --at 3 --to './notes-restored.md'
 ```
 

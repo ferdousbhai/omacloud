@@ -229,6 +229,14 @@ async fn a_shared_file_opens_with_its_secret_only() -> Result<()> {
         share::get(&other, &secret).await?,
         ("photo.jpg".to_string(), b"jpeg bytes".to_vec())
     );
+    // taken back, it's gone for everyone
+    let again = share::secret();
+    let mine = bucket(&net, &share::bucket_key(&again)).await?;
+    share::put(&mine, &again, "notes.txt", b"notes").await?;
+    let theirs = bucket(&net, &share::bucket_key(&again)).await?;
+    share::remove(&theirs).await?;
+    assert!(share::get(&theirs, &again).await.is_err());
+    assert!(share::remove(&theirs).await.is_err());
     // another secret finds nothing
     let wrong = share::secret();
     let stranger = bucket(&net, &share::bucket_key(&wrong)).await?;

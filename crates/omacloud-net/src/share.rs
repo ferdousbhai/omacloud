@@ -71,6 +71,20 @@ pub async fn get(bucket: &Bucket, secret: &str) -> Result<(String, Vec<u8>)> {
     Ok((name.to_string(), data.to_vec()))
 }
 
+/// Take a share back: its index entry goes, so nobody finds its holders,
+/// who drop it when its lease ends.
+///
+/// # Errors
+///
+/// If it's gone already, or the Worker can't be reached.
+pub async fn remove(bucket: &Bucket) -> Result<()> {
+    anyhow::ensure!(
+        bucket.entry(OBJECT).await?.is_some(),
+        "nothing is shared under this link: it may have expired"
+    );
+    bucket.delete(OBJECT).await
+}
+
 /// A share link: the network's Worker (or `dir:` path), then the secret
 /// after `/s#`.
 #[must_use]

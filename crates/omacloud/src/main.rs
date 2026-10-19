@@ -181,6 +181,9 @@ enum Cmd {
         #[arg(long)]
         copy: bool,
     },
+    /// Take back a share link before it expires; the link comes from
+    /// OMACLOUD_LINK, or is asked for
+    Unshare,
     /// Download a file shared by link; the link comes from OMACLOUD_LINK, or
     /// is asked for
     Receive {
@@ -1780,6 +1783,18 @@ fn run(cli: Cli) -> Out {
                  `omacloud receive` and paste it; nobody else, Omacloud included, can open it."
             );
             Ok(Response::new(Value::Null, format!("shared {name}")).human(link))
+        }
+        Cmd::Unshare => {
+            let link = read_secret("OMACLOUD_LINK", "share link")?;
+            let (url, secret) = omacloud_net::share::parse(&link).map_err(|e| fail::usage(format!("{e:#}")))?;
+            let net = share_network(&paths, Some(url));
+            session(&paths, &net)?
+                .unshare(&secret)
+                .map_err(|e| fail::unavailable(format!("{e:#}")))?;
+            Ok(Response::new(
+                Value::Null,
+                "the link opens nothing now; holders drop the file when its lease ends",
+            ))
         }
         Cmd::Receive { to } => {
             let link = read_secret("OMACLOUD_LINK", "share link")?;

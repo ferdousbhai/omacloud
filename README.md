@@ -207,7 +207,9 @@ link, after the `#`, which browsers never send: opened in a browser, the
 link shows how to get the file, and omacloud.computer can't read it. A
 share holds up to 256 MiB. `omacloud share --copy` puts the link on the
 clipboard instead of printing it, and so does Share a File in the app's
-Overview.
+Overview. `omacloud unshare`, given the link the same way, takes it back
+before it expires: it opens nothing from then on. Anyone holding the link
+can do that, as anyone holding it can download the file.
 
 ## A lost computer
 
