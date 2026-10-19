@@ -87,6 +87,13 @@ link=$(oc_tty a share "$work/A/docs/deep/a.txt" | grep '/s#')
 [ -n "$link" ] || { echo "no share link"; exit 1; }
 OMACLOUD_LINK=$link oc c receive --to "$work/got" >/dev/null
 cmp "$work/A/docs/deep/a.txt" "$work/got/a.txt"
+# or onto the clipboard, with no terminal (a stand-in wl-copy, not yours)
+mkdir -p "$work/bin"
+printf '#!/bin/sh\ncat >"%s"\n' "$work/clip" >"$work/bin/wl-copy"
+chmod +x "$work/bin/wl-copy"
+PATH="$work/bin:$PATH" oc a share --copy "$work/B/src/b.rs" >/dev/null
+OMACLOUD_LINK=$(cat "$work/clip") oc c receive --to "$work/got" >/dev/null
+cmp "$work/B/src/b.rs" "$work/got/b.rs"
 
 # the Worker's part holds nothing readable: no file names, no contents
 if [ -d "$work/worker" ] && grep -rqa -e "from a" -e "a.txt" -e "docs" "$work/worker"; then

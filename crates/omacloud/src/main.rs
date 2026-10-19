@@ -177,6 +177,9 @@ enum Cmd {
     Share {
         /// The file to share (up to 256 MiB)
         file: PathBuf,
+        /// Put the link on the clipboard (wl-copy) instead of printing it
+        #[arg(long)]
+        copy: bool,
     },
     /// Download a file shared by link; the link comes from OMACLOUD_LINK, or
     /// is asked for
@@ -476,6 +479,24 @@ fn default_relays(url: &str) -> Vec<String> {
     } else {
         Vec::new()
     }
+}
+
+/// Put `text` on the Wayland clipboard, through wl-copy's stdin.
+fn copy_to_clipboard(text: &str) -> Result<()> {
+    use std::io::Write as _;
+    let mut child = std::process::Command::new("wl-copy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            fail::unsupported(format!("wl-copy: {e}")).hint("install wl-clipboard, or share without --copy")
+        })?;
+    child
+        .stdin
+        .take()
+        .context("wl-copy's stdin")?
+        .write_all(text.as_bytes())?;
+    anyhow::ensure!(child.wait()?.success(), "wl-copy failed");
+    Ok(())
 }
 
 /// The network to share on (this account's, or the default) or to receive
@@ -1692,19 +1713,30 @@ fn run(cli: Cli) -> Out {
                 dir.display(),
                 dir.display()
             );
+            // the marker is one small read; the history is read again only
+            // when it changed
+            let mut marker = e.remote_marker().ok().flatten();
             mount::run(
                 mount::View::new(browse),
                 &dir,
-                std::time::Duration::from_secs(300),
-                &mut || match e.browse() {
-                    Ok(b) if b.seq != seq => {
-                        seq = b.seq;
-                        Some(b)
+                std::time::Duration::from_secs(60),
+                &mut || {
+                    let now = e.remote_marker().ok().flatten();
+                    if now.is_some() && now == marker {
+                        return None;
                     }
-                    Ok(_) => None,
-                    Err(err) => {
-                        warn!("couldn't refresh the view: {err:#}");
-                        None
+                    match e.browse() {
+                        Ok(b) => {
+                            marker = now;
+                            (b.seq != seq).then(|| {
+                                seq = b.seq;
+                                b
+                            })
+                        }
+                        Err(err) => {
+                            warn!("couldn't refresh the view: {err:#}");
+                            None
+                        }
                     }
                 },
             )?;
@@ -1713,8 +1745,8 @@ fn run(cli: Cli) -> Out {
                 format!("unmounted {}", dir.display()),
             ))
         }
-        Cmd::Share { file } => {
-            if !output::to_terminal(mode()) {
+        Cmd::Share { file, copy } => {
+            if !copy && !output::to_terminal(mode()) {
                 return Err(fail::terminal_required("a share link (it opens the file)").into());
             }
             let size = fs::metadata(&file)
@@ -1735,14 +1767,19 @@ fn run(cli: Cli) -> Out {
             let secret = session(&paths, &net)?
                 .share(&name, &fs::read(&file)?)
                 .map_err(|e| fail::unavailable(format!("{e:#}")))?;
+            let link = omacloud_net::share::link(&net.url, &secret);
+            if copy {
+                copy_to_clipboard(&link)?;
+                return Ok(Response::new(
+                    json!({ "name": name, "copied": true }),
+                    format!("copied a link to {name}: anyone with it can download it for 7 days"),
+                ));
+            }
             eprintln!(
                 "Anyone with this link can download {name} for 7 days. On Omarchy, they run\n\
                  `omacloud receive` and paste it; nobody else, Omacloud included, can open it."
             );
-            Ok(
-                Response::new(Value::Null, format!("shared {name}"))
-                    .human(omacloud_net::share::link(&net.url, &secret)),
-            )
+            Ok(Response::new(Value::Null, format!("shared {name}")).human(link))
         }
         Cmd::Receive { to } => {
             let link = read_secret("OMACLOUD_LINK", "share link")?;

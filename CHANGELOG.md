@@ -11,6 +11,8 @@
 - Share a file by link: `omacloud share <file>` prints a link that opens
   it for 7 days; `omacloud receive` downloads it on any computer with
   Omacloud, no account needed. The key is only in the link, after the `#`.
+  `share --copy`, and Share a File in the app, put the link on the
+  clipboard.
 - How much space you have: `omacloud node status`, `status --json`
   (`network.space`) and the app's Storage show what the account stores,
   its monthly cost in credits, the credits held and how many months they
@@ -18,7 +20,8 @@
 - Every file, online only: `omacloud mount` shows all the account's
   folders read-only in `~/Omacloud`, those skipped here too, each file
   fetched when it's opened (FUSE; `fuse3` is an optional dependency). The
-  app's Overview opens it with Every File.
+  app's Overview opens it with Every File. It checks for a newer version
+  every minute.
 - Recently Deleted: `omacloud deleted` lists files deleted in the last 30
   days and not made again, with the version that brings each back; the
   app shows them under Overview, with Put Back.

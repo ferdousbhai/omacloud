@@ -774,6 +774,12 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     browse.connect_clicked(move |_| browse_online(&ui2));
     online.add_suffix(&browse);
     sync.add(&online);
+    let share = row("Share a File", "Copies a link that opens it for 7 days");
+    let choose = button("Choose…", None);
+    let ui2 = ui.clone();
+    choose.connect_clicked(move |_| share_file(&ui2));
+    share.add_suffix(&choose);
+    sync.add(&share);
     let deleted = row("Recently Deleted", "Files deleted in the last 30 days, to put back");
     let show = button("Show…", None);
     let ui2 = ui.clone();
@@ -845,6 +851,25 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     more.add(&details);
     page.add(&more);
     page
+}
+
+/// Pick a file and copy a link to it (`omacloud share --copy`: the link
+/// goes to the clipboard, never through this app).
+fn share_file(ui: &Rc<Ui>) {
+    let dialog = gtk::FileDialog::builder().title("Share a file").modal(true).build();
+    let ui2 = ui.clone();
+    dialog.open(Some(&ui.window), None::<&gio::Cancellable>, move |r| {
+        let Some(path) = r.ok().and_then(|f| f.path()) else {
+            return;
+        };
+        let path = path.to_string_lossy().into_owned();
+        let ui = ui2.clone();
+        ui.toast("Sharing…");
+        cli_then(&["omacloud", "share", "--copy", &path], Vec::new(), move |r| match r {
+            Ok(_) => ui.toast("Link copied: anyone with it can download the file for 7 days"),
+            Err(e) => ui.toast(&e.shown()),
+        });
+    });
 }
 
 /// Mount every file at ~/Omacloud (`omacloud mount`, kept running as a
