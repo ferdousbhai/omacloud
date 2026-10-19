@@ -200,7 +200,9 @@ reads it.
 ## Sharing a file
 
 `omacloud share photo.jpg` prints a link. Whoever has it can download the
-file for 7 days, on any Omarchy computer with Omacloud, with no account:
+file for 7 days (`--days` up to 365: past the first week, this computer's
+daemon keeps it, paying from its credits, so it needs to run now and
+then), on any Omarchy computer with Omacloud, with no account:
 they run `omacloud receive` and paste the link (or put it in
 `OMACLOUD_LINK`). The file is encrypted with a key that lives only in the
 link, after the `#`, which browsers never send: opened in a browser, the
@@ -208,7 +210,8 @@ link shows how to get the file, and omacloud.computer can't read it. A
 share holds up to 256 MiB. `omacloud share --copy` puts the link on the
 clipboard instead of printing it, and so does Share a File in the app's
 Overview. `omacloud unshare`, given the link the same way, takes it back
-before it expires: it opens nothing from then on. Anyone holding the link
+before it expires: it opens nothing from then on. `omacloud shares` lists
+what this computer shared and until when. Anyone holding the link
 can do that, as anyone holding it can download the file.
 
 ## A lost computer

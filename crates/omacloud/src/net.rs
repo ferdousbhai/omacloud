@@ -15,9 +15,10 @@ use log::{info, warn};
 use omacloud_core::Engine;
 use omacloud_net::{
     credit::Token,
-    node::{MONTH, Node, now},
+    node::{FIRST_LEASE, MONTH, Node, now},
     session::Session,
 };
+use serde::{Deserialize, Serialize};
 
 /// How often a node says it's up; the directory drops one silent for 72 hours.
 const HEARTBEAT: Duration = Duration::from_secs(15 * 60);
@@ -98,6 +99,7 @@ impl Contribution {
             if let Err(e) = self.upkeep(session, engine) {
                 warn!("looking after this account's copies: {e:#}");
             }
+            self.renew_shares(session);
         }
     }
 
@@ -130,6 +132,32 @@ impl Contribution {
         Ok(())
     }
 
+    /// Keep this computer's shares until they're due to end, paying from
+    /// the wallet; forget those that ended.
+    fn renew_shares(&self, session: &Session) {
+        let mut shares = read_shares(&self.data);
+        let before = shares.len();
+        shares.retain(|s| s.until > now());
+        let wallet = self.data.join("wallet.json");
+        let network = session.network();
+        let mut changed = shares.len() != before;
+        for s in &mut shares {
+            let Some(until) = s.renewal(now()) else { continue };
+            let key = omacloud_net::share::bucket_key(&s.secret);
+            let mut pay = |n: u64| take(&wallet, n, || network.starter(STARTER));
+            match session.upkeep(&key, 0, Some(until), &mut pay) {
+                Ok(_) => {
+                    s.paid_until = until;
+                    changed = true;
+                }
+                Err(e) => warn!("keeping the shared {}: {e:#}", s.name),
+            }
+        }
+        if changed && let Err(e) = write_shares(&self.data, &shares) {
+            warn!("saving shares: {e:#}");
+        }
+    }
+
     /// Trade the tokens this node took for fresh ones, into the wallet.
     fn deposit(&self, session: &Session, node: &Node) -> Result<()> {
         let taken = node.tokens()?;
@@ -144,6 +172,53 @@ impl Contribution {
         node.mark_deposited(&taken)?;
         Ok(())
     }
+}
+
+/// A file this computer shared by link, kept until `until`. The secret is
+/// the link's, so the file is private (0600) as the wallet is.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Shared {
+    pub secret: String,
+    pub name: String,
+    pub made: u64,
+    pub until: u64,
+    /// Renewed this far, beyond the first lease.
+    #[serde(default)]
+    pub paid_until: u64,
+}
+
+impl Shared {
+    /// Until when to renew it now, if it's due: the first lease covers a
+    /// week, then renewals pay up to two months ahead, coming again when
+    /// less than one is left, never past `until`.
+    #[must_use]
+    pub fn renewal(&self, now: u64) -> Option<u64> {
+        let covered = self.paid_until.max(self.made + FIRST_LEASE);
+        (covered < self.until && covered <= now + MONTH).then(|| self.until.min(now + LEASE))
+    }
+}
+
+fn shares_path(data: &Path) -> PathBuf {
+    data.join("shares.json")
+}
+
+/// This computer's shares, ended ones included until the daemon forgets them.
+#[must_use]
+pub fn read_shares(data: &Path) -> Vec<Shared> {
+    fs::read(shares_path(data))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// Save this computer's shares.
+///
+/// # Errors
+///
+/// If the file can't be written.
+pub fn write_shares(data: &Path, shares: &[Shared]) -> Result<()> {
+    fs::create_dir_all(data)?;
+    write_private(&shares_path(data), &serde_json::to_vec(shares)?)
 }
 
 /// The account's space as the last upkeep round found it: bytes stored
@@ -258,6 +333,38 @@ pub fn human(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_share_is_renewed_only_past_its_first_week_and_until_it_ends() {
+        let day = 86_400;
+        let week = Shared {
+            secret: String::new(),
+            name: "a".into(),
+            made: 0,
+            until: 7 * day,
+            paid_until: 0,
+        };
+        assert_eq!(week.renewal(0), None);
+        assert_eq!(week.renewal(6 * day), None);
+        let year = Shared {
+            until: 365 * day,
+            ..week.clone()
+        };
+        // the first lease is within a month of ending from the start
+        assert_eq!(year.renewal(0), Some(LEASE));
+        let paid = Shared {
+            paid_until: LEASE,
+            ..year.clone()
+        };
+        assert_eq!(paid.renewal(day), None);
+        assert_eq!(paid.renewal(LEASE - MONTH), Some(LEASE - MONTH + LEASE));
+        // never past the end
+        let month = Shared {
+            until: 30 * day,
+            ..week
+        };
+        assert_eq!(month.renewal(0), Some(30 * day));
+    }
 
     #[test]
     fn space_says_how_far_the_wallet_pays() -> Result<()> {

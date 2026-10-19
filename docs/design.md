@@ -157,8 +157,9 @@ sync engine. Nothing in it is trusted for anything but availability.
   random 256-bit secret and keeps it in a bucket of its own, whose keys
   come from that secret alone, like an epoch's from its network key. The
   link is `<network>/s#<secret>`: the Worker's page at `/s` never gets the
-  part after `#`. Nobody renews a share, so its holders drop it after the
-  first lease, 7 days. Holders and the Worker see a bucket like any other,
+  part after `#`. A share lasts its first lease, 7 days, unless the
+  sharing computer's daemon renews it (`share --days`), keeping its secret
+  in a private file beside the wallet, and paying as for its own copies. Holders and the Worker see a bucket like any other,
   unlinked to the account that made it.
 - **What stays central.** The Worker keeps the node directory, the sealed
   index, the sealed coordination records, and issues credits. There are no

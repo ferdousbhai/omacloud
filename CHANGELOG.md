@@ -13,6 +13,9 @@
   Omacloud, no account needed. The key is only in the link, after the `#`.
   `share --copy`, and Share a File in the app, put the link on the
   clipboard; `omacloud unshare` takes a link back before it expires.
+  `share --days` (up to 365) keeps a link working longer, the daemon
+  renewing the file from this computer's credits; `omacloud shares` lists
+  what this computer shared.
 - How much space you have: `omacloud node status`, `status --json`
   (`network.space`) and the app's Storage show what the account stores,
   its monthly cost in credits, the credits held and how many months they

@@ -94,6 +94,14 @@ chmod +x "$work/bin/wl-copy"
 PATH="$work/bin:$PATH" oc a share --copy "$work/B/src/b.rs" >/dev/null
 OMACLOUD_LINK=$(cat "$work/clip") oc c receive --to "$work/got" >/dev/null
 cmp "$work/B/src/b.rs" "$work/got/b.rs"
+# kept a month, listed, then taken back: the link opens nothing
+long=$(oc_tty a share --days 30 "$work/A/docs/deep/a.txt" | grep '/s#')
+[ "$(oc a shares --count)" = 3 ] || { oc a shares; exit 1; }
+OMACLOUD_LINK=$long oc a unshare >/dev/null
+[ "$(oc a shares --count)" = 2 ] || { oc a shares; exit 1; }
+if OMACLOUD_LINK=$long oc c receive --to "$work/gone" >/dev/null 2>&1; then
+  echo "a link taken back still opened"; exit 1
+fi
 
 # the Worker's part holds nothing readable: no file names, no contents
 if [ -d "$work/worker" ] && grep -rqa -e "from a" -e "a.txt" -e "docs" "$work/worker"; then

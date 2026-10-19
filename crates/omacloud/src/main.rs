@@ -180,7 +180,13 @@ enum Cmd {
         /// Put the link on the clipboard (wl-copy) instead of printing it
         #[arg(long)]
         copy: bool,
+        /// Days the link works, up to 365; past 7, this computer's daemon
+        /// keeps the file, paying from its credits
+        #[arg(long, default_value_t = 7, value_parser = clap::value_parser!(u64).range(1..=365))]
+        days: u64,
     },
+    /// List the files this computer shared, and until when
+    Shares,
     /// Take back a share link before it expires; the link comes from
     /// OMACLOUD_LINK, or is asked for
     Unshare,
@@ -1748,7 +1754,7 @@ fn run(cli: Cli) -> Out {
                 format!("unmounted {}", dir.display()),
             ))
         }
-        Cmd::Share { file, copy } => {
+        Cmd::Share { file, copy, days } => {
             if !copy && !output::to_terminal(mode()) {
                 return Err(fail::terminal_required("a share link (it opens the file)").into());
             }
@@ -1766,31 +1772,84 @@ fn run(cli: Cli) -> Out {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .ok_or_else(|| fail::usage("give a file"))?;
+            let config = load(&paths).ok();
+            if days > 7 && !config.as_ref().is_some_and(|c| c.network.is_some()) {
+                return Err(
+                    fail::usage("a link that works past 7 days needs this computer set up on the network")
+                        .hint("its daemon renews the file; run `omacloud init`, or share for 7 days")
+                        .into(),
+                );
+            }
             let net = share_network(&paths, None);
             let secret = session(&paths, &net)?
                 .share(&name, &fs::read(&file)?)
                 .map_err(|e| fail::unavailable(format!("{e:#}")))?;
+            let made = omacloud_net::node::now();
+            let mut shares = net::read_shares(&paths.data);
+            shares.push(net::Shared {
+                secret: secret.clone(),
+                name: name.clone(),
+                made,
+                until: made + days * 86_400,
+                paid_until: 0,
+            });
+            net::write_shares(&paths.data, &shares)?;
             let link = omacloud_net::share::link(&net.url, &secret);
+            let span = if days == 1 {
+                "a day".to_string()
+            } else {
+                format!("{days} days")
+            };
             if copy {
                 copy_to_clipboard(&link)?;
                 return Ok(Response::new(
-                    json!({ "name": name, "copied": true }),
-                    format!("copied a link to {name}: anyone with it can download it for 7 days"),
+                    json!({ "name": name, "copied": true, "days": days }),
+                    format!("copied a link to {name}: anyone with it can download it for {span}"),
                 ));
             }
             eprintln!(
-                "Anyone with this link can download {name} for 7 days. On Omarchy, they run\n\
+                "Anyone with this link can download {name} for {span}. On Omarchy, they run\n\
                  `omacloud receive` and paste it; nobody else, Omacloud included, can open it."
             );
+            if days > 7 {
+                eprintln!("This computer's daemon keeps it past the first week, from its credits.");
+            }
             Ok(Response::new(Value::Null, format!("shared {name}")).human(link))
+        }
+        Cmd::Shares => {
+            let now = omacloud_net::node::now();
+            let shares: Vec<_> = net::read_shares(&paths.data)
+                .into_iter()
+                .filter(|s| s.until > now)
+                .collect();
+            let mut out = String::new();
+            let mut data = Vec::new();
+            for s in &shares {
+                let until = omacloud_core::jiff::Timestamp::from_second(i64::try_from(s.until)?)?
+                    .to_zoned(omacloud_core::jiff::tz::TimeZone::system())
+                    .strftime("%Y-%m-%d %H:%M");
+                say!(out, "{until}  {}", s.name);
+                data.push(json!({ "name": s.name, "until": s.until, "made": s.made }));
+            }
+            let ids = shares.iter().map(|s| s.name.clone()).collect();
+            Ok(Response::new(data, format!("{} shared", counted(shares.len(), "file")))
+                .human(if shares.is_empty() {
+                    "nothing shared from this computer".to_string()
+                } else {
+                    out.trim_end().to_string()
+                })
+                .ids(ids))
         }
         Cmd::Unshare => {
             let link = read_secret("OMACLOUD_LINK", "share link")?;
             let (url, secret) = omacloud_net::share::parse(&link).map_err(|e| fail::usage(format!("{e:#}")))?;
             let net = share_network(&paths, Some(url));
-            session(&paths, &net)?
-                .unshare(&secret)
-                .map_err(|e| fail::unavailable(format!("{e:#}")))?;
+            let removed = session(&paths, &net)?.unshare(&secret);
+            // ours or not, a link taken back is no longer kept
+            let mut shares = net::read_shares(&paths.data);
+            shares.retain(|s| s.secret != secret);
+            net::write_shares(&paths.data, &shares)?;
+            removed.map_err(|e| fail::unavailable(format!("{e:#}")))?;
             Ok(Response::new(
                 Value::Null,
                 "the link opens nothing now; holders drop the file when its lease ends",
