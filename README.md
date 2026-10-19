@@ -211,7 +211,7 @@ they run `omacloud receive` and paste the link (or put it in
 `OMACLOUD_LINK`). The file is encrypted with a key that lives only in the
 link, after the `#`, which browsers never send: opened in a browser, the
 link shows how to get the file, and omacloud.computer can't read it. A
-share holds up to 128 MiB. `omacloud share --copy` puts the link on the
+share holds up to 127 MiB. `omacloud share --copy` puts the link on the
 clipboard instead of printing it, and so does Share a File in the app's
 Overview. `omacloud unshare`, given the link the same way, takes it back
 before it expires: it opens nothing from then on. `omacloud shares` lists
@@ -262,7 +262,7 @@ Every command prints text on a terminal and a JSON envelope when piped:
 when it fails (text mode: `error:` and `hint:` lines on stderr). `--json`
 forces the envelope, `--styled` text, `--quiet` prints only `data`,
 `--ids-only` one id per line (device fingerprints, version numbers, deleted
-paths, folder, package and secrets device names) and `--count` the number of results; given
+paths, share names, folder, package and secrets device names) and `--count` the number of results; given
 together, ids-only wins over count, count over quiet, quiet over json, json
 over styled.
 
@@ -351,6 +351,8 @@ the issues hold the work ahead.
 
 ## Optional Recall search
 
-The Sync page offers **Open Recall** for semantic file search. Recall searches only roots selected in its own settings; Omacloud does not select or index roots automatically. EmbeddingGemma GGUF weights and partial downloads are excluded from sync by default; explicit ignore-file overrides remain possible.
-
-Recall is an optional extra. Normal operation never contacts it. Missing, incompatible, busy, or warming-up Recall leaves opening and browsing a sync folder available. Requests run in the background with a bounded wait. This project does not install Recall, download embedding weights, or start its own model runtime. When enabled, the owner-local Recall service owns one shared model cache and inference worker; records stay on this machine.
+With [Recall](https://ferdousbhai.com/recall) installed, **Open Recall**
+under Overview searches your files by meaning: the folders Recall's own
+settings select, which Omacloud doesn't choose for it. Recall's model
+weights and partial downloads don't sync. Without Recall nothing changes,
+and Omacloud never installs or contacts it otherwise.

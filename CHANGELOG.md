@@ -5,7 +5,11 @@
 - A holder charges only for the lease it kept a blob for, not the grace
   after it, so a computer back after months renews normally instead of
   finding every holder over its limit.
-- A shared file holds up to 128 MiB (the largest object a holder takes).
+- A shared file holds up to 127 MiB (it must fit, sealed, in the largest
+  object a holder takes).
+- A config file passed with `--config` counts as the default only when it
+  is the default one, not because it's named `config.toml`: a test's
+  `config.toml` elsewhere could otherwise reach the real account's data.
 - Cleanup: the own-bucket leftovers (sealed storage settings, the
   `full-backends` build feature and the filesystem backend), the unused
   `Has` holder request, unused dependencies and dead code are gone.

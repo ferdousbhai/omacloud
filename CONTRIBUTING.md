@@ -61,8 +61,8 @@ a test account and a local build.
 ## Secrets
 
 Secrets never go on a command line, where other processes can read them:
-`OMACLOUD_RECOVERY_CODE` and `OMACLOUD_JOIN_CODE` come from the
-environment, or a prompt that doesn't echo.
+`OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE` and `OMACLOUD_LINK` come
+from the environment, or a prompt that doesn't echo.
 
 ## Shell hygiene
 

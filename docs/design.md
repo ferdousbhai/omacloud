@@ -53,9 +53,10 @@ restic to read in place.
   existing member signed it in. A new computer is approved by comparing the
   fingerprint it shows with the one on the approving computer.
 - **Repository keys.** The repository password is sealed to each member
-  computer and to the root (`epoch.rs`). Removing a computer starts a new
-  *epoch*: a new repository with a new key, sealed only to the remaining
-  members, with every snapshot copied over so history stays readable. The
+  computer and to the root (`epoch.rs`). Rotating (`omacloud rotate`, or
+  `devices revoke --rotate` when removing a computer) starts a new *epoch*:
+  a new repository with a new key, sealed only to the remaining members,
+  with every kept snapshot copied over so history stays readable. A
   removed computer keeps only what it had already seen.
 - **Secrets bundle.** ssh and gpg keys never sync as files. `omacloud secrets
   save` seals them to the root (`secrets.rs`), so only the recovery code

@@ -554,6 +554,19 @@ fn a_computer_set_up_before_the_network_is_told_and_set_up_again() {
 }
 
 #[test]
+fn a_config_named_config_toml_elsewhere_keeps_its_own_data() {
+    let h = Home::new();
+    std::fs::create_dir_all(h.path("elsewhere")).unwrap();
+    let args = h.init_args("a");
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let (out, code) = on_tty(h.cmd("elsewhere/config", &args));
+    assert_eq!(code, 0, "{out}");
+    assert!(h.path("elsewhere/config.d/device.key").exists());
+    // never the data directory of the account the default config is for
+    assert!(!h.path("home/.local/share/omacloud").exists());
+}
+
+#[test]
 fn restore_over_an_existing_file_needs_yes() {
     let h = Home::new();
     h.create();

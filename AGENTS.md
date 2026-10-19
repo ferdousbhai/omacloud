@@ -51,7 +51,7 @@ three computers on a `dir:` network. `scripts/restic-compat.sh` needs restic
   `watch` keeps its exit codes (2 stopped, 75 upgraded): the systemd unit's
   `RestartPreventExitStatus=2` depends on them.
 - Secrets never go on a command line: they come from env vars
-  (`OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE`) or a no-echo prompt
+  (`OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE`, `OMACLOUD_LINK`) or a no-echo prompt
   (`read_secret` in `crates/omacloud/src/main.rs`), asked only in text mode
   with stdin and stdout on a terminal.
 - Worker code is TypeScript with tabs, run directly by node

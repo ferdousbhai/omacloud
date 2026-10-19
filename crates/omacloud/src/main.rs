@@ -76,7 +76,8 @@ Exit codes: 0 ok; 1 other failure; 2 invalid usage or request (a destructive
 command without --yes where nobody can be asked, a secret asked for where no
 terminal shows it, ambiguous, already set up); 3 not set up, not approved, or a
 key or code refused; 4 not found; 5 storage or network out of reach. `watch` (the daemon) exits 2 when this computer was
-removed and 75 after an upgrade.";
+removed, the account can't be verified or its storage is gone (sync stops until
+someone looks), and 75 after an upgrade.";
 
 #[derive(Parser)]
 #[command(
@@ -173,7 +174,7 @@ enum Cmd {
     /// Share a file by link: whoever has the link can download it, for 7
     /// days. It needs no account to open
     Share {
-        /// The file to share (up to 128 MiB)
+        /// The file to share (up to 127 MiB)
         file: PathBuf,
         /// Put the link on the clipboard (wl-copy) instead of printing it
         #[arg(long)]
@@ -524,7 +525,7 @@ fn copy_to_clipboard(text: &str) -> Result<()> {
 /// The network to share on (this account's, or the default) or to receive
 /// from (`url`, the link's).
 fn share_network(paths: &Paths, url: Option<String>) -> NetConfig {
-    let mine = load(paths).ok().and_then(|c| c.network);
+    let mine = load(paths).ok().and_then(|c| c.net().cloned());
     match (url, mine) {
         (None, Some(n)) => n,
         (Some(url), Some(n)) if url == n.url => n,
@@ -701,31 +702,34 @@ impl Limits {
 struct Paths {
     config: PathBuf,
     data: PathBuf,
+    /// The default configuration, the one the packaged systemd unit runs.
+    default: bool,
 }
 
 impl Paths {
     fn new(config: Option<PathBuf>) -> Result<Self> {
         let home = std::env::var_os("HOME").map(PathBuf::from).context("HOME not set")?;
         let xdg = |var: &str, fallback: &str| std::env::var_os(var).map_or_else(|| home.join(fallback), PathBuf::from);
-        let config = config.unwrap_or_else(|| xdg("XDG_CONFIG_HOME", ".config").join("omacloud/config.toml"));
-        let paths = Self {
-            data: config.with_extension("d"),
+        let standard = xdg("XDG_CONFIG_HOME", ".config").join("omacloud/config.toml");
+        // the default by where it is, not its name: a test's config.toml
+        // elsewhere must never reach the real account's data
+        let config = config.map_or_else(|| standard.clone(), |c| std::path::absolute(c).unwrap_or_default());
+        let default = config == standard;
+        Ok(Self {
+            // a custom config file gets its own data directory beside it
+            data: if default {
+                xdg("XDG_DATA_HOME", ".local/share").join("omacloud")
+            } else {
+                config.with_extension("d")
+            },
             config,
-        };
-        // a custom config file gets its own data directory beside it
-        Ok(if paths.is_default() {
-            Self {
-                data: xdg("XDG_DATA_HOME", ".local/share").join("omacloud"),
-                ..paths
-            }
-        } else {
-            paths
+            default,
         })
     }
     /// Whether this is the default configuration, the one the packaged
     /// systemd unit runs.
     fn is_default(&self) -> bool {
-        self.config.file_name().is_some_and(|n| n == "config.toml")
+        self.default
     }
     fn device_key(&self) -> PathBuf {
         self.data.join("device.key")
@@ -1879,7 +1883,7 @@ fn run(cli: Cli) -> Out {
                 .map(|n| n.to_string_lossy().into_owned())
                 .ok_or_else(|| fail::usage("give a file"))?;
             let config = load(&paths).ok();
-            if days > 7 && !config.as_ref().is_some_and(|c| c.network.is_some()) {
+            if days > 7 && !config.as_ref().is_some_and(|c| c.net().is_some()) {
                 return Err(
                     fail::usage("a link that works past 7 days needs this computer set up on the network")
                         .hint("its daemon renews the file; run `omacloud init`, or share for 7 days")
@@ -2195,9 +2199,6 @@ fn run(cli: Cli) -> Out {
             );
             say!(out, "# (repository epoch {epoch})");
             say!(out, "repository: {repo}");
-            for (k, v) in &spec.options {
-                say!(out, "option:     {k}={v}");
-            }
             say!(out, "password:   {password}");
             say!(out);
             say!(
@@ -3252,8 +3253,8 @@ fn node(paths: &Paths, action: NodeCmd) -> Out {
                 Some(g) => net::parse_size(&g).map_err(|e| fail::usage(format!("{e:#}")))?,
                 None => load(paths)
                     .ok()
-                    .and_then(|c| c.network)
-                    .map_or_else(default_give, |n| n.give),
+                    .and_then(|c| c.net().map(|n| n.give))
+                    .unwrap_or_else(default_give),
             };
             let s = omacloud_net::session::Session::start(omacloud_net::session::Options {
                 url: network,

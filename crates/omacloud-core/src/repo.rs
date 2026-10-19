@@ -29,7 +29,7 @@ pub struct RepoSpec {
 
 /// Backend options that are this device's own business (transfer limits),
 /// not the repository's.
-pub const LOCAL_OPTIONS: &[&str] = &["bandwidth", "connections"];
+const LOCAL_OPTIONS: &[&str] = &["bandwidth", "connections"];
 
 /// The option that marks a repository on the Omacloud network: its S3 key
 /// is the epoch's network key, made from the repository password, which
@@ -46,7 +46,7 @@ pub fn network_key(password: &str) -> String {
 impl RepoSpec {
     /// A bucket (OpenDAL, such as S3), as opposed to a local path.
     #[must_use]
-    pub fn is_bucket(&self) -> bool {
+    fn is_bucket(&self) -> bool {
         self.repository.starts_with("opendal:")
     }
 

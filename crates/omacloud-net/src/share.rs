@@ -15,8 +15,8 @@ const OBJECT: &str = "share";
 const SEALED_FOR: &str = "omacloud share v1";
 /// Larger files go another way: a share is held in memory whole, and on a
 /// network too small for erasure coding it's kept as whole copies, which
-/// holders take up to this size.
-pub const MAX: u64 = crate::proto::MAX_OBJECT;
+/// holders take up to `MAX_OBJECT`: room is left for the name and the seal.
+pub const MAX: u64 = crate::proto::MAX_OBJECT - (1 << 20);
 
 /// A new share's secret: what the link carries.
 #[must_use]
@@ -36,7 +36,8 @@ pub fn bucket_key(secret: &str) -> String {
 ///
 /// If no holder takes it.
 pub async fn put(bucket: &Bucket, secret: &str, name: &str, data: &[u8]) -> Result<()> {
-    anyhow::ensure!(data.len() as u64 <= MAX, "a share holds up to 128 MiB");
+    anyhow::ensure!(data.len() as u64 <= MAX, "a share holds up to {} MiB", MAX >> 20);
+    anyhow::ensure!(name.len() <= 255, "a file name that long");
     let mut plain = Vec::with_capacity(2 + name.len() + data.len());
     plain.extend_from_slice(
         &u16::try_from(name.len())
