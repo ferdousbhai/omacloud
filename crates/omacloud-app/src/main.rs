@@ -793,6 +793,27 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         _ => text(&repo["repository"]),
     };
     storage.add(&row("Where", place.trim()));
+    let space = &s["network"]["space"];
+    if let Some(tokens) = space["tokens"].as_u64() {
+        let (title, subtitle) = match space["stored"].as_u64() {
+            Some(stored) => (
+                format!("Storing {}", human(stored)),
+                match space["months"].as_u64() {
+                    Some(m) => format!("Kept twice. Credit for about {m} more months at this size"),
+                    None => "Kept twice".to_string(),
+                },
+            ),
+            None => (
+                "Storage credit".to_string(),
+                "Counted after the first check of your copies".to_string(),
+            ),
+        };
+        let r = row(&title, &subtitle);
+        r.set_tooltip_text(Some(&format!(
+            "{tokens} credits held. A credit keeps 1 GiB for a month; giving space earns them."
+        )));
+        storage.add(&r);
+    }
     if let Some(give) = s["network"]["give"].as_u64() {
         storage.add(&give_row(ui, give, daemon));
     }

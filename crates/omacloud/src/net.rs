@@ -116,6 +116,8 @@ impl Contribution {
         if renew.is_some() {
             write_private(&self.data.join("renewed"), now().to_string().as_bytes())?;
         }
+        let space = serde_json::json!({ "stored": report.stored, "monthly": report.monthly, "at": now() });
+        write_private(&self.data.join("space.json"), space.to_string().as_bytes())?;
         if report.failed > 0 || report.repaired > 0 || !report.lost.is_empty() {
             info!(
                 "copies: {} audited, {} failed, {} objects given new copies",
@@ -142,6 +144,29 @@ impl Contribution {
         node.mark_deposited(&taken)?;
         Ok(())
     }
+}
+
+/// The account's space as the last upkeep round found it: bytes stored
+/// (one copy of each), tokens a month that costs, tokens held, and how
+/// far that pays. Nulls before the first round.
+#[must_use]
+pub fn space(data: &Path) -> serde_json::Value {
+    let last: serde_json::Value = fs::read(data.join("space.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let tokens = read_wallet(&data.join("wallet.json")).len() as u64;
+    let monthly = last["monthly"].as_u64();
+    let renewed = read_number(&data.join("renewed"));
+    serde_json::json!({
+        "stored": last["stored"],
+        "monthly": monthly,
+        "tokens": tokens,
+        // whole months the wallet pays at this size, after what's paid
+        "months": monthly.filter(|m| *m > 0).map(|m| tokens / m),
+        "paid_until": (renewed > 0).then_some(renewed + LEASE),
+        "checked_at": last["at"],
+    })
 }
 
 /// Take `n` tokens from the wallet, asking for the starter grant once when
@@ -233,6 +258,24 @@ pub fn human(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn space_says_how_far_the_wallet_pays() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let before = space(dir.path());
+        assert!(before["stored"].is_null() && before["months"].is_null());
+        assert_eq!(before["tokens"], 0);
+
+        let token = serde_json::json!({ "msg": "00".repeat(32), "randomizer": "00".repeat(32), "sig": "00" });
+        fs::write(dir.path().join("wallet.json"), serde_json::json!(vec![token; 7]).to_string())?;
+        fs::write(dir.path().join("space.json"), r#"{"stored": 5000, "monthly": 3, "at": 1}"#)?;
+        fs::write(dir.path().join("renewed"), "100")?;
+        let s = space(dir.path());
+        assert_eq!((s["stored"].as_u64(), s["tokens"].as_u64()), (Some(5000), Some(7)));
+        assert_eq!(s["months"], 2);
+        assert_eq!(s["paid_until"], 100 + LEASE);
+        Ok(())
+    }
 
     #[test]
     fn sizes_read_as_people_write_them() -> Result<()> {

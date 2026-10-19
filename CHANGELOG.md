@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- How much space you have: `omacloud node status`, `status --json`
+  (`network.space`) and the app's Storage show what the account stores,
+  its monthly cost in credits, the credits held and how many months they
+  pay for, as of the daemon's last upkeep.
 - Every file, online only: `omacloud mount` shows all the account's
   folders read-only in `~/Omacloud`, those skipped here too, each file
   fetched when it's opened (FUSE; `fuse3` is an optional dependency). The

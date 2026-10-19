@@ -175,6 +175,14 @@ async fn upkeep_replaces_a_holder_that_left_and_one_that_dropped_its_copy() -> R
     let r = upkeep::round(&b, 100, None, &mut free).await?;
     assert_eq!((r.failed, r.repaired), (0, 0), "{r:?}");
     assert_eq!(r.audited, 8);
+    // 32 bytes, and a token a month for each holder, however little it keeps
+    assert_eq!(r.stored, 32);
+    let mut holders = std::collections::BTreeSet::new();
+    for i in 0..4 {
+        let e = b.entry(&format!("data/aa/{i}")).await?.expect("indexed");
+        holders.extend(e.holders.iter().map(|h| h.node));
+    }
+    assert_eq!(r.monthly, holders.len() as u64);
 
     // one holder leaves the network
     let e0 = b.entry("data/aa/0").await?.expect("indexed");

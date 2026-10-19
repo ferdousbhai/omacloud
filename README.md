@@ -100,7 +100,10 @@ whose, and earns the credits that pay for keeping yours. `omacloud node
 give 50G` changes the amount (`0` gives none) and takes effect when the
 daemon restarts; `omacloud node status` shows it. Every few hours the
 daemon also checks that your copies are still held, pays to keep them, and
-makes new ones where a holder failed or left.
+makes new ones where a holder failed or left. `omacloud node status` (and
+Storage in the app) then shows how much your account stores, what keeping
+it costs a month in credits, the credits you hold, and about how many
+months they pay for at that size.
 
 `omacloud node run` runs a node with no account of its own, as Omacloud's
 seed nodes do.

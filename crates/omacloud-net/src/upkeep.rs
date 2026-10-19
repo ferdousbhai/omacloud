@@ -32,6 +32,10 @@ pub struct Report {
     pub repaired: usize,
     /// Objects with no copy left anywhere.
     pub lost: Vec<String>,
+    /// Bytes stored, one copy of each object.
+    pub stored: u64,
+    /// Tokens a month keeping every good copy costs, as holders charge.
+    pub monthly: u64,
 }
 
 /// One round: audit up to `audits` random copies, renew every copy until
@@ -121,6 +125,14 @@ pub async fn round(
     }
 
     report.failed = bad.values().map(BTreeSet::len).sum();
+    report.stored = entries.iter().map(|e| e.size).sum();
+    let mut per_holder: BTreeMap<NodeId, u64> = BTreeMap::new();
+    for e in &entries {
+        for h in &e.holders {
+            *per_holder.entry(h.node).or_default() += e.size;
+        }
+    }
+    report.monthly = per_holder.values().map(|b| tokens_for(*b)).sum();
     // fewest good copies first: those are nearest to being lost
     let mut repairs: Vec<&Entry> = entries
         .iter()

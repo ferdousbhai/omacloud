@@ -2781,7 +2781,7 @@ fn status(paths: &Paths) -> Out {
             "kind": kind,
             "repository": if network.is_some() { "Omacloud network".to_string() } else { repo.repository.clone() },
         },
-        "network": network.map(|n| json!({ "url": n.url, "give": n.give })),
+        "network": network.map(|n| json!({ "url": n.url, "give": n.give, "space": net::space(&paths.data) })),
         "synced_head": st.base.as_ref().map(|b| b.seq),
         "synced_at": (st.synced_at > 0).then_some(st.synced_at),
         "epoch": st.secret.as_ref().map(|s| s.0),
@@ -2885,11 +2885,30 @@ fn node(paths: &Paths, action: NodeCmd) -> Out {
             let key = omacloud_net::session::node_key(&paths.node_key())?;
             let id = hex::encode(key.public().as_bytes());
             let summary = format!("giving {}", net::human(net.give));
+            let space = net::space(&paths.data);
+            let mut out = format!("{summary}\nnode {}", &id[..16]);
+            match space["stored"].as_u64() {
+                Some(stored) => say!(
+                    out,
+                    "\nstoring {} (kept twice), {} tokens a month\ntokens held: {}{}",
+                    net::human(stored),
+                    space["monthly"],
+                    space["tokens"],
+                    space["months"]
+                        .as_u64()
+                        .map_or_else(String::new, |m| format!(", about {m} more months at this size")),
+                ),
+                None => say!(
+                    out,
+                    "\ntokens held: {} (storage is counted after the daemon's first upkeep)",
+                    space["tokens"]
+                ),
+            }
             Ok(Response::new(
-                json!({ "id": id, "give": net.give, "network": net.url }),
+                json!({ "id": id, "give": net.give, "network": net.url, "space": space }),
                 summary.clone(),
             )
-            .human(format!("{summary}\nnode {}", &id[..16])))
+            .human(out.trim_end()))
         }
         NodeCmd::Give { size } => {
             let give = net::parse_size(&size).map_err(|e| fail::usage(format!("{e:#}")))?;

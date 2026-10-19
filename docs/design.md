@@ -236,9 +236,9 @@ On the network:
   network is small, most copies have one always-on home, on one network.
   Seeds at other providers would remove that single point.
 - Erasure coding (4+2) in place of two whole copies.
-- Space is earned by giving it, plus a small starter grant; nothing shows
-  how much more an account can keep, and there's no way to just pay for
-  more.
+- Space is earned by giving it, plus a small starter grant. The app shows
+  what's stored and how many months the credits held pay for, but there's
+  no way to just pay for more.
 - OHTTP or Tor for requests to the Worker, a transparency log, and a DHT
   to fall back on when the Worker is down.
 
