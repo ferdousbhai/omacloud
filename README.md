@@ -108,7 +108,7 @@ it costs a month in credits, the credits you hold, and about how many
 months they pay for at that size.
 
 `omacloud node run` runs a node with no account of its own, as Omacloud's
-seed nodes do.
+seed nodes do; `contrib/seed-setup.sh` sets up such a server, with a relay.
 
 ## What syncs
 
@@ -314,7 +314,7 @@ pause_on_battery_below = 20   # percent while discharging; 0 never pauses
 [network]
 url = "https://omacloud.computer"  # the network's Worker
 give = 21474836480            # bytes given to others (`omacloud node give`)
-relays = []                   # relay servers, for computers behind routers
+relays = ["https://relay1.omacloud.computer"]  # for computers behind routers; other networks start with none
 ```
 
 `notifications = false` turns off the desktop notifications (a computer
@@ -342,7 +342,7 @@ everyday edits.
 | `vendor/rustic_core` | rustic_core 0.13 plus pack padding and `splice_tree` (upstream PRs in `vendor/upstream-patches`) |
 | `scripts/` | end to end checks (the network on one machine, upstream restic; see CONTRIBUTING.md) and the release scripts |
 | `server/` | the Cloudflare Worker behind omacloud.computer: the public pages and the network's API (see its README and [docs/network-api.md](docs/network-api.md)) |
-| `contrib/` | the systemd user unit and the desktop entry |
+| `contrib/` | the systemd user unit, the desktop entry, and `seed-setup.sh` for a seed server |
 | `pkgbuild/PKGBUILD` | Arch package, built from the committed checkout |
 | `install.sh` | the installer each release ships |
 

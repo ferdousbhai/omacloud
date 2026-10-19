@@ -4,8 +4,6 @@
 
 use std::{
     fs,
-    io::Write,
-    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -323,22 +321,9 @@ fn read_number(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
-/// Write a file only its owner reads, whole or not at all: a crash midway
-/// leaves the old one.
-pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)?
-        .write_all(bytes)?;
-    fs::rename(&tmp, path)?;
-    Ok(())
-}
+/// Write a file only its owner reads, whole or not at all, and on disk
+/// before it replaces the old one.
+pub use omacloud_core::head::write_private;
 
 /// A size as given on the command line: bytes, or with K, M, G or T
 /// (binary units).

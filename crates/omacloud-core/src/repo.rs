@@ -109,9 +109,8 @@ impl RepoSpec {
         Ok(repo.key())
     }
 
-    /// Where epoch `n` of this repository lives: beside it, so storage
-    /// credentials never leave the device. A local path gets a `.e<n>`
-    /// suffix; an opendal repository gets its own root inside the bucket.
+    /// Where epoch `n` of this repository lives: a local path gets a `.e<n>`
+    /// suffix; the network's gets its own root in the bucket.
     #[must_use]
     pub fn for_epoch(&self, n: u64) -> Self {
         if n == 0 {

@@ -243,8 +243,8 @@ encrypted objects, their sizes (padded) and when they're written. On the
 network:
 
 - **The Worker** sees random account ids, encrypted coordination records,
-  the number of index entries and when they change, node ids with their
-  network and uptime, credit tokens it can't link to who spent them, and
+  the number of index entries and when they change, node ids with the
+  addresses they publish, their network and uptime, credit tokens it can't link to who spent them, and
   IP addresses and timing. It never links a node to an account, and can't
   read object names, placements or heads.
 - **Holders** see scrambled blobs, their sizes and when they're fetched or

@@ -1,5 +1,6 @@
 // The network's API under /api/net/ (docs/network-api.md). It logs nothing
-// and keeps no address but a /24 or /48 where a limit needs one.
+// and keeps no address of a request but a /24 or /48 where a limit needs
+// one; storage nodes publish their own, for computers to reach them.
 
 import * as coord from "./coord.ts";
 import * as credits from "./credits.ts";

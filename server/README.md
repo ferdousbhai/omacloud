@@ -8,7 +8,8 @@ sealed index, each account's coordination records, and storage tokens.
 It keeps no logs (observability is off), sets no cookies and has no
 accounts or sign-in. Writes are allowed by capabilities the computers
 derive, kept only as hashes; of a request's address it keeps only the
-/24 or /48, for limits.
+/24 or /48, for limits. A storage node's own address it does keep: the
+node publishes it, so computers can reach it.
 
 - `src/`: the Worker (`index.ts` the paths; `pages.ts` the pages).
 - `src/net/`: the network API. `router.ts` the paths; `auth.ts` node

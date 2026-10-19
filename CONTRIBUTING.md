@@ -5,10 +5,14 @@ and the work ahead in the issues.
 
 ## Before a commit
 
+`bin/check` runs everything below and the end to end and packaging
+checks; the pre-push hook runs it (`git config core.hooksPath .githooks`
+once per clone).
+
 ```sh
 cargo fmt --all                                        # CI checks it
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
 ```
 
 The GTK app needs `gtk4` and `libadwaita` (CI installs `libgtk-4-dev
@@ -35,8 +39,10 @@ server; storage isn't paid for there. Run seeds with `omacloud node run
 --give 1G` and computers with `omacloud init`, each with its own
 `--config`. `scripts/network.sh`, which `bin/check` runs, does exactly
 that: three seed nodes and three computers, from `init` through a join
-code and approval, recovery with the recovery code, a key rotation and
-`export --to`, then checks the Worker's part holds nothing readable.
+code and approval, recovery with the recovery code, a key rotation,
+`export --to`, shares (copied, kept longer, listed, taken back) and the
+Worker losing the account's records and getting them back, then checks
+the Worker's part holds nothing readable.
 `crates/omacloud-net/tests/` cover nodes, the bucket through an S3 client,
 upkeep's repairs, and restic syncing through the network across a
 rotation. `docs/network-api.md` is the Worker's API.

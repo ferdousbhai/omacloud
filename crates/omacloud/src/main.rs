@@ -713,7 +713,10 @@ impl Paths {
         let standard = xdg("XDG_CONFIG_HOME", ".config").join("omacloud/config.toml");
         // the default by where it is, not its name: a test's config.toml
         // elsewhere must never reach the real account's data
-        let config = config.map_or_else(|| standard.clone(), |c| std::path::absolute(c).unwrap_or_default());
+        let config = config
+            .map(std::path::absolute)
+            .transpose()?
+            .unwrap_or_else(|| standard.clone());
         let default = config == standard;
         Ok(Self {
             // a custom config file gets its own data directory beside it

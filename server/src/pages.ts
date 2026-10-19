@@ -88,7 +88,7 @@ export const privacy = () =>
 		"Privacy · Omacloud",
 		`<h1>Privacy</h1>
 <p class="lead">Updated ${UPDATED}.</p>
-<p>This site collects nothing. It sets no cookies, has no accounts and keeps no logs. Requests
+<p>Visiting this site collects nothing: it sets no cookies, has no accounts and keeps no logs. Requests
 pass through Cloudflare, which handles your IP address to deliver them.</p>
 <p>Omacloud itself has no accounts or sign-in. Your files, their names, your settings and your
 keys are encrypted on your computer, with keys that never leave your computers and your
@@ -149,7 +149,7 @@ it. Omacloud runs on Omarchy (Arch Linux, x86_64 and aarch64), as a GTK app and 
 ## Site
 
 - [Home](${site}/): what Omacloud is and how to install it
-- [Privacy](${site}/privacy): the site collects nothing; Omacloud has no accounts
+- [Privacy](${site}/privacy): visiting collects nothing; Omacloud has no accounts
 - [Terms](${site}/terms): terms
 
 ## Optional

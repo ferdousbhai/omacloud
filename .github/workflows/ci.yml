@@ -24,7 +24,7 @@ jobs:
       - name: Restore with plain restic
         run: |
           sudo apt-get install -y restic
-          cargo build -p omacloud
+          cargo build --locked -p omacloud
           scripts/restic-compat.sh target/debug/omacloud
 
   arm:

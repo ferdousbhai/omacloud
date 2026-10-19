@@ -12,11 +12,11 @@ threat model: docs/design.md; build, test and release: CONTRIBUTING.md.
 | `crates/omacloud-net` | the Omacloud network: `blob.rs` per-holder scrambling, `erasure.rs` 4+2 shards for large objects, `place.rs` holder choice, `credit.rs` blind tokens, `node.rs` a storage node, `proto.rs` its protocol, `client.rs` talking to holders, `seal.rs` epoch keys and sealed index entries, `registry.rs` directory and index, `bucket.rs` the bucket over holders, `gateway.rs` S3 on loopback, `upkeep.rs` audits, renewals, repairs, `coord.rs`/`records.rs` sealed coordination, `worker.rs` the Worker over HTTPS, `dirstore.rs` the Worker's part in a directory, `session.rs` one run's network, `mirror.rs` this computer's copy of what it keeps at the Worker, `share.rs` a file shared by link. Tests in `tests/` |
 | `crates/omacloud` | the `omacloud` CLI and `watch` daemon (`main.rs`: every subcommand; `mount.rs`: the read-only FUSE view `mount` serves; `output.rs`: the shared output contract, vendored from icloud-for-omarchy; `fail.rs`: error codes and exit codes; `net.rs`: the node, heartbeats, tokens and upkeep `watch` runs; `agent_skill.rs`: installs `skills/omacloud` for coding agents; `alerts.rs`, `power.rs`). CLI tests in `tests/cli.rs` |
 | `crates/omacloud-app` | GTK4/libadwaita app; it shells out to the CLI with `--json` and reads the envelope's `data` (`status` above all) or `error.code`, so keep that output stable; `init` and `join-code` it runs on a pseudo-terminal of its own |
-| `vendor/rustic_core` | patched rustic_core 0.13 (pack padding, `splice_tree`), wired in through `[patch.crates-io]`; see its `OMACLOUD.md` |
-| `server/` | Cloudflare Worker (TypeScript, `cf` CLI): omacloud.computer's public pages (home, privacy, terms, `/llms.txt`) and the network's API in `server/src/net/` (spec: docs/network-api.md). D1 schema in `server/migrations/`. See server/README.md |
+| `vendor/rustic_core`, `vendor/rustic_backend` | patched rustic_core 0.13 (pack padding, `splice_tree`) and rustic_backend (S3 only), wired in through `[patch.crates-io]`; see their `OMACLOUD.md` |
+| `server/` | Cloudflare Worker (TypeScript, `cf` CLI): omacloud.computer's public pages (home, privacy, terms, `/llms.txt`, `/s` for share links, `/install.sh`) and the network's API in `server/src/net/` (spec: docs/network-api.md). D1 schema in `server/migrations/`. See server/README.md |
 | `scripts/` | end to end checks (`network.sh`: the network on one machine; `restic-compat.sh`: upstream restic), release scripts, and `tests/*.py` for installer and release tooling |
 | `pkgbuild/`, `packaging/omarchy-pkgs/` | Arch PKGBUILD and the Omarchy recipe: change them together |
-| `contrib/` | systemd user unit and desktop entry |
+| `contrib/` | systemd user unit, desktop entry, and `seed-setup.sh` for a seed server (node and relay) |
 
 ## Commands
 

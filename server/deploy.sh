@@ -22,6 +22,7 @@ if [ -n "$first" ] && npx cf workers secrets list --worker omacloud 2>/dev/null 
   exit 1
 fi
 
+npx cf workers types >/dev/null
 npx tsc --noEmit
 # the schema first: the new code expects it, and the old code ignores what's added
 npx cf d1 migrations apply "$(sed -n 's/.*id: "\([0-9a-f-]\{36\}\)".*/\1/p' cloudflare.config.ts)"

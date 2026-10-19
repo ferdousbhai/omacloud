@@ -37,13 +37,9 @@ pub fn bucket_key(secret: &str) -> String {
 /// If no holder takes it.
 pub async fn put(bucket: &Bucket, secret: &str, name: &str, data: &[u8]) -> Result<()> {
     anyhow::ensure!(data.len() as u64 <= MAX, "a share holds up to {} MiB", MAX >> 20);
-    anyhow::ensure!(name.len() <= 255, "a file name that long");
+    anyhow::ensure!(name.len() <= 255, "a share's file name is at most 255 bytes");
     let mut plain = Vec::with_capacity(2 + name.len() + data.len());
-    plain.extend_from_slice(
-        &u16::try_from(name.len())
-            .context("a file name that long")?
-            .to_be_bytes(),
-    );
+    plain.extend_from_slice(&u16::try_from(name.len())?.to_be_bytes());
     plain.extend_from_slice(name.as_bytes());
     plain.extend_from_slice(data);
     let sealed = Keys::from_secret(&bucket_key(secret)).seal(SEALED_FOR, &plain);
