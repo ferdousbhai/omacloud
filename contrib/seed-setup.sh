@@ -106,13 +106,47 @@ PrivateTmp=yes
 WantedBy=multi-user.target
 EOF
 
+# Nothing of ours reaches the relay through Cloudflare's proxy (relay
+# hosts are DNS-only), but others' proxied domains can still point at an
+# address a server had before: seed 1 got hundreds of websocket clients of
+# such a domain, every few seconds, until it ran out of files. Refuse
+# Cloudflare's addresses on the web ports.
+cf4=$(curl -fsS https://www.cloudflare.com/ips-v4/ | paste -sd, -)
+cf6=$(curl -fsS https://www.cloudflare.com/ips-v6/ | paste -sd, -)
+[ -n "$cf4" ] && [ -n "$cf6" ]
+cat >/etc/omacloud-seed.nft <<EOF
+table inet omacloud_seed {}
+delete table inet omacloud_seed
+table inet omacloud_seed {
+  chain input {
+    type filter hook input priority 0; policy accept;
+    tcp dport { 80, 443 } ip saddr { $cf4 } reject with tcp reset
+    tcp dport { 80, 443 } ip6 saddr { $cf6 } reject with tcp reset
+  }
+}
+EOF
+cat >/etc/systemd/system/omacloud-seed-firewall.service <<'EOF'
+[Unit]
+Description=Keep proxied traffic off the Omacloud relay
+Before=iroh-relay.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/omacloud-seed.nft
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 # rotate syslog by size too, not only weekly
 if [ -f /etc/logrotate.d/rsyslog ] && ! grep -q maxsize /etc/logrotate.d/rsyslog; then
   sed -i 's/^\(\s*\)rotate \([0-9]*\)/\1rotate \2\n\1maxsize 200M/' /etc/logrotate.d/rsyslog
 fi
 
 systemctl daemon-reload
-systemctl enable iroh-relay omacloud-seed
+systemctl enable omacloud-seed-firewall iroh-relay omacloud-seed
+systemctl restart omacloud-seed-firewall
 # a rerun (an upgrade) starts the new binaries and settings
 systemctl restart iroh-relay omacloud-seed
 systemctl --no-pager --lines=5 status iroh-relay omacloud-seed || true
