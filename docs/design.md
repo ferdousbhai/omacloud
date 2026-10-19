@@ -148,6 +148,8 @@ sync engine. Nothing in it is trusted for anything but availability.
   against the Worker's public key, trades them for fresh ones of its own,
   and spends those on its own account's storage: giving space earns what
   storing costs. A computer short of tokens asks for a small starter grant.
+  There's no money in it, by design: credits are only earned by giving
+  space, never bought or sold.
 - **Upkeep** (`upkeep.rs`, run by the daemon). Every 15 minutes a node
   tells the directory it's up and trades in the tokens it took. Every 6
   hours the account's computer reads back 32 random ranges of its copies,
@@ -274,9 +276,6 @@ On the network:
 - One seed and one relay, at one provider (Hetzner, Helsinki): while the
   network is small, most copies have one always-on home, on one network.
   Seeds at other providers would remove that single point (#33).
-- Space is earned by giving it, plus a small starter grant. The app shows
-  what's stored and how many months the credits held pay for, but there's
-  no way to just pay for more (#24).
 - OHTTP or Tor for requests to the Worker (#39), a transparency log
   (#40), and a DHT for finding nodes when the Worker is down (#41); each
   computer already keeps its account's records and index (above).
