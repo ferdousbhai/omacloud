@@ -241,23 +241,23 @@ On the network:
 
 - One seed and one relay, at one provider (Hetzner, Helsinki): while the
   network is small, most copies have one always-on home, on one network.
-  Seeds at other providers would remove that single point.
-- Erasure coding (4+2) in place of two whole copies.
+  Seeds at other providers would remove that single point (#33).
+- Erasure coding (4+2) in place of two whole copies (#34).
 - Space is earned by giving it, plus a small starter grant. The app shows
   what's stored and how many months the credits held pay for, but there's
-  no way to just pay for more.
-- OHTTP or Tor for requests to the Worker, a transparency log, and a DHT
-  to fall back on when the Worker is down.
+  no way to just pay for more (#24).
+- OHTTP or Tor for requests to the Worker (#39), a transparency log
+  (#40), and a DHT to fall back on when the Worker is down (#41).
 
 Elsewhere:
 
-- Key transparency for device keys; until then, approvals compare
+- Key transparency for device keys (#40); until then, approvals compare
   fingerprints out of band.
-- Direct computer-to-computer sync on a local network.
+- Direct computer-to-computer sync on a local network (#41).
 - Online-only files you can edit in place (#7): `omacloud mount` shows
   every file read-only, fetched on open, but a folder is either kept here
   in full or skipped, not freed file by file.
 - Sharing a folder with other people (#8); a shared link (#15) is one
   file, read-only, for 7 days.
-- Reaching files from a phone or a browser.
+- Reaching files from a phone or a browser (#35).
 - An outside review of this design (#18).
