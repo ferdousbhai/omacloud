@@ -11,10 +11,9 @@ how it protects your data.
 
 Storage is the Omacloud network: other Omarchy computers hold your
 encrypted objects, and yours holds some of theirs. There are no accounts
-and no sign-in, only keys your computers make. The network is new:
-[docs/design.md](docs/design.md) says what isn't done yet, including the
-seed nodes and relays it needs before setting up works against
-omacloud.computer.
+and no sign-in, only keys your computers make. The network is new, with
+one Omacloud seed and relay so far: [docs/design.md](docs/design.md) says
+what isn't done yet.
 
 ## Install
 

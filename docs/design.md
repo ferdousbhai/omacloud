@@ -140,8 +140,11 @@ sync engine. Nothing in it is trusted for anything but availability.
 - **Transport.** Computers talk over iroh. A computer reaches holders from
   a throwaway key made for each run, so a holder can't tie the blobs it's
   given to the node key that computer serves under. Port mapping and n0's
-  discovery are off; relays are configurable, and none are set by default
-  yet, so connections are direct only.
+  discovery are off. On omacloud.computer's network every computer uses
+  Omacloud's relay (relay1.omacloud.computer, on the first seed), and
+  reaches holders through it only, so a holder never learns its address;
+  nodes take direct connections too. Other networks set their own relays
+  (`[network] relays`).
 - **What stays central.** The Worker keeps the node directory, the sealed
   index, the sealed coordination records, and issues credits. There are no
   accounts, emails or sign-ins: only ids and keys the computers make.
@@ -229,11 +232,13 @@ names, settings or keys.
 
 On the network:
 
-- Seed nodes and relays aren't deployed, and the Worker needs deploying
-  with migration 0006 and its `CREDIT_KEY` (`server/deploy.sh --first`).
-  Until then `omacloud init` doesn't work against omacloud.computer.
-- Without relays, computers behind NAT can't reach each other.
+- One seed and one relay, at one provider (Hetzner, Helsinki): while the
+  network is small, most copies have one always-on home, on one network.
+  Seeds at other providers would remove that single point.
 - Erasure coding (4+2) in place of two whole copies.
+- Space is earned by giving it, plus a small starter grant; nothing shows
+  how much more an account can keep, and there's no way to just pay for
+  more.
 - OHTTP or Tor for requests to the Worker, a transparency log, and a DHT
   to fall back on when the Worker is down.
 
@@ -243,4 +248,6 @@ Elsewhere:
   fingerprints out of band.
 - Direct computer-to-computer sync on a local network.
 - Online-only files fetched on open (#7).
+- Sharing a file by link (#15) or a folder with other people (#8).
+- Reaching files from a phone or a browser.
 - An outside review of this design (#18).

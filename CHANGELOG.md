@@ -25,9 +25,10 @@
 - Leaving: `omacloud export --to <folder>` copies the repository to a
   folder plain restic reads; `omacloud gateway` serves it as S3 on this
   computer while it runs, and prints the restic command.
-- Not yet: Omacloud's seed nodes and relays aren't running, so `init`
-  against omacloud.computer waits on them, and without relays computers
-  behind NAT can't reach each other (docs/design.md, "Not yet").
+- omacloud.computer's network has a first seed and relay
+  (relay1.omacloud.computer); computers reach holders through the relay
+  only, so a holder never learns their address. One seed is a single
+  point until more join (docs/design.md, "Not yet").
 - Every storage alternative is gone, in favour of the network.
 - Gone: your own S3 bucket (Hetzner, R2 and others) and its bucket keys
   (`omacloud bucket`, the desktop keyring, `--coordination-bucket`,

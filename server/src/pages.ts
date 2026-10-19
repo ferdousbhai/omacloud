@@ -46,12 +46,19 @@ export const home = () =>
 	layout(
 		"Omacloud",
 		`<h1>Omacloud</h1>
-<p class="lead">Your files and settings on every Omarchy computer, end to end encrypted.</p>
-<p>Desktop, Documents and Pictures sync in place, as iCloud does. Omarchy settings, package
-lists and ssh and gpg keys follow you to every computer, and every version is kept.</p>
-<p>Everything is encrypted on your computer before it leaves it. Its storage network, coming
-soon, is held by Omarchy computers themselves: they keep each other's encrypted data without
-being trusted with it, and can't read it. There are no accounts and no sign-in.</p>
+<p class="lead">Your files and settings on all your Omarchy computers. Only you can read them.</p>
+<p>Omacloud syncs:</p>
+<ul>
+<li>Your Desktop, Documents and Pictures folders</li>
+<li>Your Omarchy settings and package lists</li>
+<li>Your SSH and GPG keys.</li>
+</ul>
+<p>Omacloud keeps all the versions of each file.</p>
+<p>Omacloud encrypts your files on your computer. Other Omarchy computers keep two copies of
+each encrypted file. Your computer keeps files for other persons. No computer can read the files
+that it keeps for other persons. This network will be available in the next release.</p>
+<p>You do not need an account, an email address or a password. Keep your recovery code in a
+safe location. If you lose all your computers, you need this code to get your data.</p>
 <h2>Get it</h2>
 <pre>curl -fsSL https://github.com/ferdousbhai/omacloud/releases/latest/download/install.sh | sudo bash</pre>
 <p>Then open Omacloud from the app launcher.</p>`,
@@ -97,8 +104,8 @@ export const llms = (env: Env) => {
 
 > Your files and settings on every Omarchy computer, end to end encrypted. Desktop, Documents
 > and Pictures sync in place; Omarchy settings, AI agent settings, Chromium, Wi-Fi, package lists
-> and ssh and gpg keys follow; every version is kept. Its storage network (coming) is held by
-> Omarchy computers themselves, untrusted, with no accounts or sign-in. Underneath it is plain
+> and ssh and gpg keys follow; every version is kept. Its storage network is held by Omarchy
+> computers themselves, untrusted, with no accounts or sign-in (it arrives with the next release). Underneath it is plain
 > restic, so restic or rustic restore everything without Omacloud.
 
 Everything is encrypted on the computer before it is stored: whoever holds the data can't read
