@@ -197,6 +197,9 @@ enum Cmd {
         #[arg(long)]
         to: Option<PathBuf>,
     },
+    /// Put this computer's copy of the account's records and index back on
+    /// the network's Worker, where it lost them (or on a new one)
+    Republish,
     /// Write a file as it was at a given version
     Restore {
         /// Path inside the synced folder
@@ -544,6 +547,8 @@ fn session(paths: &Paths, net: &NetConfig) -> Result<&'static omacloud_net::sess
         relays: net.relays.clone(),
         copies: 2,
         own: Some(*own.as_bytes()),
+        // what this computer reads and writes at the Worker, kept here too
+        mirror: Some(paths.data.join("mirror.db")),
     })?;
     Ok(SESSION.get_or_init(|| s))
 }
@@ -819,6 +824,39 @@ fn network_coordinator(paths: &Paths, config: &Config) -> Result<Option<Arc<omac
     own.insert(*omacloud_net::session::node_key(&paths.node_key())?.public().as_bytes());
     s.set_own(own);
     Ok(Some(Arc::new(coord)))
+}
+
+/// Put this computer's copy of the account's records, and of the index of
+/// its current bucket and live shares, back on the Worker where it lacks
+/// them. The write capability comes from the key this computer holds, not
+/// from the Worker, which may have nothing.
+fn republish(paths: &Paths, config: &Config, e: &Engine) -> Result<(u64, u64)> {
+    let net = config
+        .network
+        .as_ref()
+        .filter(|_| config.coordinator == NETWORK)
+        .ok_or_else(|| fail::unsupported("this account isn't on the Omacloud network"))?;
+    let password = &e
+        .state()
+        .secret
+        .as_ref()
+        .ok_or_else(|| fail::not_set_up().hint("this computer has no key yet: it needs to sync once first"))?
+        .1
+        .password;
+    let account = omacloud_net::coord::Account::from_seed(read_seed(paths)?);
+    let scope = |key: &str| omacloud_net::seal::Keys::from_secret(key).scope;
+    let mut scopes = vec![scope(&omacloud_core::repo::network_key(password))];
+    let now = omacloud_net::node::now();
+    scopes.extend(
+        net::read_shares(&paths.data)
+            .iter()
+            .filter(|s| s.until > now)
+            .map(|s| scope(&omacloud_net::share::bucket_key(&s.secret))),
+    );
+    session(paths, net)?
+        .network()
+        .republish(&account.id, &omacloud_net::coord::capability(password), &scopes)
+        .map_err(|e| fail::unavailable(format!("{e:#}")).into())
 }
 
 /// Record this computer's node among the account's, sealed.
@@ -1181,7 +1219,8 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
                 engine.request_rescan();
                 rescan_at = Some(Instant::now());
             }
-            match run_sync(&mut engine, &mut waiting, alerts.as_ref()) {
+            let put_back = |e: &Engine| republish(paths, config, e);
+            match run_sync(&mut engine, &mut waiting, alerts.as_ref(), &put_back) {
                 Synced::Stop => return Ok(Ended::Stopped),
                 Synced::Ok => {
                     // the marker read before syncing: anything written
@@ -1325,7 +1364,12 @@ enum Synced {
 }
 
 /// One sync.
-fn run_sync(engine: &mut Engine, waiting: &mut bool, alerts: Option<&alerts::Alerts>) -> Synced {
+fn run_sync(
+    engine: &mut Engine,
+    waiting: &mut bool,
+    alerts: Option<&alerts::Alerts>,
+    republish: &dyn Fn(&Engine) -> Result<(u64, u64)>,
+) -> Synced {
     match engine.sync() {
         Ok(st) => {
             *waiting = false;
@@ -1351,6 +1395,23 @@ fn run_sync(engine: &mut Engine, waiting: &mut bool, alerts: Option<&alerts::Ale
             ) =>
         {
             info!("waiting: {e}");
+        }
+        // older records than this computer saw: if the Worker lost them,
+        // this computer's copy puts them back, and the next sync goes on
+        Err(e)
+            if matches!(e.downcast_ref::<HeadError>(), Some(HeadError::Rollback { .. }))
+                || matches!(e.downcast_ref::<DeviceError>(), Some(DeviceError::Rollback { .. }))
+                || matches!(e.downcast_ref::<EpochError>(), Some(EpochError::Rollback { .. })) =>
+        {
+            match republish(engine) {
+                Ok((records, entries)) if records + entries > 0 => {
+                    warn!("the Worker had lost records ({e}): put back {records} records and {entries} index entries");
+                    return Synced::Failed;
+                }
+                Ok(_) => log::error!("refusing to sync: {e}, and nothing here to put back"),
+                Err(r) => log::error!("refusing to sync: {e}; putting this computer's copy back failed: {r:#}"),
+            }
+            return Synced::Stop;
         }
         // removed from the account, or a coordinator we can't verify: stop
         // until a human looks
@@ -1933,6 +1994,19 @@ fn run(cli: Cli) -> Out {
             Ok(Response::new(
                 json!({ "name": name, "written": dest, "size": data.len() }),
                 format!("wrote {}", dest.display()),
+            ))
+        }
+        Cmd::Republish => {
+            let config = load(&paths)?;
+            let e = engine(&paths, &config)?;
+            let (records, entries) = republish(&paths, &config, &e)?;
+            Ok(Response::new(
+                json!({ "records": records, "entries": entries }),
+                format!(
+                    "put back {} and {} of the index",
+                    counted(usize::try_from(records)?, "record"),
+                    counted(usize::try_from(entries)?, "entry").replace("entrys", "entries")
+                ),
             ))
         }
         Cmd::Restore { path, at, to, yes } => {
@@ -3210,6 +3284,7 @@ fn node(paths: &Paths, action: NodeCmd) -> Out {
                 relays,
                 copies: 2,
                 own: None,
+                mirror: None,
             })?;
             fs::create_dir_all(&paths.data)?;
             let mut c = net::Contribution::start(&s, &paths.data, give)?;

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- The account outlives the Worker: each computer keeps a sealed copy of
+  its account's records and index, reads from it while omacloud.computer
+  is out of reach, and puts it back when the Worker lost it (the daemon on
+  its own, or `omacloud republish`). A sync that finds records older than
+  it saw now says so. `server/backup.sh` copies the Worker's database off
+  Cloudflare.
+
 ## 0.0.18 (2026-10-19)
 
 - Erasure coding: objects of 1 MiB or more are kept as 4 data and 2

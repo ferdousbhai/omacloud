@@ -24,7 +24,23 @@ derive, kept only as hashes; of a request's address it keeps only the
 - `deploy.sh`: type checks, applies new migrations (the code expects them),
   then deploys with `cf`. `deploy.sh --first` also makes the secret
   `CREDIT_KEY`.
+- `backup.sh [dir]`: copies every table off Cloudflare as JSON, into
+  `<dir>/<date>/` (default `~/omacloud-backups`), readable by you alone.
 - `npm run check`: types and unit tests (`test/d1.ts` stands in for D1).
+
+## If the database is lost
+
+- Cloudflare keeps D1 restorable to any minute of the last 30 days (7 on
+  the free plan): `npx cf d1 time-travel restore <database-id>` with a
+  `--timestamp`, or a bookmark from `cf d1 time-travel get-bookmark`.
+- Every account's computers keep their own sealed copy of the account's
+  records and the index of its current bucket. A daemon that finds the
+  records older than it saw puts its copy back; `omacloud republish` does
+  it by hand. So a Worker that lost them, or a new one, is filled again by
+  the accounts themselves.
+- Nodes list themselves again within 15 minutes, by heartbeat.
+- The set of spent credits lives only here. `backup.sh`'s copy has it; lost
+  for good, tokens spent before could be traded in again.
 
 ## The credit key
 

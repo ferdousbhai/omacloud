@@ -103,6 +103,30 @@ if OMACLOUD_LINK=$long oc c receive --to "$work/gone" >/dev/null 2>&1; then
   echo "a link taken back still opened"; exit 1
 fi
 
+# the Worker loses the account's records and index (a dir: network only):
+# syncing stops rather than taking the loss for the truth, and a computer's
+# own copy puts everything back
+if [ -d "$work/worker/coord" ]; then
+  rm -rf "${work:?}/worker/coord" "${work:?}/worker/index"
+  if oc b sync >/dev/null 2>"$work/lost.txt"; then echo "synced against a Worker that lost the account"; exit 1; fi
+  grep -q "omacloud republish" "$work/lost.txt" || { cat "$work/lost.txt"; exit 1; }
+  # a's daemon finds the records older than it saw and puts its copy back
+  "$OMACLOUD" --config "$work/a.toml" watch --poll 1 >"$work/watch.log" 2>&1 &
+  watcher=$!
+  for _ in $(seq 1 120); do
+    [ -d "$work/worker/coord" ] && oc b sync >/dev/null 2>&1 && break
+    sleep 0.5
+  done
+  kill "$watcher"; wait "$watcher" 2>/dev/null || true
+  grep -q "put back" "$work/watch.log" || { cat "$work/watch.log"; exit 1; }
+  # by hand, nothing is missing now
+  [ "$(oc a republish)" = "put back 0 records and 0 entries of the index" ] || exit 1
+  echo "after the loss" >"$work/B/after.txt"
+  oc b sync >/dev/null 2>&1
+  oc a sync >/dev/null 2>&1
+  diff -r --no-dereference "$work/A" "$work/B"
+fi
+
 # the Worker's part holds nothing readable: no file names, no contents
 if [ -d "$work/worker" ] && grep -rqa -e "from a" -e "a.txt" -e "docs" "$work/worker"; then
   echo "the Worker's part holds something readable"; exit 1

@@ -105,6 +105,17 @@ pub fn classify(e: &anyhow::Error) -> CliError {
     if let Some(EpochError::Pending { .. } | EpochError::NoKey { .. }) = e.downcast_ref::<EpochError>() {
         return CliError::new("pending", EXIT_ERROR, message).hint("try again in a minute");
     }
+    // older than what this computer saw: the Worker lost records, or is
+    // hiding them; either way this computer's copy can put them back
+    let rollback = matches!(e.downcast_ref::<HeadError>(), Some(HeadError::Rollback { .. }))
+        || matches!(e.downcast_ref::<DeviceError>(), Some(DeviceError::Rollback { .. }))
+        || matches!(e.downcast_ref::<EpochError>(), Some(EpochError::Rollback { .. }));
+    if rollback {
+        return CliError::new("verification_failed", EXIT_ERROR, message).hint(
+            "the network's records are older than this computer has seen; if the Worker lost them, \
+             `omacloud republish` on a computer that synced lately puts them back",
+        );
+    }
     if e.downcast_ref::<HeadError>().is_some()
         || e.downcast_ref::<DeviceError>().is_some()
         || e.downcast_ref::<EpochError>().is_some()

@@ -214,6 +214,14 @@ before it expires: it opens nothing from then on. `omacloud shares` lists
 what this computer shared and until when. Anyone holding the link
 can do that, as anyone holding it can download the file.
 
+## If omacloud.computer goes away
+
+Each computer keeps its own sealed copy of the account's records and of
+where its files are, and reads from it while omacloud.computer is out of
+reach. If the site loses them, the daemon puts this copy back as soon as
+it notices; `omacloud republish` does the same by hand, against
+omacloud.computer or another network's Worker.
+
 ## A lost computer
 
 Remove it under Devices (or `omacloud devices revoke <fingerprint>`, which

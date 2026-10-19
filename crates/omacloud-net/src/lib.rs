@@ -11,6 +11,7 @@ pub mod credit;
 pub mod dirstore;
 pub mod erasure;
 pub mod gateway;
+pub mod mirror;
 pub mod node;
 pub mod place;
 pub mod proto;

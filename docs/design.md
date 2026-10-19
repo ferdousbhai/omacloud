@@ -164,6 +164,17 @@ sync engine. Nothing in it is trusted for anything but availability.
 - **What stays central.** The Worker keeps the node directory, the sealed
   index, the sealed coordination records, and issues credits. There are no
   accounts, emails or sign-ins: only ids and keys the computers make.
+- **Outliving the Worker** (`mirror.rs`). Each of an account's computers
+  keeps, as the Worker keeps them, the sealed records and index entries it
+  reads and writes, and the node directory. Reads fall back to that copy
+  while the Worker is out of reach. A listing that drops most of what's
+  kept reads as loss, not deletes, so a Worker that lost everything doesn't
+  wipe the copy. When a computer finds the records older than it already
+  saw, its daemon puts the copy back (`omacloud republish` by hand): the
+  account's records, made writable with the capability its own key gives,
+  then the index of the current epoch's bucket and of live shares. Only
+  what's missing is written, and logs stay create-only, so it can't
+  overwrite anything.
 
 ## Settings
 
@@ -255,7 +266,8 @@ On the network:
   what's stored and how many months the credits held pay for, but there's
   no way to just pay for more (#24).
 - OHTTP or Tor for requests to the Worker (#39), a transparency log
-  (#40), and a DHT to fall back on when the Worker is down (#41).
+  (#40), and a DHT for finding nodes when the Worker is down (#41); each
+  computer already keeps its account's records and index (above).
 
 Elsewhere:
 

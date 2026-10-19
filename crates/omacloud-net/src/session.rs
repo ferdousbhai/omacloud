@@ -6,7 +6,11 @@
 //! throwaway key each run, so a holder can't tie the blobs it's given to
 //! the node key this computer serves its own disk under.
 
-use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{Context, Result};
 pub use iroh::SecretKey;
@@ -19,6 +23,7 @@ use crate::{
     credit::{IssuerKey, Token},
     dirstore::DirStore,
     gateway::{BUCKET, Gateway},
+    mirror::Mirror,
     node::{Config, Node},
     records::Records,
     registry::{Listed, Registry},
@@ -28,19 +33,30 @@ use crate::{
 
 /// Where the Worker's part lives: the Worker, or a directory (`dir:<path>`)
 /// for a network on one machine.
-pub enum Network {
+enum Place {
     Worker(Worker),
     Dir(DirStore),
+}
+
+/// The Worker's part of the network, and this computer's copy of what it
+/// read and wrote there ([`Mirror`]), which reads fall back to when the
+/// Worker is out of reach.
+pub struct Network {
+    place: Place,
+    mirror: Option<Mirror>,
 }
 
 impl Network {
     /// # Errors
     ///
-    /// If a `dir:` network's directory can't be made.
-    pub fn open(url: &str) -> Result<Self> {
-        Ok(match url.strip_prefix("dir:") {
-            Some(path) => Self::Dir(DirStore::new(path)?),
-            None => Self::Worker(Worker::new(url)),
+    /// If a `dir:` network's directory, or the mirror, can't be opened.
+    pub fn open(url: &str, mirror: Option<&Path>) -> Result<Self> {
+        Ok(Self {
+            place: match url.strip_prefix("dir:") {
+                Some(path) => Place::Dir(DirStore::new(path)?),
+                None => Place::Worker(Worker::new(url)),
+            },
+            mirror: mirror.map(Mirror::open).transpose()?,
         })
     }
 
@@ -50,9 +66,9 @@ impl Network {
     ///
     /// If the Worker can't be reached or refuses.
     pub fn heartbeat(&self, key: &SecretKey, node: &Node, capacity: u64) -> Result<()> {
-        match self {
-            Self::Worker(w) => w.heartbeat(key, &node.addr(), capacity).map(|_| ()),
-            Self::Dir(d) => d.list_node(&node.id(), &node.addr(), capacity),
+        match &self.place {
+            Place::Worker(w) => w.heartbeat(key, &node.addr(), capacity).map(|_| ()),
+            Place::Dir(d) => d.list_node(&node.id(), &node.addr(), capacity),
         }
     }
 
@@ -62,9 +78,9 @@ impl Network {
     ///
     /// If the Worker can't be reached.
     pub fn issuer(&self) -> Result<Option<IssuerKey>> {
-        match self {
-            Self::Worker(w) => w.issuer().map(Some),
-            Self::Dir(_) => Ok(None),
+        match &self.place {
+            Place::Worker(w) => w.issuer().map(Some),
+            Place::Dir(_) => Ok(None),
         }
     }
 
@@ -74,9 +90,9 @@ impl Network {
     ///
     /// If the grant for this network is used up.
     pub fn starter(&self, n: usize) -> Result<Vec<Token>> {
-        match self {
-            Self::Worker(w) => w.starter(&w.issuer()?, n),
-            Self::Dir(_) => Ok(Vec::new()),
+        match &self.place {
+            Place::Worker(w) => w.starter(&w.issuer()?, n),
+            Place::Dir(_) => Ok(Vec::new()),
         }
     }
 
@@ -86,42 +102,143 @@ impl Network {
     ///
     /// If the Worker refuses them.
     pub fn exchange(&self, tokens: &[Token]) -> Result<Vec<Token>> {
-        match self {
-            Self::Worker(w) => w.exchange(&w.issuer()?, tokens),
-            Self::Dir(_) => Ok(Vec::new()),
+        match &self.place {
+            Place::Worker(w) => w.exchange(&w.issuer()?, tokens),
+            Place::Dir(_) => Ok(Vec::new()),
         }
     }
 
+    /// This computer's copy, when it keeps one.
+    #[must_use]
+    pub fn mirror(&self) -> Option<&Mirror> {
+        self.mirror.as_ref()
+    }
+
+    /// Put this computer's copy back where the Worker lacks it: the
+    /// account's records (made with `cap` if the account is gone), then
+    /// the index entries missing from the buckets of `scopes` (the current
+    /// epoch's, and live shares': older ones are let go). Nothing already there is
+    /// changed: logs and the anchor are create-only. Returns how many
+    /// records and entries were put back.
+    ///
+    /// # Errors
+    ///
+    /// If there's no mirror, or the Worker can't be reached or refuses.
+    pub fn republish(&self, account: &str, cap: &str, scopes: &[String]) -> Result<(u64, u64)> {
+        let m = self
+            .mirror
+            .as_ref()
+            .context("this computer keeps no copy to republish")?;
+        let (records, registry) = (self.records(), self.registry());
+        records.create_account(account, cap)?;
+        let mut put = 0;
+        for log in ["devices", "epochs", "heads"] {
+            for (seq, body) in m.log(account, log, 0)? {
+                put += u64::from(records.append(account, cap, log, seq, &body)?);
+            }
+        }
+        if let Some(body) = m.anchor(account)? {
+            put += u64::from(records.set_anchor(account, cap, &body)?);
+        }
+        for kind in ["grants", "nodes"] {
+            let there: BTreeSet<String> = records.named(account, kind, "")?.into_iter().map(|(n, _)| n).collect();
+            for (name, body) in m.named(account, kind, "")? {
+                if !there.contains(&name) {
+                    records.put_named(account, Some(cap), kind, &name, &body)?;
+                    put += 1;
+                }
+            }
+        }
+        let mut entries = 0;
+        for scope in scopes {
+            let there: BTreeSet<String> = registry.index(scope)?.into_iter().map(|(id, _)| id).collect();
+            for (id, sealed) in m.index(scope)? {
+                if !there.contains(&id) {
+                    registry.put_entry(scope, &id, &sealed)?;
+                    entries += 1;
+                }
+            }
+        }
+        Ok((put, entries))
+    }
+
     fn registry(&self) -> &dyn Registry {
-        match self {
-            Self::Worker(w) => w,
-            Self::Dir(d) => d,
+        match &self.place {
+            Place::Worker(w) => w,
+            Place::Dir(d) => d,
         }
     }
 
     fn records(&self) -> &dyn Records {
-        match self {
-            Self::Worker(w) => w,
-            Self::Dir(d) => d,
+        match &self.place {
+            Place::Worker(w) => w,
+            Place::Dir(d) => d,
+        }
+    }
+
+    /// Keep what the Worker answered in the mirror; a mirror that can't be
+    /// written only logs.
+    fn keep(&self, f: impl FnOnce(&Mirror) -> Result<()>) {
+        if let Some(m) = &self.mirror
+            && let Err(e) = f(m)
+        {
+            log::warn!("keeping a copy of the network's records: {e:#}");
+        }
+    }
+
+    /// The Worker's answer, or, when it can't be had, the mirror's.
+    fn or_kept<T>(&self, live: Result<T>, kept: impl FnOnce(&Mirror) -> Result<Option<T>>) -> Result<T> {
+        let err = match live {
+            Ok(v) => return Ok(v),
+            Err(e) => e,
+        };
+        match self.mirror.as_ref().map(kept).transpose()?.flatten() {
+            Some(v) => {
+                log::warn!("the Worker didn't answer ({err:#}); using this computer's copy");
+                Ok(v)
+            }
+            None => Err(err),
         }
     }
 }
 
 impl Registry for Network {
     fn nodes(&self) -> Result<Vec<Listed>> {
-        self.registry().nodes()
+        let live = self.registry().nodes();
+        if let Ok(nodes) = &live {
+            self.keep(|m| m.set_nodes(&serde_json::to_string(nodes)?));
+        }
+        self.or_kept(live, |m| {
+            m.nodes()?
+                .map(|j| serde_json::from_str(&j).map_err(Into::into))
+                .transpose()
+        })
     }
     fn index(&self, scope: &str) -> Result<Vec<(String, Vec<u8>)>> {
-        self.registry().index(scope)
+        let live = self.registry().index(scope);
+        if let Ok(entries) = &live {
+            self.keep(|m| m.set_index(scope, entries));
+        }
+        self.or_kept(live, |m| m.index(scope).map(Some))
     }
     fn entry(&self, scope: &str, id: &str) -> Result<Option<Vec<u8>>> {
-        self.registry().entry(scope, id)
+        let live = self.registry().entry(scope, id);
+        // kept when found; one the Worker says it hasn't stays here, as the
+        // Worker may have lost it
+        if let Ok(Some(sealed)) = &live {
+            self.keep(|m| m.put_entry(scope, id, Some(sealed)));
+        }
+        self.or_kept(live, |m| m.entry(scope, id).map(|e| e.map(Some)))
     }
     fn put_entry(&self, scope: &str, id: &str, sealed: &[u8]) -> Result<()> {
-        self.registry().put_entry(scope, id, sealed)
+        self.registry().put_entry(scope, id, sealed)?;
+        self.keep(|m| m.put_entry(scope, id, Some(sealed)));
+        Ok(())
     }
     fn delete_entry(&self, scope: &str, id: &str) -> Result<()> {
-        self.registry().delete_entry(scope, id)
+        self.registry().delete_entry(scope, id)?;
+        self.keep(|m| m.put_entry(scope, id, None));
+        Ok(())
     }
 }
 
@@ -133,25 +250,49 @@ impl Records for Network {
         self.records().replace_cap(account, cap, new)
     }
     fn log(&self, account: &str, log: &str, after: u64) -> Result<Vec<(u64, String)>> {
-        self.records().log(account, log, after)
+        let live = self.records().log(account, log, after);
+        if let Ok(records) = &live {
+            self.keep(|m| m.add_log(account, log, records));
+        }
+        self.or_kept(live, |m| m.log(account, log, after).map(Some))
     }
     fn append(&self, account: &str, cap: &str, log: &str, seq: u64, body: &str) -> Result<bool> {
-        self.records().append(account, cap, log, seq, body)
+        let added = self.records().append(account, cap, log, seq, body)?;
+        if added {
+            self.keep(|m| m.add_log(account, log, &[(seq, body.to_string())]));
+        }
+        Ok(added)
     }
     fn anchor(&self, account: &str) -> Result<Option<String>> {
-        self.records().anchor(account)
+        let live = self.records().anchor(account);
+        if let Ok(Some(body)) = &live {
+            self.keep(|m| m.set_anchor(account, body));
+        }
+        self.or_kept(live, |m| m.anchor(account).map(|a| a.map(Some)))
     }
     fn set_anchor(&self, account: &str, cap: &str, body: &str) -> Result<bool> {
-        self.records().set_anchor(account, cap, body)
+        let set = self.records().set_anchor(account, cap, body)?;
+        if set {
+            self.keep(|m| m.set_anchor(account, body));
+        }
+        Ok(set)
     }
     fn named(&self, account: &str, kind: &str, prefix: &str) -> Result<Vec<(String, String)>> {
-        self.records().named(account, kind, prefix)
+        let live = self.records().named(account, kind, prefix);
+        if let Ok(records) = &live {
+            self.keep(|m| m.set_named(account, kind, prefix, records));
+        }
+        self.or_kept(live, |m| m.named(account, kind, prefix).map(Some))
     }
     fn put_named(&self, account: &str, cap: Option<&str>, kind: &str, name: &str, body: &str) -> Result<()> {
-        self.records().put_named(account, cap, kind, name, body)
+        self.records().put_named(account, cap, kind, name, body)?;
+        self.keep(|m| m.put_named(account, kind, name, Some(body)));
+        Ok(())
     }
     fn delete_named(&self, account: &str, cap: &str, kind: &str, name: &str) -> Result<()> {
-        self.records().delete_named(account, cap, kind, name)
+        self.records().delete_named(account, cap, kind, name)?;
+        self.keep(|m| m.put_named(account, kind, name, None));
+        Ok(())
     }
     fn marker(&self, account: &str) -> Result<u64> {
         self.records().marker(account)
@@ -168,6 +309,9 @@ pub struct Options {
     pub copies: usize,
     /// This computer's own node, never a holder of its copies.
     pub own: Option<NodeId>,
+    /// Where this computer keeps its copy of the Worker's records, if it
+    /// keeps one (an account's computers do; a seed doesn't).
+    pub mirror: Option<PathBuf>,
 }
 
 pub struct Session {
@@ -207,7 +351,7 @@ impl Session {
             .enable_all()
             .thread_name("omacloud-net")
             .build()?;
-        let network = Arc::new(Network::open(&opts.url)?);
+        let network = Arc::new(Network::open(&opts.url, opts.mirror.as_deref())?);
         let own: BTreeSet<NodeId> = opts.own.into_iter().collect();
         let gateway = rt.block_on(async {
             let client = endpoint(&opts.relays, None).await?;
@@ -359,5 +503,72 @@ pub fn node_key(path: &std::path::Path) -> Result<SecretKey> {
             Ok(key)
         }
         Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_the_worker_out_of_reach_reads_come_from_the_mirror() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mirror = tmp.path().join("mirror.db");
+        let account = "0123456789abcdef0123456789abcdef";
+        {
+            let net = Network::open(&format!("dir:{}", tmp.path().join("worker").display()), Some(&mirror))?;
+            net.create_account(account, "cap")?;
+            assert!(net.append(account, "cap", "heads", 1, "sealed head")?);
+            net.put_named(account, Some("cap"), "grants", "dev-1", "sealed grant")?;
+            net.put_entry("scope", "id1", b"sealed entry")?;
+        }
+        // nothing listens there: every request fails
+        let net = Network::open("http://127.0.0.1:9", Some(&mirror))?;
+        assert_eq!(net.log(account, "heads", 0)?, [(1, "sealed head".to_string())]);
+        assert_eq!(
+            net.named(account, "grants", "dev")?,
+            [("dev-1".into(), "sealed grant".into())]
+        );
+        assert_eq!(net.entry("scope", "id1")?, Some(b"sealed entry".to_vec()));
+        // writes still need the Worker
+        assert!(net.append(account, "cap", "heads", 2, "another").is_err());
+        // and without a mirror, reads fail as before
+        assert!(
+            Network::open("http://127.0.0.1:9", None)?
+                .log(account, "heads", 0)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn republish_puts_back_only_what_the_worker_lacks() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let mirror = tmp.path().join("mirror.db");
+        let worker = tmp.path().join("worker");
+        let account = "0123456789abcdef0123456789abcdef";
+        let net = Network::open(&format!("dir:{}", worker.display()), Some(&mirror))?;
+        net.create_account(account, "cap")?;
+        net.append(account, "cap", "devices", 1, "d1")?;
+        net.append(account, "cap", "heads", 1, "h1")?;
+        net.set_anchor(account, "cap", "anchor")?;
+        net.put_named(account, Some("cap"), "nodes", "laptop", "node")?;
+        net.put_entry("scope", "id1", b"e1")?;
+        net.put_entry("old epoch", "id2", b"e2")?;
+        let scopes = ["scope".to_string()];
+        assert_eq!(net.republish(account, "cap", &scopes)?, (0, 0));
+
+        std::fs::remove_dir_all(&worker)?;
+        let net = Network::open(&format!("dir:{}", worker.display()), Some(&mirror))?;
+        // reads from the Worker that lost it don't wipe the copy
+        assert!(net.index("scope")?.is_empty());
+        assert_eq!(net.entry("scope", "id1")?, None);
+        assert_eq!(net.republish(account, "cap", &scopes)?, (4, 1));
+        assert_eq!(net.records().log(account, "heads", 0)?, [(1, "h1".to_string())]);
+        assert_eq!(net.records().anchor(account)?.as_deref(), Some("anchor"));
+        assert_eq!(net.registry().entry("scope", "id1")?, Some(b"e1".to_vec()));
+        assert!(net.registry().index("old epoch")?.is_empty());
+        assert_eq!(net.republish(account, "cap", &scopes)?, (0, 0));
+        Ok(())
     }
 }
