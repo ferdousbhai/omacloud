@@ -1907,6 +1907,7 @@ fn run(cli: Cli) -> Out {
                 made,
                 until: made + days * 86_400,
                 paid_until: 0,
+                renewed_at: 0,
             });
             net::write_shares(&paths.data, &shares)?;
             let link = omacloud_net::share::link(&net.url, &secret);

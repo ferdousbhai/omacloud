@@ -90,6 +90,8 @@ pub struct Bucket {
     /// This account's own nodes: never holders of its copies. Shared, as
     /// they're learned after the bucket is made.
     own: Own,
+    /// Holders that failed this computer lately, never chosen again.
+    avoid: Own,
     copies: usize,
     directory: Mutex<Option<(Instant, Vec<Listed>)>>,
     /// Holders that didn't answer lately, and when.
@@ -104,10 +106,26 @@ impl Bucket {
             registry,
             keys,
             own,
+            avoid: Own::default(),
             copies,
             directory: Mutex::new(None),
             down: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Never choose the holders in `avoid` (shared, as it changes).
+    #[must_use]
+    pub fn avoiding(mut self, avoid: Own) -> Self {
+        self.avoid = avoid;
+        self
+    }
+
+    /// Who may not hold a new copy: the account's own nodes, those that
+    /// failed lately, and `also`.
+    fn refused(&self, also: &BTreeSet<NodeId>) -> BTreeSet<NodeId> {
+        let mut r: BTreeSet<NodeId> = self.own.read().expect("own").union(also).copied().collect();
+        r.extend(self.avoid.read().expect("avoid").iter().copied());
+        r
     }
 
     async fn blocking<T: Send + 'static>(
@@ -208,7 +226,7 @@ impl Bucket {
     ) -> Result<Vec<Held>> {
         let nodes = self.directory(false).await?;
         let all: Vec<_> = nodes.iter().map(|n| n.node.clone()).collect();
-        let mut refused: BTreeSet<NodeId> = self.own.read().expect("own").union(avoid).copied().collect();
+        let mut refused = self.refused(avoid);
         refused.extend(held.iter().map(|h| h.node));
         // all or none of a new object's shards: there's no use for some
         if held.is_empty() && place::choose(&all, &refused, &[], shards.len(), 0).is_err() {
@@ -265,7 +283,7 @@ impl Bucket {
     /// wanted when the network is short of independent nodes.
     async fn place(&self, key: &str, data: &[u8], mut held: Vec<Held>, avoid: &BTreeSet<NodeId>) -> Result<Vec<Held>> {
         let nodes = self.directory(false).await?;
-        let mut refused: BTreeSet<NodeId> = self.own.read().expect("own").union(avoid).copied().collect();
+        let mut refused = self.refused(avoid);
         refused.extend(held.iter().map(|h| h.node));
         while held.len() < self.copies {
             let taken: Vec<_> = nodes

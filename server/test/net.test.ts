@@ -123,6 +123,7 @@ test("the directory: uptime, probation, and nodes seen in the last 72 hours with
 	const possible = hour - Math.floor((t - 20 * 86400) / 3600) + 1;
 	assert.equal(o.uptime, 11 / possible);
 	assert.equal(o.probation, false);
+	assert.equal(o.since, t - 20 * 86400);
 	// a node up longer than 30 days is counted over 720 hours
 	sqlite.prepare("UPDATE net_nodes SET first_seen = ? WHERE id = ?").run(t - 90 * 86400, old.id);
 	const again = (await (await call(env, "/api/net/nodes")).json()) as { nodes: { id: string; uptime: number }[] };

@@ -39,8 +39,9 @@ pub const MONTH: u64 = 30 * 24 * 3600;
 /// How long a new blob is kept before a renewal pays for it.
 pub const FIRST_LEASE: u64 = 7 * 24 * 3600;
 
-/// How far ahead a renewal may pay.
-pub const LONGEST_LEASE: u64 = 6 * MONTH;
+/// How far ahead a renewal may keep a blob. It's kept on credit, paid at
+/// the next renewal, so this is what a holder risks on an owner.
+pub const LONGEST_LEASE: u64 = 3 * MONTH;
 
 /// How long a paid blob is kept after its lease ends, unpaid: an account
 /// whose every computer was lost has this long to come back for it.
@@ -159,6 +160,22 @@ impl Node {
         self.sweep_as_of(now()).await
     }
 
+    /// As if `secs` had passed since each blob was stored and paid for, for
+    /// tests.
+    ///
+    /// # Errors
+    ///
+    /// If the node's database can't be written.
+    #[doc(hidden)]
+    pub fn backdate(&self, secs: u64) -> Result<()> {
+        let secs = i64::try_from(secs)?;
+        self.inner.db.lock().expect("node db").execute(
+            "UPDATE blobs SET paid_to = paid_to - ?1, expires = expires - ?1",
+            [secs],
+        )?;
+        Ok(())
+    }
+
     /// [`Self::sweep`] as if it were `now`, for tests.
     #[doc(hidden)]
     pub async fn sweep_as_of(&self, now: u64) -> Result<usize> {
@@ -200,12 +217,26 @@ fn open_db(path: &Path) -> Result<rusqlite::Connection> {
              expires INTEGER NOT NULL,
              paid INTEGER NOT NULL DEFAULT 0
          );
+         CREATE TABLE IF NOT EXISTS schema (version INTEGER NOT NULL);
          CREATE TABLE IF NOT EXISTS tokens (
              id TEXT PRIMARY KEY,
              token TEXT NOT NULL,
              deposited INTEGER NOT NULL DEFAULT 0
          );",
     )?;
+    // version 1: when each blob is paid up to (until then renewals paid
+    // ahead, so a blob from then is paid to its expiry)
+    let version: i64 = db
+        .query_row("SELECT version FROM schema", [], |r| r.get(0))
+        .optional()?
+        .unwrap_or(0);
+    if version < 1 {
+        db.execute_batch(
+            "ALTER TABLE blobs ADD COLUMN paid_to INTEGER NOT NULL DEFAULT 0;
+             UPDATE blobs SET paid_to = expires;
+             DELETE FROM schema; INSERT INTO schema VALUES (1);",
+        )?;
+    }
     Ok(db)
 }
 
@@ -259,7 +290,7 @@ impl Inner {
             "the store hashed it differently"
         );
         self.db.lock().expect("node db").execute(
-            "INSERT OR IGNORE INTO blobs (blob, size, expires) VALUES (?1, ?2, ?3)",
+            "INSERT OR IGNORE INTO blobs (blob, size, expires, paid_to) VALUES (?1, ?2, ?3, ?3)",
             params![name, size, now() + FIRST_LEASE],
         )?;
         Ok(Reply::Stored)
@@ -274,19 +305,29 @@ impl Inner {
         }
         let db = self.db.lock().expect("node db");
         let mut kept = Vec::with_capacity(blobs.len());
-        let mut bytes = 0u64;
+        // what was served unpaid: bytes kept, times the months since each
+        // was last paid for (the first week is free)
+        let mut byte_months = 0u64;
         for b in blobs {
-            let size: Option<i64> = db
-                .query_row("SELECT size FROM blobs WHERE blob = ?1", [hex::encode(b.0)], |r| {
-                    r.get(0)
-                })
+            let row: Option<(i64, i64)> = db
+                .query_row(
+                    "SELECT size, paid_to FROM blobs WHERE blob = ?1",
+                    [hex::encode(b.0)],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
                 .optional()?;
-            kept.push(size.is_some());
-            bytes += size.map_or(0, |s| u64::try_from(s).unwrap_or(0));
+            kept.push(row.is_some());
+            if let Some((size, paid_to)) = row {
+                let served = now.saturating_sub(u64::try_from(paid_to).unwrap_or(0)).div_ceil(MONTH);
+                byte_months += u64::try_from(size).unwrap_or(0) * served;
+            }
         }
+        // the grace after a lease is for blobs that were paid for; storage
+        // is free without a token key
+        let mut paid = self.issuer.is_none();
         if let Some(issuer) = &self.issuer {
-            let months = until.saturating_sub(now).div_ceil(MONTH);
-            let owed = tokens_for(bytes) * months;
+            let owed = tokens_for(byte_months);
+            paid = owed > 0;
             let mut fresh = 0u64;
             for t in &tokens {
                 if t.verify(issuer).is_err() {
@@ -302,9 +343,7 @@ impl Inner {
                 }
             }
             if fresh < owed {
-                return Ok(Reply::Refused {
-                    why: format!("{owed} tokens owed, {fresh} good ones given"),
-                });
+                return Ok(Reply::Owed { tokens: owed });
             }
             for t in &tokens {
                 if t.verify(issuer).is_ok() {
@@ -318,8 +357,9 @@ impl Inner {
         for (b, k) in blobs.iter().zip(&kept) {
             if *k {
                 db.execute(
-                    "UPDATE blobs SET expires = MAX(expires, ?1), paid = 1 WHERE blob = ?2",
-                    params![until, hex::encode(b.0)],
+                    "UPDATE blobs SET expires = MAX(expires, ?1), paid = MAX(paid, ?2), paid_to = MAX(paid_to, ?3) \
+                     WHERE blob = ?4",
+                    params![until, i64::from(paid), now, hex::encode(b.0)],
                 )?;
             }
         }

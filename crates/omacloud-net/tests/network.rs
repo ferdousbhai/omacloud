@@ -49,6 +49,7 @@ async fn network(n: u8) -> Result<Net> {
                 prefix: format!("192.0.{i}.0/24"),
                 uptime: 0.99,
                 probation: false,
+                since: 0,
             },
             addr: node.addr(),
         });
@@ -199,7 +200,16 @@ async fn upkeep_replaces_a_holder_that_left_and_one_that_dropped_its_copy() -> R
     let n = net.nodes.iter().find(|n| n.id() == dropper).expect("node");
     n.sweep_as_of(u64::MAX / 2).await?;
 
-    let r = upkeep::round(&b, 100, Some(omacloud_net::node::now() + 3600), &mut free).await?;
+    let r = upkeep::round(
+        &b,
+        100,
+        Some(upkeep::Renew {
+            until: omacloud_net::node::now() + 3600,
+            last: 0,
+        }),
+        &mut free,
+    )
+    .await?;
     assert!(r.repaired >= 2, "{r:?}");
     assert!(r.lost.is_empty(), "{r:?}");
     for i in 0..4 {

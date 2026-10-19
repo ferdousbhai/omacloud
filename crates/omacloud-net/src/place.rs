@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use rand::seq::SliceRandom;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 use crate::blob::NodeId;
@@ -26,6 +26,23 @@ pub struct Node {
     pub uptime: f32,
     /// New, without a record yet: only ever an extra copy.
     pub probation: bool,
+    /// When the directory first saw it (Unix seconds; 0 when it didn't say).
+    #[serde(default)]
+    pub since: u64,
+}
+
+/// How long a record takes to count in full.
+const TENURE: u64 = 90 * 24 * 3600;
+
+impl Node {
+    /// How strongly it's preferred: steady uptime counts most, and a record
+    /// grows over its first three months. So holding data, and earning for
+    /// it, comes with a history that a node walking away gives up.
+    fn weight(&self, now: u64) -> f64 {
+        let up = f64::from(self.uptime.clamp(0.01, 1.0));
+        let age = now.saturating_sub(self.since).min(TENURE) as f64 / TENURE as f64;
+        up * up * age.max(0.1)
+    }
 }
 
 /// Up enough to be the copy that's there when the others aren't.
@@ -55,11 +72,15 @@ pub fn choose(
     extra: usize,
 ) -> Result<Vec<Node>, PlaceError> {
     let mut rng = rand::thread_rng();
-    let mut pool: Vec<&Node> = nodes
+    let now = crate::node::now();
+    // a random order weighted to the preferred (each drawn as u^(1/w))
+    let mut pool: Vec<(f64, &Node)> = nodes
         .iter()
         .filter(|n| !exclude.contains(&n.id) && !taken.iter().any(|t| t.id == n.id))
+        .map(|n| (rng.r#gen::<f64>().powf(1.0 / n.weight(now)), n))
         .collect();
-    pool.shuffle(&mut rng);
+    pool.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let pool: Vec<&Node> = pool.into_iter().map(|(_, n)| n).collect();
     let mut chosen: Vec<Node> = Vec::new();
     let free = |n: &Node, chosen: &[Node]| {
         taken
@@ -122,6 +143,7 @@ mod tests {
             prefix: format!("10.{id}.0.0/24"),
             uptime,
             probation: false,
+            since: 0,
         }
     }
 
@@ -167,6 +189,27 @@ mod tests {
         let c = choose(&nodes, &BTreeSet::new(), &[], 2, 0).unwrap();
         assert_eq!(c.len(), 2);
         assert!(choose(&[new.clone()], &BTreeSet::new(), &[], 1, 0).is_ok());
+    }
+
+    #[test]
+    fn steady_long_standing_holders_are_chosen_more() {
+        let now = crate::node::now();
+        let mut young = node(1, 100, 0.99);
+        young.since = now - 15 * 24 * 3600;
+        let mut flaky = node(2, 200, 0.5);
+        flaky.since = now - 365 * 24 * 3600;
+        let mut steady = node(3, 300, 0.99);
+        steady.since = now - 365 * 24 * 3600;
+        let nodes = [young, flaky, steady];
+        let mut first = [0u32; 3];
+        for _ in 0..3000 {
+            // no always-on rule here: the copy is taken already
+            let held = node(9, 900, 0.99);
+            let c = choose(&nodes, &BTreeSet::new(), &[held], 1, 0).unwrap();
+            first[usize::from(c[0].id[0]) - 1] += 1;
+        }
+        assert!(first[2] > first[1] && first[1] > first[0], "{first:?}");
+        assert!(first[0] > 0, "the young still get some");
     }
 
     #[test]

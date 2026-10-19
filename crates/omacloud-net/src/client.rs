@@ -58,20 +58,31 @@ pub async fn store(ep: &Endpoint, to: &EndpointAddr, data: &[u8]) -> Result<Blob
     }
 }
 
-/// Pay a holder to keep `blobs` until `until`; which it keeps.
+/// What a holder said to a renewal.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Renewal {
+    /// Per blob, whether it's kept until the date asked.
+    Kept(Vec<bool>),
+    /// Not enough was paid: this many tokens are owed.
+    Owed(u64),
+}
+
+/// Ask a holder to keep `blobs` until `until`, paying with `tokens` for
+/// the time it kept them since last paid.
 ///
 /// # Errors
 ///
-/// If the holder can't be reached or refuses the payment.
+/// If the holder can't be reached or refuses.
 pub async fn renew(
     ep: &Endpoint,
     to: &EndpointAddr,
     blobs: Vec<BlobId>,
     until: u64,
     tokens: Vec<Token>,
-) -> Result<Vec<bool>> {
+) -> Result<Renewal> {
     match ask(ep, to, &Request::Renew { blobs, until, tokens }, None).await? {
-        Reply::Renewed { kept } => Ok(kept),
+        Reply::Renewed { kept } => Ok(Renewal::Kept(kept)),
+        Reply::Owed { tokens } => Ok(Renewal::Owed(tokens)),
         Reply::Refused { why } => anyhow::bail!("{} refused the renewal: {why}", about(to)),
         other => anyhow::bail!("{} answered {other:?}", about(to)),
     }

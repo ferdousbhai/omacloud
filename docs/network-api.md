@@ -33,8 +33,8 @@ Binary values are hex unless noted. `now` is Unix seconds.
   node can't declare its own. Nodes heartbeat every 15 minutes. At most 20
   new node ids per prefix per day.
 - `GET /api/net/nodes` answers `{"nodes": [{"id", "asn", "prefix", "uptime",
-  "probation", "addr"}]}`: every node seen in the last 72 hours with
-  `capacity > 0`. `uptime` is hours seen in the last 30 days over
+  "probation", "since", "addr"}]}`: every node seen in the last 72 hours with
+  `capacity > 0`. `since` is when it was first seen (Unix seconds). `uptime` is hours seen in the last 30 days over
   `min(720, hours since first seen)`, at most 1. `probation` is true for a
   node first seen less than 14 days ago.
 

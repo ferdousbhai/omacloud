@@ -447,6 +447,11 @@ impl Session {
         self.rt.block_on(crate::share::remove(&bucket))
     }
 
+    /// Never choose these holders (failed this computer lately) for new copies.
+    pub fn set_avoid(&self, avoid: BTreeSet<NodeId>) {
+        self.gateway.set_avoid(avoid);
+    }
+
     /// Never choose these nodes (the account's own) as holders.
     pub fn set_own(&self, own: BTreeSet<NodeId>) {
         self.gateway.set_own(own);
@@ -466,11 +471,11 @@ impl Session {
         &self,
         access_key: &str,
         audits: usize,
-        renew_until: Option<u64>,
+        renew: Option<upkeep::Renew>,
         pay: &mut (dyn FnMut(u64) -> Result<Vec<Token>> + Send),
     ) -> Result<Report> {
         let bucket = self.gateway.bucket(access_key);
-        self.rt.block_on(upkeep::round(&bucket, audits, renew_until, pay))
+        self.rt.block_on(upkeep::round(&bucket, audits, renew, pay))
     }
 }
 

@@ -17,6 +17,7 @@ use omacloud_net::{
     credit::Token,
     node::{FIRST_LEASE, MONTH, Node, now},
     session::Session,
+    upkeep::Renew,
 };
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +31,8 @@ const AUDITS: usize = 32;
 const LEASE: u64 = 2 * MONTH;
 /// Tokens asked for when the wallet runs short and nothing else pays.
 const STARTER: usize = 10;
+/// How long a holder that failed this computer is passed over.
+const SUSPECT_FOR: u64 = 30 * 24 * 3600;
 
 pub struct Contribution {
     key: omacloud_net::session::SecretKey,
@@ -109,12 +112,28 @@ impl Contribution {
             .options
             .get("access_key_id")
             .context("the repository isn't on the network")?;
+        // monthly, paying each holder for the month it kept the copies
         let renewed = read_number(&self.data.join("renewed"));
-        let renew = (now().saturating_sub(renewed) >= LEASE - MONTH).then_some(now() + LEASE);
+        let renew = (now().saturating_sub(renewed) >= LEASE - MONTH).then_some(Renew {
+            until: now() + LEASE,
+            last: renewed,
+        });
         let wallet = self.data.join("wallet.json");
         let network = session.network();
         let mut pay = |n: u64| take(&wallet, n, || network.starter(STARTER));
+        let mut suspects = read_suspects(&self.data);
+        session.set_avoid(suspects.keys().copied().collect());
         let report = session.upkeep(key, AUDITS, renew, &mut pay)?;
+        if !report.failed_nodes.is_empty() {
+            for n in &report.failed_nodes {
+                suspects.insert(*n, now() + SUSPECT_FOR);
+            }
+            session.set_avoid(suspects.keys().copied().collect());
+            write_private(
+                &self.data.join("suspects.json"),
+                &serde_json::to_vec(&hexed(&suspects))?,
+            )?;
+        }
         if renew.is_some() {
             write_private(&self.data.join("renewed"), now().to_string().as_bytes())?;
         }
@@ -145,9 +164,14 @@ impl Contribution {
             let Some(until) = s.renewal(now()) else { continue };
             let key = omacloud_net::share::bucket_key(&s.secret);
             let mut pay = |n: u64| take(&wallet, n, || network.starter(STARTER));
-            match session.upkeep(&key, 0, Some(until), &mut pay) {
+            let renew = Renew {
+                until,
+                last: s.renewed_at,
+            };
+            match session.upkeep(&key, 0, Some(renew), &mut pay) {
                 Ok(_) => {
                     s.paid_until = until;
+                    s.renewed_at = now();
                     changed = true;
                 }
                 Err(e) => warn!("keeping the shared {}: {e:#}", s.name),
@@ -185,6 +209,9 @@ pub struct Shared {
     /// Renewed this far, beyond the first lease.
     #[serde(default)]
     pub paid_until: u64,
+    /// When it was last renewed (and its holders paid up to).
+    #[serde(default)]
+    pub renewed_at: u64,
 }
 
 impl Shared {
@@ -272,6 +299,25 @@ fn read_wallet(path: &Path) -> Vec<Token> {
         .unwrap_or_default()
 }
 
+/// Holders that failed this computer, and until when they're passed over;
+/// those whose time is up are left out.
+fn read_suspects(data: &Path) -> std::collections::BTreeMap<omacloud_net::blob::NodeId, u64> {
+    let kept: std::collections::BTreeMap<String, u64> = fs::read(data.join("suspects.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    kept.into_iter()
+        .filter(|(_, until)| *until > now())
+        .filter_map(|(id, until)| Some((hex::decode(id).ok()?.try_into().ok()?, until)))
+        .collect()
+}
+
+fn hexed(
+    suspects: &std::collections::BTreeMap<omacloud_net::blob::NodeId, u64>,
+) -> std::collections::BTreeMap<String, u64> {
+    suspects.iter().map(|(id, until)| (hex::encode(id), *until)).collect()
+}
+
 fn read_number(path: &Path) -> u64 {
     fs::read_to_string(path)
         .ok()
@@ -343,6 +389,7 @@ mod tests {
             made: 0,
             until: 7 * day,
             paid_until: 0,
+            renewed_at: 0,
         };
         assert_eq!(week.renewal(0), None);
         assert_eq!(week.renewal(6 * day), None);

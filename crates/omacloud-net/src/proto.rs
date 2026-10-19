@@ -29,7 +29,10 @@ pub enum Request {
     /// Keep a blob, `size` bytes, which follow on the stream. It's kept
     /// for a first, short lease, unpaid; a renewal pays for longer.
     Store { blob: BlobId, size: u64 },
-    /// Keep these blobs until `until` (unix seconds), paid with `tokens`.
+    /// Keep these blobs until `until` (unix seconds), paying with `tokens`
+    /// for the time they were kept since last paid for: a holder is paid
+    /// for what it served, not ahead. Asked without enough, a holder
+    /// answers [`Reply::Owed`].
     Renew {
         blobs: Vec<BlobId>,
         until: u64,
@@ -53,6 +56,10 @@ pub enum Reply {
     },
     Refused {
         why: String,
+    },
+    /// What a renewal of these blobs costs now, in tokens.
+    Owed {
+        tokens: u64,
     },
 }
 

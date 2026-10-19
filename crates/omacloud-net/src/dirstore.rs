@@ -104,6 +104,7 @@ impl DirStore {
                 prefix: hex::encode(&id[..8]),
                 uptime: 1.0,
                 probation: false,
+                since: 0,
             },
             addr: addr.clone(),
         };

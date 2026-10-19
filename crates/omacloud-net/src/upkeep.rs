@@ -16,11 +16,19 @@ use rand::{Rng, seq::SliceRandom};
 use crate::{
     blob::NodeId,
     bucket::{Bucket, Entry, Held},
-    client,
+    client::{self, Renewal},
     credit::{Token, tokens_for},
     node::MONTH,
     proto::BlobId,
 };
+
+/// A renewal: keep every good copy until `until`, paying each holder for
+/// the time it kept them since the last renewal, at `last` (0: none yet).
+#[derive(Debug, Clone, Copy)]
+pub struct Renew {
+    pub until: u64,
+    pub last: u64,
+}
 
 /// What a round of upkeep found and did.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -37,6 +45,23 @@ pub struct Report {
     pub stored: u64,
     /// Tokens a month keeping every good copy costs, as holders charge.
     pub monthly: u64,
+    /// Holders that failed: an audit, a renewal, or asked more than they
+    /// could have earned.
+    pub failed_nodes: BTreeSet<NodeId>,
+}
+
+/// The most a holder keeping `bytes` can have earned since the renewal at
+/// `last` (0: none): every byte for every month begun since, at most a
+/// longest lease's worth, and at least a month's.
+#[must_use]
+pub fn most_earned(bytes: u64, last: u64, now: u64) -> u64 {
+    let longest = crate::node::LONGEST_LEASE.div_ceil(MONTH);
+    let months = if last == 0 {
+        longest
+    } else {
+        now.saturating_sub(last).div_ceil(MONTH).clamp(1, longest)
+    };
+    tokens_for(bytes * months)
 }
 
 /// One round: audit up to `audits` random copies, renew every copy until
@@ -49,7 +74,7 @@ pub struct Report {
 pub async fn round(
     bucket: &Bucket,
     audits: usize,
-    renew_until: Option<u64>,
+    renew: Option<Renew>,
     pay: &mut (dyn FnMut(u64) -> Result<Vec<Token>> + Send),
 ) -> Result<Report> {
     let mut report = Report::default();
@@ -98,7 +123,7 @@ pub async fn round(
         }
     }
 
-    if let Some(until) = renew_until {
+    if let Some(Renew { until, last }) = renew {
         let mut per_holder: BTreeMap<NodeId, Vec<(&Entry, BlobId)>> = BTreeMap::new();
         for e in &entries {
             for h in &e.holders {
@@ -108,24 +133,34 @@ pub async fn round(
             }
         }
         let now = crate::node::now();
-        let months = until.saturating_sub(now).div_ceil(MONTH);
         for (node, held) in per_holder {
             let Some(addr) = nodes.iter().find(|n| n.node.id == node).map(|n| n.addr.clone()) else {
                 continue;
             };
             let bytes: u64 = held.iter().map(|(e, _)| e.blob_size()).sum();
-            let tokens = pay(tokens_for(bytes) * months)?;
-            let blobs = held.iter().map(|(_, b)| *b).collect();
-            match client::renew(bucket.endpoint(), &addr, blobs, until, tokens).await {
-                Ok(kept) => {
+            let blobs: Vec<BlobId> = held.iter().map(|(_, b)| *b).collect();
+            // asked first without paying: the holder says what it's owed
+            let mut answer = client::renew(bucket.endpoint(), &addr, blobs.clone(), until, Vec::new()).await;
+            if let Ok(Renewal::Owed(owed)) = answer {
+                if owed > most_earned(bytes, last, now) {
+                    log::info!("{} asked {owed} tokens, more than it served", hex::encode(&node[..4]));
+                    answer = Err(anyhow::anyhow!("asked too much"));
+                } else {
+                    answer = client::renew(bucket.endpoint(), &addr, blobs, until, pay(owed)?).await;
+                }
+            }
+            match answer {
+                Ok(Renewal::Kept(kept)) => {
                     for ((e, _), k) in held.iter().zip(kept) {
                         if !k {
                             bad.entry(e.key.clone()).or_default().insert(node);
                         }
                     }
                 }
-                Err(err) => {
-                    log::info!("renewing with {}: {err:#}", hex::encode(&node[..4]));
+                Ok(Renewal::Owed(_)) | Err(_) => {
+                    if let Err(err) = &answer {
+                        log::info!("renewing with {}: {err:#}", hex::encode(&node[..4]));
+                    }
                     for (e, _) in &held {
                         bad.entry(e.key.clone()).or_default().insert(node);
                     }
@@ -135,6 +170,7 @@ pub async fn round(
     }
 
     report.failed = bad.values().map(BTreeSet::len).sum();
+    report.failed_nodes = bad.values().flatten().copied().collect();
     report.stored = entries.iter().map(|e| e.size).sum();
     let mut per_holder: BTreeMap<NodeId, u64> = BTreeMap::new();
     for e in &entries {
@@ -169,4 +205,21 @@ pub async fn round(
         }
     }
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_holder_can_ask_for_the_months_it_served_and_no_more() {
+        let gib = 1 << 30;
+        let now = 100 * MONTH;
+        assert_eq!(most_earned(gib, now - MONTH, now), 1);
+        assert_eq!(most_earned(gib, now - MONTH - 1, now), 2);
+        assert_eq!(most_earned(3 * gib, now - 10, now), 3, "at least a month");
+        assert_eq!(most_earned(gib, now - 12 * MONTH, now), 3, "at most a longest lease");
+        assert_eq!(most_earned(gib, 0, now), 3);
+        assert_eq!(most_earned(1000, now - MONTH, now), 1);
+    }
 }

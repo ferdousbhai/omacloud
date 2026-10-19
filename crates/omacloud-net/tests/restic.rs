@@ -47,6 +47,7 @@ fn two_computers_sync_through_the_network() -> Result<()> {
                     prefix: format!("192.0.{i}.0/24"),
                     uptime: 0.99,
                     probation: false,
+                    since: 0,
                 },
                 addr: node.addr(),
             });

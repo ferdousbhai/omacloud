@@ -77,7 +77,8 @@ async fn a_full_holder_refuses_and_an_unpaid_blob_goes_when_its_lease_ends() -> 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_renewal_pays_in_tokens_and_a_paid_blob_gets_its_grace() -> Result<()> {
+async fn a_holder_is_paid_for_time_served_and_a_paid_blob_gets_its_grace() -> Result<()> {
+    use client::Renewal;
     let tmp = tempfile::tempdir()?;
     let kp = KeyPairSha384PSSRandomized::generate(&mut DefaultRng, 2048)?;
     let n = holder(tmp.path(), 10 << 20, Some(kp.pk.clone())).await?;
@@ -85,25 +86,53 @@ async fn a_renewal_pays_in_tokens_and_a_paid_blob_gets_its_grace() -> Result<()>
     let blob = client::store(&me, &n.addr(), &[3u8; 1000]).await?;
     let until = now() + 2 * node::MONTH;
 
-    // two months of under a GiB: two tokens
-    let (blind, pending) = credit::ask(&kp.pk, 2)?;
+    // in its first week nothing is owed: kept on credit
+    assert_eq!(
+        client::renew(&me, &n.addr(), vec![blob], until, Vec::new()).await?,
+        Renewal::Kept(vec![true])
+    );
+    // 33 days on, two months started unpaid: under a GiB, a token each
+    n.backdate(40 * 24 * 3600)?;
+    assert_eq!(
+        client::renew(&me, &n.addr(), vec![blob], until, Vec::new()).await?,
+        Renewal::Owed(1)
+    );
+    let (blind, pending) = credit::ask(&kp.pk, 1)?;
     let signed: Vec<Vec<u8>> = blind.iter().map(|b| kp.sk.blind_sign(b).unwrap().0).collect();
     let tokens = pending.finish(&kp.pk, &signed)?;
-    let e = client::renew(&me, &n.addr(), vec![blob], until, tokens[..1].to_vec())
-        .await
-        .unwrap_err();
-    assert!(format!("{e:#}").contains("2 tokens owed"), "{e:#}");
-    let kept = client::renew(&me, &n.addr(), vec![blob, BlobId([9; 32])], until, tokens.clone()).await?;
-    assert_eq!(kept, vec![true, false]);
-    assert_eq!(n.tokens()?.len(), 2);
-    // the same tokens again buy nothing
-    let e = client::renew(&me, &n.addr(), vec![blob], until, tokens)
-        .await
-        .unwrap_err();
-    assert!(format!("{e:#}").contains("0 good ones"), "{e:#}");
+    assert_eq!(
+        client::renew(&me, &n.addr(), vec![blob, BlobId([9; 32])], until, tokens.clone()).await?,
+        Renewal::Kept(vec![true, false])
+    );
+    assert_eq!(n.tokens()?.len(), 1);
+    // paid up to now: nothing more owed, and spent tokens buy nothing later
+    assert_eq!(
+        client::renew(&me, &n.addr(), vec![blob], until, Vec::new()).await?,
+        Renewal::Kept(vec![true])
+    );
+    n.backdate(31 * 24 * 3600)?;
+    assert_eq!(
+        client::renew(&me, &n.addr(), vec![blob], until, tokens).await?,
+        Renewal::Owed(1)
+    );
 
+    let until = until - 31 * 24 * 3600;
     assert_eq!(n.sweep_as_of(until + 60).await?, 0, "kept through its grace");
     assert_eq!(n.sweep_as_of(until + node::GRACE + 60).await?, 1);
+    n.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_blob_never_paid_for_gets_no_grace() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let kp = KeyPairSha384PSSRandomized::generate(&mut DefaultRng, 2048)?;
+    let n = holder(tmp.path(), 10 << 20, Some(kp.pk.clone())).await?;
+    let me = endpoint().await?;
+    let blob = client::store(&me, &n.addr(), &[4u8; 1000]).await?;
+    let until = now() + 2 * node::MONTH;
+    client::renew(&me, &n.addr(), vec![blob], until, Vec::new()).await?;
+    assert_eq!(n.sweep_as_of(until + 60).await?, 1);
     n.shutdown().await;
     Ok(())
 }

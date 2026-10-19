@@ -71,6 +71,7 @@ export async function list(env: Env, now: number): Promise<Response> {
 			prefix: r.prefix,
 			uptime: Math.min(1, r.hours / possible),
 			probation: now - r.first_seen < PROBATION,
+			since: r.first_seen,
 			addr: JSON.parse(r.addr),
 		};
 	});

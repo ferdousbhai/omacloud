@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Holders are paid for what they served: a renewal keeps blobs on credit
+  for up to three months and pays for the time already kept, never ahead;
+  a holder asking more than it could have earned counts as failed. A
+  holder that fails an audit or a renewal gets no new copies from that
+  computer for 30 days. Placement favours steady, long-standing holders
+  (the directory now says when each node was first seen).
 - The account outlives the Worker: each computer keeps a sealed copy of
   its account's records and index, reads from it while omacloud.computer
   is out of reach, and puts it back when the Worker lost it (the daemon on

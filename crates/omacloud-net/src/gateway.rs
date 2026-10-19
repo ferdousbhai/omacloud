@@ -56,6 +56,7 @@ impl Gateway {
             ep,
             registry,
             own: Arc::new(std::sync::RwLock::new(own)),
+            avoid: Arc::default(),
             copies,
             buckets: Mutex::default(),
             uploads: Mutex::default(),
@@ -83,6 +84,11 @@ impl Gateway {
             }
         });
         Ok(Self { addr, state, task })
+    }
+
+    /// Never choose these holders for new copies, from now on.
+    pub fn set_avoid(&self, avoid: BTreeSet<NodeId>) {
+        *self.state.avoid.write().expect("avoid") = avoid;
     }
 
     /// The account's own nodes are these, from now on.
@@ -113,6 +119,8 @@ struct State {
     ep: Endpoint,
     registry: Arc<dyn Registry>,
     own: crate::bucket::Own,
+    /// Holders that failed this computer lately: never chosen again.
+    avoid: crate::bucket::Own,
     copies: usize,
     /// One bucket per key used.
     buckets: Mutex<HashMap<String, Arc<Bucket>>>,
@@ -231,13 +239,16 @@ impl State {
             .expect("buckets")
             .entry(access_key.to_string())
             .or_insert_with(|| {
-                Arc::new(Bucket::new(
-                    self.ep.clone(),
-                    self.registry.clone(),
-                    Keys::from_secret(access_key),
-                    self.own.clone(),
-                    self.copies,
-                ))
+                Arc::new(
+                    Bucket::new(
+                        self.ep.clone(),
+                        self.registry.clone(),
+                        Keys::from_secret(access_key),
+                        self.own.clone(),
+                        self.copies,
+                    )
+                    .avoiding(self.avoid.clone()),
+                )
             })
             .clone()
     }
