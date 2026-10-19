@@ -764,6 +764,115 @@ fn browsing_reads_the_latest_head_on_demand() -> Result<()> {
     Ok(())
 }
 
+/// The engine of the two that tidies (the member with the lowest key), first.
+fn tidier_first(a: Engine, b: Engine) -> (Engine, Engine) {
+    if a.device_key() < b.device_key() {
+        (a, b)
+    } else {
+        (b, a)
+    }
+}
+
+#[test]
+fn versions_older_than_kept_go_and_syncing_goes_on() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (mut a, mut b) = (w.engine("a")?, w.engine("b")?);
+    let (da, db) = (w.dir("a"), w.dir("b"));
+    let f = write(&da, "notes.md", "v1\n");
+    a.sync()?;
+    for v in ["v2\n", "v3\n"] {
+        write(&da, "notes.md", v);
+        a.notice([f.clone()]);
+        a.sync()?;
+    }
+    b.sync()?;
+    let a_is_tidier = a.device_key() < b.device_key();
+    let (mut t, mut o) = tidier_first(a, b);
+    assert_eq!(o.tidy_at_once(Duration::ZERO)?, None, "only one computer tidies");
+    // both stand on the latest: the two before it go
+    assert_eq!(t.tidy_at_once(Duration::ZERO)?, Some(2));
+    let v = t.versions(&f)?;
+    assert_eq!(v.iter().map(|v| v.seq).collect::<Vec<_>>(), [3]);
+    let e = t.restore_version(&f, 1, &w.tmp.path().join("old")).unwrap_err();
+    assert!(format!("{e:#}").contains("older than versions are kept"), "{e:#}");
+
+    let (mut a, _) = if a_is_tidier { (t, o) } else { (o, t) };
+    write(&da, "notes.md", "v4\n");
+    a.notice([f.clone()]);
+    a.sync()?;
+    let mut b = w.engine("b")?;
+    b.sync()?;
+    assert_eq!(fs::read_to_string(db.join(&f))?, "v4\n");
+    Ok(())
+}
+
+#[test]
+fn a_computer_away_keeps_the_version_it_stands_on() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (mut a, mut b) = (w.engine("a")?, w.engine("b")?);
+    let f = write(&w.dir("a"), "notes.md", "v1\n");
+    a.sync()?;
+    // `b` syncs, then is away while `a` writes on
+    b.sync()?;
+    for v in ["v2\n", "v3\n"] {
+        write(&w.dir("a"), "notes.md", v);
+        a.notice([f.clone()]);
+        a.sync()?;
+    }
+    let b_key = b.device_key();
+    let a_is_tidier = a.device_key() < b_key;
+    if a_is_tidier {
+        // only `v2`, which nobody stands on, goes
+        assert_eq!(a.tidy_at_once(Duration::ZERO)?, Some(1));
+        assert_eq!(a.versions(&f)?.iter().map(|v| v.seq).collect::<Vec<_>>(), [1, 3]);
+    } else {
+        assert_eq!(b.tidy_at_once(Duration::ZERO)?, Some(1));
+    }
+    let mut b = w.engine("b")?;
+    b.sync()?;
+    assert_eq!(fs::read_to_string(w.dir("b").join(&f))?, "v3\n");
+    assert!(
+        digest(&w.dir("b"))
+            .keys()
+            .all(|p| !p.to_string_lossy().contains("sync-conflict"))
+    );
+    Ok(())
+}
+
+#[test]
+fn a_computer_whose_version_went_compares_everything_and_loses_nothing() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (mut a, mut b) = (w.engine("a")?, w.engine("b")?);
+    let (da, db) = (w.dir("a"), w.dir("b"));
+    let f = write(&da, "notes.md", "v1\n");
+    write(&da, "other.md", "the same on both\n");
+    a.sync()?;
+    b.sync()?;
+    // `b` edits while away, and never told what it stands on (an older
+    // Omacloud)
+    write(&db, "notes.md", "b's own\n");
+    for v in ["v2\n", "v3\n"] {
+        write(&da, "notes.md", v);
+        a.notice([f.clone()]);
+        a.sync()?;
+    }
+    fs::remove_file(w.tmp.path().join("coord/synced").join(b.device_key()))?;
+    let (mut t, _) = tidier_first(a, b);
+    t.tidy_at_once(Duration::ZERO)?;
+    // the version `b` stood on is gone, with the data only it used
+    assert_eq!(t.versions(&f)?.iter().map(|v| v.seq).collect::<Vec<_>>(), [3]);
+    drop(t);
+
+    let mut b = w.engine("b")?;
+    b.sync()?;
+    let files = digest(&db);
+    assert_eq!(files[Path::new("other.md")], "the same on both\n");
+    // both sides of the changed file are there: nothing is lost
+    let contents: BTreeSet<&str> = files.values().map(String::as_str).collect();
+    assert!(contents.contains("v3\n") && contents.contains("b's own\n"), "{files:?}");
+    Ok(())
+}
+
 #[test]
 fn ignore_rules_hold_in_both_directions() -> Result<()> {
     let w = World::new(&["a", "b"])?;

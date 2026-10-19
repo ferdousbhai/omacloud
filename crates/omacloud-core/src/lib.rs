@@ -25,6 +25,10 @@ pub mod wifi;
 pub use devices::{Anchor, DeviceChain, DeviceError, JoinRequest, fingerprint};
 pub use head::{Coordinator, DirCoordinator, Head, HeadError, HeadTracker};
 pub use ignore::Ignores;
+
+/// How long earlier versions and deleted files stay restorable: the least
+/// of what iCloud, Dropbox and Google Drive keep.
+pub const VERSIONS_KEPT: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
 pub use repo::RepoSpec;
 pub use rustic_core::{jiff, repofile::MasterKey};
 pub use sync::{

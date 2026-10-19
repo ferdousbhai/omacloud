@@ -111,10 +111,11 @@ export async function putAnchor(req: Request, env: Env, id: string): Promise<Res
 	return created();
 }
 
-/** Named records: grants, join requests, and the account's computers'
- * node ids (so holders are chosen elsewhere). */
-export type Kind = "grants" | "requests" | "nodes";
-export const KINDS: ReadonlySet<string> = new Set(["grants", "requests", "nodes"]);
+/** Named records: grants, join requests, the account's computers' node
+ * ids (so holders are chosen elsewhere), and the version each computer
+ * last synced (kept when older versions go). */
+export type Kind = "grants" | "requests" | "nodes" | "bases";
+export const KINDS: ReadonlySet<string> = new Set(["grants", "requests", "nodes", "bases"]);
 
 /** GET named records of a kind, those whose name starts with a prefix. */
 export async function listRecords(env: Env, id: string, kind: Kind, prefix = ""): Promise<Response> {

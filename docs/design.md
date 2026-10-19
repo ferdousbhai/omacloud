@@ -22,7 +22,13 @@ below depends on trusting it.
 Files live in a restic repository, written through
 [rustic_core](https://github.com/rustic-rs/rustic_core) (`repo.rs`). Restic
 encrypts contents, file names and directory structure (AES-256-CTR with
-Poly1305-AES), deduplicates, and keeps every version as a snapshot. Two
+Poly1305-AES), deduplicates, and keeps each version as a snapshot, for 30
+days: once a day the member with the lowest device key forgets older ones
+(`Engine::tidy`), keeping the one each member last synced (recorded in the
+sealed `bases` records) and the one the window opens on, and prunes with
+rustic's lock-free two phases (packs younger than a day are left alone,
+packs marked for deletion wait a week, so data a computer takes up again
+in the meantime is kept). Two
 patches (`vendor/rustic_core/OMACLOUD.md`) pad pack files to Padmé sizes, so
 an object's size says little about the files in it, and let a sync rewrite
 one subtree of a snapshot without walking the whole folder.

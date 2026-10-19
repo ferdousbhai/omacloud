@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Earlier versions and deleted files stay for 30 days, then go, so an
+  account's storage no longer grows with every edit. Once a day one of
+  the account's computers lets older versions go (rustic's lock-free
+  prune: unused data is marked first, and deleted a week later if nothing
+  took it up again). The version each computer last synced is kept too,
+  so one away for months picks up where it left off; one whose version
+  went anyway compares everything and keeps both sides where they differ.
+
 ## 0.0.19 (2026-10-19)
 
 - Holders are paid for what they served: a renewal keeps blobs on credit

@@ -263,6 +263,18 @@ impl Coordinator for NetworkCoordinator {
         self.records
             .put_named(&self.account.id, None, "requests", &req.device, &body)
     }
+    fn set_synced(&self, device: &str, seq: u64) -> Result<()> {
+        let body = self.seal(&format!("bases/{device}"), &seq)?;
+        self.records
+            .put_named(&self.account.id, Some(&self.cap()?), "bases", device, &body)
+    }
+    fn synced(&self) -> Result<std::collections::BTreeMap<String, u64>> {
+        self.records
+            .named(&self.account.id, "bases", "")?
+            .iter()
+            .map(|(name, body)| Ok((name.clone(), self.open(&format!("bases/{name}"), body)?)))
+            .collect()
+    }
     fn remove_request(&self, device: &str) -> Result<()> {
         self.records
             .delete_named(&self.account.id, &self.cap()?, "requests", device)

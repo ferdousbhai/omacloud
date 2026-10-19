@@ -1127,6 +1127,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     let (quiet, longest) = (Duration::from_secs(1), Duration::from_secs(10));
     let (mut paused, mut waiting) = (false, false);
     let mut packages_at: Option<Instant> = None;
+    let mut tidied_at: Option<Instant> = None;
     let mut alerts = config
         .notifications
         .then(|| alerts::Alerts::new((!paths.is_default()).then_some(paths.config.as_path())));
@@ -1227,6 +1228,14 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
                     // since moves it again
                     seen_marker = marker;
                     full_at = Some(Instant::now());
+                    // daily: versions past the window go (one computer of
+                    // the account does it)
+                    if tidied_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(24 * 3600)) {
+                        tidied_at = Some(Instant::now());
+                        if let Err(e) = engine.tidy(omacloud_core::VERSIONS_KEPT) {
+                            warn!("letting old versions go: {e:#}");
+                        }
+                    }
                 }
                 Synced::Failed => seen_marker = None,
             }

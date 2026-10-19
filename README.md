@@ -186,8 +186,10 @@ omacloud secrets restore --from laptop    # ssh and gpg keys: asks for the recov
 
 ## Versions and leaving
 
-Every change is kept: `omacloud versions notes.md` lists a file's versions,
-and `omacloud restore notes.md --at 3` brings one back. `omacloud deleted`
+Earlier versions and deleted files stay for 30 days, the least of what
+iCloud, Dropbox and Google Drive keep, which keeps what your account
+stores (and spends credits on) small: `omacloud versions notes.md` lists
+a file's versions, and `omacloud restore notes.md --at 3` brings one back. `omacloud deleted`
 lists the files deleted in the last 30 days (`--days` for longer) with the
 version to restore, and the app's Recently Deleted, under Overview, puts
 one back where it was.

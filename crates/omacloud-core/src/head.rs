@@ -8,7 +8,7 @@
 //! if its signer was a valid device at that position (see [`crate::devices`]).
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::ErrorKind,
     path::{Path, PathBuf},
@@ -174,6 +174,16 @@ pub trait Coordinator: Send + Sync {
     /// Drop a join request (after approving or declining it).
     fn remove_request(&self, device: &str) -> Result<()>;
 
+    /// Record that `device` last synced head `seq`, so the version it
+    /// stands on is kept when older ones go. The default records nothing.
+    fn set_synced(&self, _device: &str, _seq: u64) -> Result<()> {
+        Ok(())
+    }
+    /// The head each device last synced, as recorded.
+    fn synced(&self) -> Result<BTreeMap<String, u64>> {
+        Ok(BTreeMap::new())
+    }
+
     /// A new epoch began with `secret` (`previous` is the one before, none
     /// for the account's first): a coordinator whose writes depend on the
     /// epoch moves them over. Called by whoever started it.
@@ -214,7 +224,9 @@ impl DirCoordinator {
     /// If the directories can't be created.
     pub fn new(dir: impl Into<PathBuf>) -> Result<Self> {
         let dir = dir.into();
-        for sub in ["heads", "devices", "epochs", "grants", "requests", "keys", "key-acks"] {
+        for sub in [
+            "heads", "devices", "epochs", "grants", "requests", "keys", "key-acks", "synced",
+        ] {
             fs::create_dir_all(dir.join(sub)).with_context(|| format!("creating {}", dir.join(sub).display()))?;
         }
         Ok(Self { dir })
@@ -352,6 +364,24 @@ impl Coordinator for DirCoordinator {
         let path = self.dir.join("requests").join(format!("{}.json", req.device));
         fs::write(path, serde_json::to_vec_pretty(req)?)?;
         Ok(())
+    }
+    fn set_synced(&self, device: &str, seq: u64) -> Result<()> {
+        fs::create_dir_all(self.dir.join("synced"))?;
+        fs::write(self.dir.join("synced").join(device), seq.to_string())?;
+        Ok(())
+    }
+    fn synced(&self) -> Result<BTreeMap<String, u64>> {
+        let mut out = BTreeMap::new();
+        let Ok(dir) = fs::read_dir(self.dir.join("synced")) else {
+            return Ok(out);
+        };
+        for e in dir {
+            let e = e?;
+            if let Ok(seq) = fs::read_to_string(e.path())?.trim().parse() {
+                _ = out.insert(e.file_name().to_string_lossy().into_owned(), seq);
+            }
+        }
+        Ok(out)
     }
     fn remove_request(&self, device: &str) -> Result<()> {
         match fs::remove_file(self.dir.join("requests").join(format!("{device}.json"))) {

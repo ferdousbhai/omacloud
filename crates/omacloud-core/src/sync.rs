@@ -34,9 +34,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use ed25519_dalek::SigningKey;
 use log::{debug, info, trace, warn};
 use rustic_core::{
-    CheckOptions, Id, SnapshotOptions, TreeEdit, TreeId,
-    jiff::{Timestamp, tz::TimeZone},
-    repofile::{Metadata, Node, NodeType},
+    CheckOptions, Id, LimitOption, PruneOptions, SnapshotOptions, TreeEdit, TreeId,
+    jiff::{self, Timestamp, tz::TimeZone},
+    repofile::{Metadata, Node, NodeType, SnapshotFile},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -273,6 +273,9 @@ pub struct State {
     /// seconds since the epoch.
     #[serde(default)]
     pub synced_at: u64,
+    /// The head this device last told the coordinator it synced.
+    #[serde(default)]
+    pub told_synced: u64,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -750,14 +753,16 @@ impl Engine {
                 head.epoch == old_epoch,
                 "another device rotated the key at the same time"
             );
+            let src = old_spec.open(&old_secret.key)?;
+            // the versions still kept; older ones went with tidying
+            let kept: BTreeSet<String> = src.get_all_snapshots()?.iter().map(|s| snapshot_hex(&s.id)).collect();
             let ids: Vec<String> = self
                 .coord
                 .since(0)?
                 .iter()
                 .filter_map(|h| self.state.epochs.map(&h.snapshot, h.epoch, old_epoch))
-                .filter(|id| !map.contains_key(id))
+                .filter(|id| !map.contains_key(id) && kept.contains(id))
                 .collect();
-            let src = old_spec.open(&old_secret.key)?;
             map.extend(copy_snapshots(&src, &new_spec, &secret.key, &ids)?);
             let current = self
                 .state
@@ -1511,7 +1516,27 @@ impl Engine {
         self.capture_merged();
         let stats = self.sync_rounds()?;
         self.apply_merged();
+        self.tell_synced();
         Ok(stats)
+    }
+
+    /// Tell the coordinator the head this device stands on, when it moved,
+    /// so tidying keeps that version. Best effort: a failure only logs, and
+    /// the next sync tries again.
+    fn tell_synced(&mut self) {
+        let Some(seq) = self.state.base.as_ref().map(|b| b.seq) else {
+            return;
+        };
+        if seq == self.state.told_synced {
+            return;
+        }
+        match self.coord.set_synced(&self.device_key(), seq) {
+            Ok(()) => {
+                self.state.told_synced = seq;
+                _ = self.save_state();
+            }
+            Err(e) => debug!("telling the coordinator what this device synced: {e:#}"),
+        }
     }
 
     fn refresh_dormant(&mut self) {
@@ -1544,7 +1569,18 @@ impl Engine {
                 bail!(EpochError::Pending { epoch: h.epoch });
             }
             let repo = self.open_repo()?;
-            let base = self.base_tree()?;
+            let mut base = self.base_tree()?;
+            // a computer away longer than versions are kept may find the
+            // tree it last synced gone: it starts again from nothing,
+            // comparing everything, keeping both sides where they differ
+            if let Some(tree) = base
+                && repo.get_tree(&tree).is_err()
+            {
+                warn!("the version this computer last synced is no longer kept: comparing everything");
+                self.state.base = None;
+                self.rescan = true;
+                base = None;
+            }
             self.refresh_synced(&repo, base)?;
             if std::mem::take(&mut self.rescan) {
                 self.queue_rescan(&repo)?;
@@ -1583,6 +1619,93 @@ impl Engine {
         Ok(stats)
     }
 
+    /// Let versions older than `keep` go. Every snapshot from within it
+    /// stays, with the newest before it (the state the window opens on, so
+    /// whatever was there at any moment in it can come back), the latest,
+    /// and the one each member computer last synced. The data only the others used is marked
+    /// for deletion, and deleted by a later tidy if nothing took it up
+    /// again: rustic's lock-free prune, safe beside other computers
+    /// syncing. Only one computer of an account tidies, the member with the
+    /// lowest device key, so two never prune at once. Returns how many
+    /// versions went, or `None` when another computer is the one to tidy.
+    ///
+    /// # Errors
+    ///
+    /// On repository errors.
+    pub fn tidy(&mut self, keep: Duration) -> Result<Option<usize>> {
+        self.tidy_as(keep, false)
+    }
+
+    /// [`Self::tidy`], deleting unused data at once rather than marking it:
+    /// for tests, where nothing else syncs meanwhile.
+    ///
+    /// # Errors
+    ///
+    /// On repository errors.
+    #[doc(hidden)]
+    pub fn tidy_at_once(&mut self, keep: Duration) -> Result<Option<usize>> {
+        self.tidy_as(keep, true)
+    }
+
+    fn tidy_as(&mut self, keep: Duration, at_once: bool) -> Result<Option<usize>> {
+        self.state.devices.advance(self.coord.as_ref())?;
+        let me = self.device_key();
+        if self.state.devices.members().valid.keys().next() != Some(&me) {
+            return Ok(None);
+        }
+        // the versions the members stand on stay, so a computer away for
+        // months picks up where it left off; an error here keeps them all
+        let members = self.state.devices.members().valid;
+        let heads = self.verified_history()?;
+        let mut standing: BTreeSet<String> = self
+            .coord
+            .synced()?
+            .into_iter()
+            .filter(|(device, _)| members.contains_key(device))
+            .filter_map(|(_, seq)| self.snapshot_now(heads.iter().find(|h| h.seq == seq)?))
+            .collect();
+        standing.extend(self.state.base.as_ref().map(|b| b.snapshot.clone()));
+        let repo = self.open_repo()?;
+        let mut snaps = repo.get_all_snapshots()?;
+        snaps.sort_by_key(|s| s.time.timestamp());
+        let cutoff = Timestamp::now() - jiff::SignedDuration::try_from(keep)?;
+        let opens = snaps.iter().rposition(|s| s.time.timestamp() < cutoff);
+        let gone: Vec<_> = snaps
+            .iter()
+            .enumerate()
+            .filter(|(i, s)| {
+                s.time.timestamp() < cutoff
+                    && Some(*i) != opens
+                    && *i + 1 != snaps.len()
+                    && !standing.contains(&snapshot_hex(&s.id))
+            })
+            .map(|(_, s)| s.id)
+            .collect();
+        if !gone.is_empty() {
+            repo.delete_snapshots(&gone)?;
+            info!(
+                "let {} versions older than {} days go",
+                gone.len(),
+                keep.as_secs() / 86_400
+            );
+        }
+        // packs written in the last day may be a push still underway; packs
+        // marked for deletion wait a week, for a computer reusing their data
+        let repo = self.open_repo()?;
+        let opts = if at_once {
+            PruneOptions::default()
+                .instant_delete(true)
+                .max_unused(LimitOption::Percentage(0))
+        } else {
+            PruneOptions::default()
+                .keep_pack(jiff::Span::new().hours(24))
+                .keep_delete(jiff::Span::new().hours(7 * 24))
+        };
+        let plan = repo.prune_plan(&opts)?;
+        repo.prune(&opts, plan)?;
+        Ok(Some(gone.len()))
+    }
+
     /// Every version of `path` in the folder's history, oldest first: one
     /// entry per head where the path's content, link target or mode changed.
     /// The history is verified the same way a sync verifies it.
@@ -1593,21 +1716,11 @@ impl Engine {
     pub fn versions(&mut self, path: &Path) -> Result<Vec<Version>> {
         let heads = self.verified_history()?;
         let repo = self.open_repo()?;
-        let ids: Vec<String> = heads.iter().filter_map(|h| self.snapshot_now(h)).collect();
-        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-        let snaps: BTreeMap<String, _> = repo
-            .get_snapshots(&ids)?
-            .into_iter()
-            .map(|s| (snapshot_hex(&s.id), s))
-            .collect();
         let trees = Trees::new(&repo);
         let mut out: Vec<Version> = Vec::new();
         let mut last: Option<Node> = None;
-        for head in &heads {
-            let snap = self
-                .snapshot_now(head)
-                .and_then(|id| snaps.get(&id))
-                .ok_or_else(|| anyhow!("snapshot of head {} missing", head.seq))?;
+        for (head, snap) in self.kept_history(&repo, &heads)? {
+            let head = &head;
             let node = trees.lookup(Some(snap.tree), path)?.filter(is_leaf);
             let changed = match (&last, &node) {
                 (None, None) => false,
@@ -1639,17 +1752,10 @@ impl Engine {
     pub fn deleted(&mut self, since: Timestamp) -> Result<Vec<Deleted>> {
         let heads = self.verified_history()?;
         let repo = self.open_repo()?;
-        let ids: Vec<String> = heads.iter().filter_map(|h| self.snapshot_now(h)).collect();
-        let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
-        let mut snaps: BTreeMap<String, _> = repo
-            .get_snapshots(&ids)?
+        let history: Vec<_> = self
+            .kept_history(&repo, &heads)?
             .into_iter()
-            .map(|s| (snapshot_hex(&s.id), s))
-            .collect();
-        // heads whose snapshot wasn't kept are passed over
-        let history: Vec<_> = heads
-            .iter()
-            .filter_map(|h| Some((h.seq, snaps.remove(&self.snapshot_now(h)?)?)))
+            .map(|(h, snap)| (h.seq, snap))
             .collect();
         let trees = Trees::new(&repo);
         let read = |id: Option<TreeId>| id.map_or_else(|| Ok(BTreeMap::new()), |id| Ok((*trees.nodes(id)?).clone()));
@@ -1696,14 +1802,10 @@ impl Engine {
     pub fn browse(&mut self) -> Result<crate::browse::Browse> {
         let heads = self.verified_history()?;
         let repo = self.open_repo()?;
-        let Some((seq, id)) = heads.iter().rev().find_map(|h| Some((h.seq, self.snapshot_now(h)?))) else {
+        let Some((head, snap)) = self.kept_history(&repo, &heads)?.pop() else {
             return Ok(crate::browse::Browse::new(repo, None, 0));
         };
-        let snap = repo
-            .get_snapshots(&[id.as_str()])?
-            .pop()
-            .ok_or_else(|| anyhow!("snapshot of head {seq} missing"))?;
-        Ok(crate::browse::Browse::new(repo, Some(snap.tree), seq))
+        Ok(crate::browse::Browse::new(repo, Some(snap.tree), head.seq))
     }
 
     /// Write `path` as it was at head `seq` to `dest`, outside the synced
@@ -1719,13 +1821,10 @@ impl Engine {
             .find(|h| h.seq == seq)
             .ok_or_else(|| anyhow!("no head {seq}"))?;
         let repo = self.open_repo()?;
-        let id = self
-            .snapshot_now(head)
-            .ok_or_else(|| anyhow!("snapshot of head {seq} was not kept"))?;
-        let snap = repo
-            .get_snapshots(&[id.as_str()])?
+        let (_, snap) = self
+            .kept_history(&repo, std::slice::from_ref(head))?
             .pop()
-            .ok_or_else(|| anyhow!("snapshot of head {seq} missing"))?;
+            .ok_or_else(|| anyhow!("version {seq} is older than versions are kept"))?;
         let node = Trees::new(&repo)
             .lookup(Some(snap.tree), path)?
             .filter(|n| n.is_file())
@@ -1739,6 +1838,20 @@ impl Engine {
             f.set_permissions(fs::Permissions::from_mode(mode & 0o777))?;
         }
         Ok(())
+    }
+
+    /// Each of `heads` whose snapshot is still kept, with it, in order:
+    /// [`Engine::tidy`] lets old ones go.
+    fn kept_history(&self, repo: &Repo, heads: &[Head]) -> Result<Vec<(Head, SnapshotFile)>> {
+        let all: BTreeMap<String, SnapshotFile> = repo
+            .get_all_snapshots()?
+            .into_iter()
+            .map(|s| (snapshot_hex(&s.id), s))
+            .collect();
+        Ok(heads
+            .iter()
+            .filter_map(|h| Some((h.clone(), all.get(&self.snapshot_now(h)?)?.clone())))
+            .collect())
     }
 
     /// The id in the current epoch of the snapshot `head` names.

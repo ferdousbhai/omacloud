@@ -140,7 +140,7 @@ impl Network {
         if let Some(body) = m.anchor(account)? {
             put += u64::from(records.set_anchor(account, cap, &body)?);
         }
-        for kind in ["grants", "nodes"] {
+        for kind in ["grants", "nodes", "bases"] {
             let there: BTreeSet<String> = records.named(account, kind, "")?.into_iter().map(|(n, _)| n).collect();
             for (name, body) in m.named(account, kind, "")? {
                 if !there.contains(&name) {
