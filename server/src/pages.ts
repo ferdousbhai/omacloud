@@ -54,8 +54,8 @@ export const home = () =>
 <li>Your SSH and GPG keys.</li>
 </ul>
 <p>Omacloud keeps all the versions of each file.</p>
-<p>Omacloud encrypts your files on your computer. Other Omarchy computers keep two copies of
-each encrypted file. Your computer keeps files for other persons. No computer can read the files
+<p>Omacloud encrypts your files on your computer. Other Omarchy computers keep each encrypted
+file, on more than one computer. Your computer keeps files for other persons. No computer can read the files
 that it keeps for other persons. This network will be available in the next release.</p>
 <p>You do not need an account, an email address or a password. Keep your recovery code in a
 safe location. If you lose all your computers, you need this code to get your data.</p>

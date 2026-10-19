@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Erasure coding: objects of 1 MiB or more are kept as 4 data and 2
+  parity shards on six holders on different networks, 1.5 times their
+  size, and survive two holders going (two copies take twice their size
+  and survive one). Small objects, and everything while the network has
+  fewer than six independent nodes, stay as two copies. Audits run at
+  once, and a holder that doesn't answer in 10 seconds is passed over.
 - Share a file by link: `omacloud share <file>` prints a link that opens
   it for 7 days; `omacloud receive` downloads it on any computer with
   Omacloud, no account needed. The key is only in the link, after the `#`.

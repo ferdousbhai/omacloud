@@ -799,8 +799,8 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
             Some(stored) => (
                 format!("Storing {}", human(stored)),
                 match space["months"].as_u64() {
-                    Some(m) => format!("Kept twice. Credit for about {m} more months at this size"),
-                    None => "Kept twice".to_string(),
+                    Some(m) => format!("Credit for about {m} more months at this size"),
+                    None => "Kept on other Omarchy computers".to_string(),
                 },
             ),
             None => (

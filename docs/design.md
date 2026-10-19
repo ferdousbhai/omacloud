@@ -95,12 +95,20 @@ sync engine. Nothing in it is trusted for anything but availability.
   giving some disk space while its daemon runs (20 GiB unless told
   otherwise, `omacloud node give`); `omacloud node run` runs one with no
   account, as seeds do. The owner's computer picks holders from the public
-  node directory (`place.rs`): two copies per object, on different
+  node directory (`place.rs`): two copies per object (or six shards, below), on different
   networks (ASN and /24 or /48 as the Worker saw them), one of them always
   on (95% uptime or more) when there is one, never a node of the
   account's own computers (each records its node id, sealed, among the
   account's records). New nodes are on probation and come last: they hold
   copies only when established nodes run out, as on a new network.
+- **Shards** (`erasure.rs`). An object of 1 MiB or more (restic's data
+  packs) is coded 4+2: its four slices and two parity shards, each on its
+  own holder on its own network, any four of which rebuild it. That keeps
+  1.5 times its size and survives two holders going, where two copies keep
+  twice it and survive one. A range is read from the slices it falls in;
+  a slice that doesn't come is rebuilt from four shards asked at once.
+  While the network has fewer than six independent nodes, large objects
+  are kept as two copies too.
 - **What a holder keeps** (`node.rs`): a blob only if its bytes hash to the
   id it was stored under. Anyone may read any blob, as it's ciphertext. A
   first lease is 7 days, unpaid; renewals pay in tokens, and a blob that
@@ -242,7 +250,6 @@ On the network:
 - One seed and one relay, at one provider (Hetzner, Helsinki): while the
   network is small, most copies have one always-on home, on one network.
   Seeds at other providers would remove that single point (#33).
-- Erasure coding (4+2) in place of two whole copies (#34).
 - Space is earned by giving it, plus a small starter grant. The app shows
   what's stored and how many months the credits held pay for, but there's
   no way to just pay for more (#24).

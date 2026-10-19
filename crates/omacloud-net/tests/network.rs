@@ -238,3 +238,74 @@ async fn a_shared_file_opens_with_its_secret_only() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_large_object_is_coded_and_survives_two_holders_going() -> Result<()> {
+    use omacloud_net::upkeep;
+    let mut net = network(9).await?;
+    let b = bucket(&net, "pw").await?;
+    let mut nodes = std::mem::take(&mut net.nodes);
+    let object: Vec<u8> = (0..(3u32 << 20)).map(|i| (i % 253) as u8).collect();
+    b.put("data/bb/big", &object).await?;
+    let e = b.entry("data/bb/big").await?.expect("indexed");
+    let coded = e.coded.expect("coded");
+    assert_eq!(e.holders.len(), 6);
+    assert_eq!(e.blob_size(), coded.shard);
+    let shards: Vec<_> = e.holders.iter().map(|h| h.shard).collect();
+    assert_eq!(shards, (0..6).map(Some).collect::<Vec<_>>());
+
+    // a range across two data shards, read from them alone
+    let r = coded.shard - 10..coded.shard + 10;
+    let at = |r: &std::ops::Range<u64>| object[r.start as usize..r.end as usize].to_vec();
+    assert_eq!(b.get("data/bb/big", Some(r.clone())).await?, Some(at(&r)));
+
+    // two holders stop, one with a data shard the range needs
+    let mut stop = async |id: [u8; 32]| {
+        let i = nodes.iter().position(|n| n.id() == id).expect("node");
+        nodes.swap_remove(i).shutdown().await;
+    };
+    stop(e.holders[0].node).await;
+    stop(e.holders[5].node).await;
+    assert_eq!(b.get("data/bb/big", None).await?, Some(object.clone()));
+    assert_eq!(b.get("data/bb/big", Some(r.clone())).await?, Some(at(&r)));
+
+    // upkeep finds them gone and gives their shards new holders
+    let mut free = |_| Ok(Vec::new());
+    let report = upkeep::round(&b, 6, None, &mut free).await?;
+    assert_eq!(report.repaired, 1, "{report:?}");
+    let after = b.entry("data/bb/big").await?.expect("indexed");
+    assert_eq!(after.holders.len(), 6);
+    assert!(
+        after
+            .holders
+            .iter()
+            .all(|h| h.node != e.holders[0].node && h.node != e.holders[5].node)
+    );
+    assert_eq!(b.get("data/bb/big", None).await?, Some(object.clone()));
+
+    // with three more gone, the shards left can't rebuild it
+    for h in &after.holders[..3] {
+        stop(h.node).await;
+    }
+    assert!(b.get("data/bb/big", None).await.is_err());
+    for n in nodes {
+        n.shutdown().await;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn on_a_small_network_a_large_object_is_copied_whole() -> Result<()> {
+    let net = network(3).await?;
+    let b = bucket(&net, "pw").await?;
+    let object = vec![7u8; 2 << 20];
+    b.put("data/cc/big", &object).await?;
+    let e = b.entry("data/cc/big").await?.expect("indexed");
+    assert!(e.coded.is_none());
+    assert_eq!(e.holders.len(), 2);
+    assert_eq!(b.get("data/cc/big", Some(5..9)).await?, Some(vec![7u8; 4]));
+    for n in net.nodes {
+        n.shutdown().await;
+    }
+    Ok(())
+}

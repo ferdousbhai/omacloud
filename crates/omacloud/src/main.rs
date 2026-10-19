@@ -2978,7 +2978,7 @@ fn node(paths: &Paths, action: NodeCmd) -> Out {
             match space["stored"].as_u64() {
                 Some(stored) => say!(
                     out,
-                    "\nstoring {} (kept twice), {} tokens a month\ntokens held: {}{}",
+                    "\nstoring {}, {} tokens a month\ntokens held: {}{}",
                     net::human(stored),
                     space["monthly"],
                     space["tokens"],

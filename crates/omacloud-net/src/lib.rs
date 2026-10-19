@@ -9,6 +9,7 @@ pub mod client;
 pub mod coord;
 pub mod credit;
 pub mod dirstore;
+pub mod erasure;
 pub mod gateway;
 pub mod node;
 pub mod place;

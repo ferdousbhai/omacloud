@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use rand::{Rng, seq::SliceRandom};
 
 use crate::{
@@ -72,17 +73,26 @@ pub async fn round(
         .filter(|(e, h)| !bad.get(&e.key).is_some_and(|b| b.contains(&h.node)))
         .collect();
     copies.shuffle(&mut rand::thread_rng());
-    for (e, h) in copies.into_iter().take(audits) {
-        let Some(addr) = nodes.iter().find(|n| n.node.id == h.node).map(|n| n.addr.clone()) else {
-            continue;
-        };
-        let (start, len) = {
-            let mut rng = rand::thread_rng();
-            let len = e.size.min(1024);
-            (rng.gen_range(0..=e.size - len), len)
-        };
+    // all at once: a holder that's gone costs its timeout, not the round's
+    let mut checks: FuturesUnordered<_> = copies
+        .into_iter()
+        .take(audits)
+        .filter_map(|(e, h)| {
+            let addr = nodes.iter().find(|n| n.node.id == h.node)?.addr.clone();
+            let (start, len) = {
+                let mut rng = rand::thread_rng();
+                let len = e.blob_size().min(1024);
+                (rng.gen_range(0..=e.blob_size() - len), len)
+            };
+            Some(async move {
+                let read = client::read(bucket.endpoint(), &addr, h.blob, Some(start..start + len)).await;
+                (e, h, read)
+            })
+        })
+        .collect();
+    while let Some((e, h, read)) = checks.next().await {
         report.audited += 1;
-        if let Err(err) = client::read(bucket.endpoint(), &addr, h.blob, Some(start..start + len)).await {
+        if let Err(err) = read {
             log::info!("{} failed an audit of {}: {err:#}", hex::encode(&h.node[..4]), e.key);
             bad.entry(e.key.clone()).or_default().insert(h.node);
         }
@@ -103,7 +113,7 @@ pub async fn round(
             let Some(addr) = nodes.iter().find(|n| n.node.id == node).map(|n| n.addr.clone()) else {
                 continue;
             };
-            let bytes: u64 = held.iter().map(|(e, _)| e.size).sum();
+            let bytes: u64 = held.iter().map(|(e, _)| e.blob_size()).sum();
             let tokens = pay(tokens_for(bytes) * months)?;
             let blobs = held.iter().map(|(_, b)| *b).collect();
             match client::renew(bucket.endpoint(), &addr, blobs, until, tokens).await {
@@ -129,16 +139,20 @@ pub async fn round(
     let mut per_holder: BTreeMap<NodeId, u64> = BTreeMap::new();
     for e in &entries {
         for h in &e.holders {
-            *per_holder.entry(h.node).or_default() += e.size;
+            *per_holder.entry(h.node).or_default() += e.blob_size();
         }
     }
     report.monthly = per_holder.values().map(|b| tokens_for(*b)).sum();
     // fewest good copies first: those are nearest to being lost
     let mut repairs: Vec<&Entry> = entries
         .iter()
-        .filter(|e| e.size > 0 && (bad.contains_key(&e.key) || e.holders.len() < bucket.copies()))
+        .filter(|e| e.size > 0 && (bad.contains_key(&e.key) || e.holders.len() < e.wanted(bucket.copies())))
         .collect();
-    repairs.sort_by_key(|e| e.holders.len() - bad.get(&e.key).map_or(0, BTreeSet::len));
+    // holders to spare: those with none are next to being lost
+    repairs.sort_by_key(|e| {
+        let good = e.holders.len() - bad.get(&e.key).map_or(0, BTreeSet::len);
+        good.saturating_sub(e.needed())
+    });
     // a node that failed any copy gets none of the new ones
     let suspects: BTreeSet<NodeId> = bad.values().flatten().copied().collect();
     for e in repairs {
@@ -148,7 +162,7 @@ pub async fn round(
             Ok(false) => {}
             Err(err) => {
                 log::warn!("repairing {}: {err:#}", e.key);
-                if e.holders.iter().all(|h| gone.contains(&h.node)) {
+                if e.holders.iter().filter(|h| !gone.contains(&h.node)).count() < e.needed() {
                     report.lost.push(e.key.clone());
                 }
             }

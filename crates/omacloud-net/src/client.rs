@@ -1,9 +1,9 @@
 //! An account's computer talking to holders: storing, renewing, reading.
 
-use std::ops::Range;
+use std::{ops::Range, time::Duration};
 
 use anyhow::{Context, Result};
-use iroh::{Endpoint, EndpointAddr};
+use iroh::{Endpoint, EndpointAddr, endpoint::Connection};
 use iroh_blobs::{
     protocol::{ChunkRanges, ChunkRangesExt, GetRequest},
     store::mem::MemStore,
@@ -15,11 +15,20 @@ use crate::{
     proto::{self, BlobId, Reply, Request},
 };
 
-async fn ask(ep: &Endpoint, to: &EndpointAddr, request: &Request, body: Option<&[u8]>) -> Result<Reply> {
-    let conn = ep
-        .connect(to.clone(), proto::ALPN)
+/// How long reaching a holder may take: one that's gone shouldn't hold up
+/// a read that others can answer.
+const CONNECT: Duration = Duration::from_secs(10);
+
+async fn connect(ep: &Endpoint, to: &EndpointAddr, alpn: &[u8]) -> Result<Connection> {
+    tokio::time::timeout(CONNECT, ep.connect(to.clone(), alpn))
         .await
-        .with_context(|| format!("reaching {}", about(to)))?;
+        .map_err(|_| anyhow::anyhow!("no answer in {}s", CONNECT.as_secs()))
+        .and_then(|c| Ok(c?))
+        .with_context(|| format!("reaching {}", about(to)))
+}
+
+async fn ask(ep: &Endpoint, to: &EndpointAddr, request: &Request, body: Option<&[u8]>) -> Result<Reply> {
+    let conn = connect(ep, to, proto::ALPN).await?;
     let (mut send, mut recv) = conn.open_bi().await?;
     proto::send(&mut send, request).await?;
     if let Some(body) = body {
@@ -90,10 +99,7 @@ pub async fn has(ep: &Endpoint, to: &EndpointAddr, blobs: Vec<BlobId>) -> Result
 /// that don't verify.
 pub async fn read(ep: &Endpoint, from: &EndpointAddr, blob: BlobId, range: Option<Range<u64>>) -> Result<Vec<u8>> {
     let hash = hash_of(&blob);
-    let conn = ep
-        .connect(from.clone(), iroh_blobs::ALPN)
-        .await
-        .with_context(|| format!("reaching {}", about(from)))?;
+    let conn = connect(ep, from, iroh_blobs::ALPN).await?;
     let mem = MemStore::new();
     let request = match &range {
         Some(r) => GetRequest::blob_ranges(hash, ChunkRanges::bytes(r.clone())),

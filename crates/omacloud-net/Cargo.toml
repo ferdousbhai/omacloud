@@ -18,6 +18,8 @@ serde_json.workspace = true
 hex = { workspace = true, features = ["serde"] }
 rand.workspace = true
 blake3 = "1.8"
+reed-solomon-simd = "3.1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 chacha20 = { version = "0.10", features = ["xchacha"] }
 blind-rsa-signatures = "0.18"
 # no port mapping: a node doesn't ask the router to open ports for it
