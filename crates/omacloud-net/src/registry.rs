@@ -33,7 +33,7 @@ pub trait Registry: Send + Sync {
     fn delete_entry(&self, scope: &str, id: &str) -> Result<()>;
 }
 
-/// A registry in memory: tests, and a network on one machine.
+/// A registry in memory, for tests.
 #[derive(Default)]
 pub struct MemRegistry {
     nodes: Mutex<Vec<Listed>>,

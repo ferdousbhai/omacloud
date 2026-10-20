@@ -129,7 +129,9 @@ async function tokenId(key: Key, t: unknown): Promise<string | null> {
 	return ok ? sha256Hex(m) : null;
 }
 
-/** POST /credits/exchange: good unspent tokens for as many fresh signatures. */
+/** POST /credits/exchange: good unspent tokens for as many fresh signatures.
+ * A token spent before buys nothing, but doesn't sink the rest: a holder
+ * whose last exchange answered too late to be heard tries those again. */
 export async function exchange(req: Request, env: Env): Promise<Response> {
 	const key = await creditKey(env);
 	const body = await readObject(req, 512 * 1024);
@@ -138,17 +140,12 @@ export async function exchange(req: Request, env: Env): Promise<Response> {
 	// a token given twice is one token
 	const ids = [...new Set((await Promise.all(body.tokens.map((t) => tokenId(key, t)))).filter((id) => id !== null))];
 	if (ms.length > ids.length) throw new HttpError(400, "more blind messages than good tokens");
-	const signed = ms.map((m) => sign(key, m));
-	if (ids.length === 0) return json({ signed, spent: 0 });
+	if (ids.length === 0) return json({ signed: [], spent: 0 });
 	const db = env.DB;
 	// spent ids are taken create-only, so of two requests with one token
 	// only one gets it
 	const results = await db.batch(ids.map((id) => db.prepare("INSERT OR IGNORE INTO net_spent (id) VALUES (?)").bind(id)));
-	const fresh = ids.filter((_, i) => (results[i].meta.changes ?? 0) > 0);
-	if (ms.length > fresh.length) {
-		// refused: what this request just marked spent is unspent again
-		if (fresh.length) await db.batch(fresh.map((id) => db.prepare("DELETE FROM net_spent WHERE id = ?").bind(id)));
-		throw new HttpError(400, "more blind messages than unspent tokens");
-	}
-	return json({ signed, spent: fresh.length });
+	const fresh = results.filter((r) => (r.meta.changes ?? 0) > 0).length;
+	// one signature for each token spent now, on the first blind messages
+	return json({ signed: ms.slice(0, fresh).map((m) => sign(key, m)), spent: fresh });
 }

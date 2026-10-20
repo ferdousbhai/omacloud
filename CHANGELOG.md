@@ -2,9 +2,24 @@
 
 ## Unreleased
 
+- Copies placed between renewals were let go after their free first week,
+  as renewals came monthly: data uploaded in the week after a renewal
+  could be lost. Renewals now come daily, and holders charge whole months
+  only, so renewing often costs no more; shares likewise.
+- A computer records the version it stands on as soon as it pulls, so
+  tidying keeps it even if the rest of that sync fails; a sharded object
+  is repaired from holders counted bad for a missed renewal when the good
+  ones don't suffice; a key rotation's leftovers are deleted with their
+  own key (they were looked for with the current one, and never found).
+- A read-only file whose content matched no longer fails every sync;
+  `receive` won't write through a file or link already at its destination.
+
 - A holder charges only for the lease it kept a blob for, not the grace
   after it, so a computer back after months renews normally instead of
   finding every holder over its limit.
+- A holder's credits no longer get stuck: a token spent before buys
+  nothing but no longer sinks the rest of its batch at the Worker, and
+  deposits go 100 at a time.
 - A shared file holds up to 127 MiB (it must fit, sealed, in the largest
   object a holder takes).
 - A config file passed with `--config` counts as the default only when it

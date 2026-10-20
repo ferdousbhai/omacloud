@@ -298,3 +298,37 @@ async fn on_a_small_network_a_large_object_is_copied_whole() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_copy_placed_between_renewals_outlives_its_free_week() -> Result<()> {
+    use omacloud_net::{
+        node::{FIRST_LEASE, MONTH, now},
+        upkeep,
+    };
+    let net = network(3).await?;
+    let b = bucket(&net, "pw").await?;
+    b.put("data/dd/new", b"placed after the last renewal").await?;
+    // six days on, a daily renewal keeps it (free: no whole month served)
+    for n in &net.nodes {
+        n.backdate(6 * 24 * 3600)?;
+    }
+    let mut free = |_| Ok(Vec::new());
+    let renew = upkeep::Renew {
+        until: now() + 2 * MONTH,
+        last: now() - 24 * 3600,
+    };
+    let r = upkeep::round(&b, 0, Some(renew), &mut free).await?;
+    assert_eq!(r.failed, 0, "{r:?}");
+    // past its free week, the holders still have it
+    for n in &net.nodes {
+        assert_eq!(n.sweep_as_of(now() + FIRST_LEASE).await?, 0);
+    }
+    assert_eq!(
+        b.get("data/dd/new", None).await?.as_deref(),
+        Some(&b"placed after the last renewal"[..])
+    );
+    for n in net.nodes {
+        n.shutdown().await;
+    }
+    Ok(())
+}

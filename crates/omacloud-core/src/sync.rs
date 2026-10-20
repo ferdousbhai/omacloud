@@ -265,6 +265,10 @@ pub struct State {
     /// their files couldn't be deleted. Deletion is retried about daily.
     #[serde(default)]
     pub leftover: BTreeSet<u64>,
+    /// Each leftover epoch's password: its repository is reached with its
+    /// own key (on the network, a bucket of its own), not the current one.
+    #[serde(default)]
+    pub leftover_passwords: BTreeMap<u64, String>,
     /// When deleting leftovers was last tried, in seconds since the epoch.
     #[serde(default)]
     pub cleaned_at: u64,
@@ -775,6 +779,10 @@ impl Engine {
                  deleting them is retried later"
             );
             _ = self.state.leftover.insert(old_epoch);
+            _ = self
+                .state
+                .leftover_passwords
+                .insert(old_epoch, old_secret.password.clone());
             self.state.cleaned_at = unix_now();
             self.save_state()?;
         }
@@ -796,11 +804,15 @@ impl Engine {
         }
         self.state.cleaned_at = now;
         for epoch in std::mem::take(&mut self.state.leftover) {
-            let Ok((_, secret)) = self.secret() else {
-                return;
+            // kept from before passwords were: nothing here can reach it
+            let Some(password) = self.state.leftover_passwords.get(&epoch).cloned() else {
+                continue;
             };
-            match self.repo.keyed(&secret.password).for_epoch(epoch).destroy() {
-                Ok(0) => info!("deleted leftover repository epoch {epoch}"),
+            match self.repo.keyed(&password).for_epoch(epoch).destroy() {
+                Ok(0) => {
+                    info!("deleted leftover repository epoch {epoch}");
+                    _ = self.state.leftover_passwords.remove(&epoch);
+                }
                 Ok(left) => {
                     debug!("{left} files of repository epoch {epoch} still couldn't be deleted");
                     _ = self.state.leftover.insert(epoch);
@@ -1060,8 +1072,6 @@ impl Engine {
             }
             out.extend(g.status(&s.merged.join("synced").join(g.name()), &waiting));
         }
-        // edits made on two computers that a merge settled lately, on any
-        // computer: the one whose edit gave way sees it too
         // writes that keep failing for now: said, with the error
         for i in out.iter_mut().filter(|i| !i.scope.is_empty()) {
             for (doc, error) in failed.iter().filter(|(d, _)| d.starts_with(&i.scope)) {
@@ -1071,6 +1081,8 @@ impl Engine {
                     .push_str(&format!("; {what} couldn't be written: {error} (trying again)"));
             }
         }
+        // edits made on two computers that a merge settled lately, on any
+        // computer: the one whose edit gave way sees it too
         let settled = settled(&s.merged.join("synced").join(CONFLICTS));
         for i in out.iter_mut().filter(|i| !i.scope.is_empty()) {
             let mine: Vec<&Settled> = settled.iter().filter(|c| c.doc.starts_with(&i.scope)).collect();
@@ -1551,6 +1563,9 @@ impl Engine {
                 let head = head.ok_or_else(|| anyhow!("base without a head"))?;
                 self.pull(&repo, &head, &mut local, &mut stats)?;
                 self.save_state()?;
+                // now, not only when the sync ends well: the version this
+                // computer stands on must be kept even if the rest fails
+                self.tell_synced();
                 local = self.local_changes(&repo)?;
             }
 
@@ -2210,7 +2225,7 @@ impl Engine {
                     return self.merge_doc(&path, &dest, &ancestor, &ours, &theirs);
                 }
                 if let Some(merged) = settings::merge(&ancestor, &ours, &theirs) {
-                    info!("merged {} with {}'s changes", path.display(), self.device);
+                    info!("merged {} with another computer's changes", path.display());
                     self.back_up(&path)?;
                     replace_file(&dest, &merged)?;
                     _ = self.pending.insert(path);
@@ -2597,7 +2612,9 @@ impl Engine {
         if !node.is_file() {
             return Ok(());
         }
-        let f = File::options().write(true).open(&full)?;
+        // the owner sets mode and time through any handle: a read-only
+        // file's too
+        let f = File::open(&full)?;
         if let Some(mode) = node.meta.mode {
             f.set_permissions(fs::Permissions::from_mode(mode & 0o777))?;
         }

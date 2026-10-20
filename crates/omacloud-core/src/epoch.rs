@@ -3,8 +3,7 @@
 //! A restic repository keeps one master key for life, and every device that
 //! synced it holds that key. Removing a device therefore needs a new
 //! repository: an *epoch*. Epoch 0 is the repository created with the
-//! account; epoch `n` lives beside it (see [`crate::RepoSpec::for_epoch`]),
-//! so no storage location or credential ever passes through the coordinator.
+//! account; epoch `n` lives beside it (see [`crate::RepoSpec::for_epoch`]).
 //!
 //! Every epoch has a signed [`EpochRecord`] carrying the repository secret
 //! sealed to each member device and to the account root, so the recovery code
@@ -12,7 +11,7 @@
 //! [`Grant`]: the current secret sealed to it. The coordinator relays both
 //! and can open neither.
 //!
-//! Rotating copies every snapshot into the new repository, appends a head
+//! Rotating copies every kept snapshot into the new repository, appends a head
 //! that starts the new epoch, and publishes the record with the map from old
 //! to new snapshot ids, so history stays readable. Blob and tree ids are
 //! hashes of plaintext, so trees keep their ids across epochs; only snapshot
@@ -84,7 +83,7 @@ pub struct EpochRecord {
     /// The repository secret, sealed to each member and to the root (keyed
     /// by hex public key).
     pub keys: BTreeMap<String, String>,
-    /// Previous epoch's snapshot id to this epoch's, for every head so far.
+    /// Previous epoch's snapshot id to this epoch's, for every kept one.
     pub snapshots: BTreeMap<String, String>,
     pub signer: String,
     pub sig: String,

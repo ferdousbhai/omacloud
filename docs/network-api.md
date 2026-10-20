@@ -102,9 +102,11 @@ is one GiB kept for a month.
   days, `{"signed": ["<hex>"]}`; more asked than left is refused (429).
 - `POST /api/net/credits/exchange` with `{"tokens": [<token>], "blind":
   ["<hex>"]}`: checks each token's signature and that it wasn't spent
-  (spent ids, `sha256(msg)`, kept for good), marks the good ones spent and
-  signs that many blind messages, `{"signed": ["<hex>"], "spent": <n>}`.
-  More blind messages than good tokens is refused (400), nothing spent.
+  (spent ids, `sha256(msg)`, kept for good), marks the unspent good ones
+  spent and signs that many of the blind messages, the first ones,
+  `{"signed": ["<hex>"], "spent": <n>}`: a token spent before buys nothing
+  but doesn't sink the others. More blind messages than good tokens is
+  refused (400), nothing spent. At most 100 tokens a request.
 
 A blind signature is `m^d mod n` of the blind message `m` (big-endian, the
 modulus' length, `m < n`), checked by `s^e mod n == m` before it's sent.

@@ -52,15 +52,17 @@ pub struct Report {
 }
 
 /// The most a holder keeping `bytes` can have earned since the renewal at
-/// `last` (0: none): every byte for every month begun since, at most a
-/// longest lease's worth, and at least a month's.
+/// `last` (0: none): every byte for every whole month since, and one more
+/// for a month that was under way then, at most a longest lease's worth.
 #[must_use]
 fn most_earned(bytes: u64, last: u64, now: u64) -> u64 {
+    // a holder charges whole months, and a part of one carries over to the
+    // next renewal: so a month more than have passed since the last
     let longest = crate::node::LONGEST_LEASE.div_ceil(MONTH);
     let months = if last == 0 {
         longest
     } else {
-        now.saturating_sub(last).div_ceil(MONTH).clamp(1, longest)
+        (now.saturating_sub(last) / MONTH + 1).min(longest)
     };
     tokens_for(bytes * months)
 }
@@ -215,8 +217,9 @@ mod tests {
     fn a_holder_can_ask_for_the_months_it_served_and_no_more() {
         let gib = 1 << 30;
         let now = 100 * MONTH;
-        assert_eq!(most_earned(gib, now - MONTH, now), 1);
-        assert_eq!(most_earned(gib, now - MONTH - 1, now), 2);
+        // renewed yesterday: a month that was under way may have ended since
+        assert_eq!(most_earned(gib, now - 24 * 3600, now), 1);
+        assert_eq!(most_earned(gib, now - MONTH, now), 2);
         assert_eq!(most_earned(3 * gib, now - 10, now), 3, "at least a month");
         assert_eq!(most_earned(gib, now - 12 * MONTH, now), 3, "at most a longest lease");
         assert_eq!(most_earned(gib, 0, now), 3);

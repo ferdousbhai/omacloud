@@ -116,7 +116,8 @@ pub enum HeadError {
 }
 
 /// Orders and relays heads, device entries and join requests. Implementations:
-/// a directory (tests, development). It is trusted for availability only.
+/// the network's (omacloud-net's `NetworkCoordinator`), and a directory
+/// (tests, development). It is trusted for availability only.
 pub trait Coordinator: Send + Sync {
     /// The latest head, if any.
     fn head(&self) -> Result<Option<Head>>;
@@ -525,7 +526,11 @@ pub fn load_or_create_key(path: &Path) -> Result<SigningKey> {
 /// If the file can't be written.
 pub fn write_private(path: &Path, data: &[u8]) -> Result<()> {
     use std::{io::Write, os::unix::fs::OpenOptionsExt};
-    let tmp = path.with_extension("tmp");
+    // beside it under its whole name and `.tmp`: two files differing only in
+    // extension never share one
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
     let mut f = fs::OpenOptions::new()
         .write(true)
         .create(true)

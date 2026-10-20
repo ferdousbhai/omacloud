@@ -208,10 +208,12 @@ impl Node {
     }
 }
 
-/// Months begun between when a blob was paid up to and now, or its
-/// lease's end if that came first: the grace after a lease is unpaid.
+/// Whole months a blob was kept since it was paid up to, until now or its
+/// lease's end if that came first: the grace after a lease is unpaid. Only
+/// whole months count, so an owner may renew as often as it likes, and
+/// pays once a month has gone by.
 fn months_served(paid_to: u64, expires: u64, now: u64) -> u64 {
-    now.min(expires).saturating_sub(paid_to).div_ceil(MONTH)
+    now.min(expires).saturating_sub(paid_to) / MONTH
 }
 
 fn open_db(path: &Path) -> Result<rusqlite::Connection> {
@@ -308,8 +310,9 @@ impl Inner {
         }
         let db = self.db.lock().expect("node db");
         let mut kept = Vec::with_capacity(blobs.len());
-        // what was served unpaid: bytes kept, times the months since each
-        // was last paid for (the first week is free)
+        let mut served = Vec::with_capacity(blobs.len());
+        // what was served unpaid: bytes kept, times the whole months since
+        // each was last paid for (the first week is free)
         let mut byte_months = 0u64;
         for b in blobs {
             let row: Option<(i64, i64, i64)> = db
@@ -320,14 +323,16 @@ impl Inner {
                 )
                 .optional()?;
             kept.push(row.is_some());
-            if let Some((size, paid_to, expires)) = row {
-                let served = months_served(
+            let months = row.map_or(0, |(size, paid_to, expires)| {
+                let months = months_served(
                     u64::try_from(paid_to).unwrap_or(0),
                     u64::try_from(expires).unwrap_or(0),
                     now,
                 );
-                byte_months += u64::try_from(size).unwrap_or(0) * served;
-            }
+                byte_months += u64::try_from(size).unwrap_or(0) * months;
+                months
+            });
+            served.push(months);
         }
         // the grace after a lease is for blobs that were paid for; storage
         // is free without a token key
@@ -361,12 +366,14 @@ impl Inner {
                 }
             }
         }
-        for (b, k) in blobs.iter().zip(&kept) {
+        for ((b, k), months) in blobs.iter().zip(&kept).zip(&served) {
             if *k {
+                // paid up to the end of the months paid for: the part of a
+                // month begun waits for the next renewal
                 db.execute(
-                    "UPDATE blobs SET expires = MAX(expires, ?1), paid = MAX(paid, ?2), paid_to = MAX(paid_to, ?3) \
+                    "UPDATE blobs SET expires = MAX(expires, ?1), paid = MAX(paid, ?2), paid_to = paid_to + ?3 \
                      WHERE blob = ?4",
-                    params![until, i64::from(paid), now, hex::encode(b.0)],
+                    params![until, i64::from(paid), i64::try_from(months * MONTH)?, hex::encode(b.0)],
                 )?;
             }
         }
@@ -416,8 +423,9 @@ mod tests {
     fn a_holder_charges_for_the_lease_it_served_not_the_grace_after() {
         let t = 100 * MONTH;
         assert_eq!(months_served(t, t + 2 * MONTH, t), 0);
-        assert_eq!(months_served(t, t + 2 * MONTH, t + 1), 1);
-        assert_eq!(months_served(t, t + 2 * MONTH, t + MONTH + 1), 2);
+        // a month begun isn't owed yet: renewing often costs nothing more
+        assert_eq!(months_served(t, t + 2 * MONTH, t + MONTH - 1), 0);
+        assert_eq!(months_served(t, t + 2 * MONTH, t + MONTH + 1), 1);
         // a year on, deep in its grace: still the two months of the lease
         assert_eq!(months_served(t, t + 2 * MONTH, t + 12 * MONTH), 2);
     }

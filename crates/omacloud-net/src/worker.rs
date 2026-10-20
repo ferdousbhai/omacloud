@@ -159,23 +159,29 @@ impl Worker {
     }
 
     /// Trade tokens taken as a holder for fresh ones the Worker can't link
-    /// to them.
+    /// to them: one for each that wasn't spent before.
     ///
     /// # Errors
     ///
-    /// If a token was spent already or isn't the Worker's.
+    /// If the Worker can't be reached, or refuses a batch (a token not its).
     pub fn exchange(&self, issuer: &IssuerKey, tokens: &[Token]) -> Result<Vec<Token>> {
-        let (blind, pending) = credit::ask(issuer, tokens.len())?;
-        let v = self.ok(
-            "POST",
-            "/api/net/credits/exchange",
-            &[],
-            Some(&json!({
-                "tokens": tokens,
-                "blind": blind.iter().map(hex::encode).collect::<Vec<_>>(),
-            })),
-        )?;
-        pending.finish(issuer, &signed(&v)?)
+        let mut fresh = Vec::with_capacity(tokens.len());
+        // the Worker takes 100 a request; one spent before is paid nothing
+        // but doesn't sink the rest
+        for batch in tokens.chunks(100) {
+            let (blind, pending) = credit::ask(issuer, batch.len())?;
+            let v = self.ok(
+                "POST",
+                "/api/net/credits/exchange",
+                &[],
+                Some(&json!({
+                    "tokens": batch,
+                    "blind": blind.iter().map(hex::encode).collect::<Vec<_>>(),
+                })),
+            )?;
+            fresh.extend(pending.finish(issuer, &signed(&v)?)?);
+        }
+        Ok(fresh)
     }
 }
 

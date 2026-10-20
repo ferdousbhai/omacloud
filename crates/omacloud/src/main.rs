@@ -1904,7 +1904,6 @@ fn run(cli: Cli) -> Out {
                 name: name.clone(),
                 made,
                 until: made + days * 86_400,
-                paid_until: 0,
                 renewed_at: 0,
             });
             net::write_shares(&paths.data, &shares)?;
@@ -1986,7 +1985,16 @@ fn run(cli: Cli) -> Out {
             if let Some(dir) = dest.parent().filter(|d| !d.as_os_str().is_empty()) {
                 fs::create_dir_all(dir)?;
             }
-            fs::write(&dest, &data)?;
+            // made new, so nothing there (a link left dangling, one made
+            // meanwhile) is written through
+            {
+                use std::io::Write as _;
+                fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&dest)?
+                    .write_all(&data)?;
+            }
             Ok(Response::new(
                 json!({ "name": name, "written": dest, "size": data.len() }),
                 format!("wrote {}", dest.display()),

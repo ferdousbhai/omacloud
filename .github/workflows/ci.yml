@@ -46,12 +46,7 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libarchive-tools
       # bash -n reads one script (the rest are its arguments), so one at a time
       - run: for f in install.sh pkgbuild/PKGBUILD packaging/omarchy-pkgs/omacloud/PKGBUILD scripts/*.sh .githooks/pre-push contrib/seed-setup.sh server/deploy.sh server/backup.sh; do bash -n "$f"; done
-      - run: python3 scripts/tests/installer.py
-      - run: python3 scripts/tests/release.py
-      - run: python3 scripts/tests/release-ci.py
-      - run: python3 scripts/tests/verify-release.py
-      - run: python3 scripts/tests/omarchy-recipe.py
-      - run: python3 scripts/tests/omarchy-pkgs.py
+      - run: for t in scripts/tests/*.py; do python3 "$t"; done
 
   packages:
     needs: packaging

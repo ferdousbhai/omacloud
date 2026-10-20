@@ -32,6 +32,10 @@ const LEASE: u64 = 2 * MONTH;
 const STARTER: usize = 10;
 /// How long a holder that failed this computer is passed over.
 const SUSPECT_FOR: u64 = 30 * 24 * 3600;
+/// How often copies are renewed: well inside a new copy's free first week,
+/// so one placed (or repaired) between renewals is never let go. Holders
+/// charge whole months, so renewing daily costs no more than monthly.
+const RENEW_EVERY: u64 = 24 * 3600;
 
 pub struct Contribution {
     key: omacloud_net::session::SecretKey,
@@ -111,9 +115,9 @@ impl Contribution {
             .options
             .get("access_key_id")
             .context("the repository isn't on the network")?;
-        // monthly, paying each holder for the month it kept the copies
+        // daily; each holder is paid as each whole month goes by
         let renewed = read_number(&self.data.join("renewed"));
-        let renew = (now().saturating_sub(renewed) >= LEASE - MONTH).then_some(Renew {
+        let renew = (now().saturating_sub(renewed) >= RENEW_EVERY).then_some(Renew {
             until: now() + LEASE,
             last: renewed,
         });
@@ -168,11 +172,13 @@ impl Contribution {
                 last: s.renewed_at,
             };
             match session.upkeep(&key, 0, Some(renew), &mut pay) {
-                Ok(_) => {
-                    s.paid_until = until;
+                // a holder that didn't renew is replaced this round; the
+                // next one renews the new copies
+                Ok(r) if r.failed == 0 => {
                     s.renewed_at = now();
                     changed = true;
                 }
+                Ok(_) => {}
                 Err(e) => warn!("keeping the shared {}: {e:#}", s.name),
             }
         }
@@ -205,22 +211,19 @@ pub struct Shared {
     pub name: String,
     pub made: u64,
     pub until: u64,
-    /// Renewed this far, beyond the first lease.
-    #[serde(default)]
-    pub paid_until: u64,
     /// When it was last renewed (and its holders paid up to).
     #[serde(default)]
     pub renewed_at: u64,
 }
 
 impl Shared {
-    /// Until when to renew it now, if it's due: the first lease covers a
-    /// week, then renewals keep it up to two months ahead, coming again
-    /// when less than one is left, never past `until`.
+    /// Until when to renew it now, if it's due: a share that outlives its
+    /// first lease is renewed daily, as an account's copies are, two months
+    /// ahead and never past `until`.
     #[must_use]
     pub fn renewal(&self, now: u64) -> Option<u64> {
-        let covered = self.paid_until.max(self.made + FIRST_LEASE);
-        (covered < self.until && covered <= now + MONTH).then(|| self.until.min(now + LEASE))
+        (self.until > self.made + FIRST_LEASE && now.saturating_sub(self.renewed_at) >= RENEW_EVERY)
+            .then(|| self.until.min(now + LEASE))
     }
 }
 
@@ -368,36 +371,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_share_is_renewed_only_past_its_first_week_and_until_it_ends() {
+    fn a_share_is_renewed_daily_when_it_outlives_its_first_week() {
         let day = 86_400;
         let week = Shared {
             secret: String::new(),
             name: "a".into(),
             made: 0,
             until: 7 * day,
-            paid_until: 0,
             renewed_at: 0,
         };
-        assert_eq!(week.renewal(0), None);
-        assert_eq!(week.renewal(6 * day), None);
+        assert_eq!(week.renewal(day), None, "its first lease covers it");
         let year = Shared {
             until: 365 * day,
             ..week.clone()
         };
-        // the first lease is within a month of ending from the start
-        assert_eq!(year.renewal(0), Some(LEASE));
-        let paid = Shared {
-            paid_until: LEASE,
+        assert_eq!(year.renewal(day), Some(day + LEASE));
+        let renewed = Shared {
+            renewed_at: day,
             ..year.clone()
         };
-        assert_eq!(paid.renewal(day), None);
-        assert_eq!(paid.renewal(LEASE - MONTH), Some(LEASE - MONTH + LEASE));
-        // never past the end
+        assert_eq!(renewed.renewal(day + 3600), None, "once a day");
+        assert_eq!(renewed.renewal(2 * day), Some(2 * day + LEASE));
+        // never past its end
         let month = Shared {
             until: 30 * day,
             ..week
         };
-        assert_eq!(month.renewal(0), Some(30 * day));
+        assert_eq!(month.renewal(day), Some(30 * day));
     }
 
     #[test]

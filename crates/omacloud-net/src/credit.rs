@@ -77,14 +77,16 @@ pub fn ask(issuer: &IssuerKey, n: usize) -> Result<(Vec<Vec<u8>>, Pending)> {
 }
 
 impl Pending {
-    /// Unblind the Worker's signatures, in the order asked.
+    /// Unblind the Worker's signatures, in the order asked: as many as it
+    /// signed, the first ones (an exchange pays nothing for a token spent
+    /// before).
     ///
     /// # Errors
     ///
     /// If the count is off or a signature isn't the Worker's.
     pub fn finish(self, issuer: &IssuerKey, signed: &[Vec<u8>]) -> Result<Vec<Token>> {
         anyhow::ensure!(
-            signed.len() == self.asked.len(),
+            signed.len() <= self.asked.len(),
             "asked for {} tokens, got {}",
             self.asked.len(),
             signed.len()

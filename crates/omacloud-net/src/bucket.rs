@@ -361,7 +361,15 @@ impl Bucket {
             if good.len() >= coded.total() && good.len() == entry.holders.len() {
                 return Ok(false);
             }
-            let have = self.read_shards(entry, &good).await?;
+            // a holder counted bad for a renewal it missed may still serve
+            let have = match self.read_shards(entry, &good).await {
+                Ok(have) => have,
+                Err(e) if good.len() < entry.holders.len() => {
+                    log::debug!("{e:#}");
+                    self.read_shards(entry, &entry.holders).await?
+                }
+                Err(e) => return Err(e),
+            };
             let all = coded.rebuild(&have)?;
             let kept: BTreeSet<u8> = good.iter().filter_map(|h| h.shard).collect();
             let missing: Vec<(u8, Vec<u8>)> = all

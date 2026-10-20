@@ -426,7 +426,7 @@ test("credits: the starter grant per prefix", async () => {
 	}
 });
 
-test("credits: exchange spends good tokens once, refuses forged ones, and spends nothing when refused", async () => {
+test("credits: exchange spends good tokens once, refuses forged ones, and pays nothing for spent ones", async () => {
 	const { env, sqlite } = setup();
 	const exchange = (tokens: unknown[], n: number) =>
 		call(env, "/api/net/credits/exchange", { method: "POST", body: { tokens, blind: Array.from({ length: n }, () => blind().blind) } });
@@ -449,10 +449,14 @@ test("credits: exchange spends good tokens once, refuses forged ones, and spends
 		[sha256(Buffer.from(a.msg, "hex")), sha256(Buffer.from(b.msg, "hex"))].sort(),
 	);
 
-	// a spent token again: refused, and the unspent one with it stays unspent
-	assert.equal((await exchange([a, c], 2)).status, 400);
-	assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM net_spent").get()!.n, 2);
-	assert.equal((await exchange([a], 1)).status, 400);
+	// a spent token again buys nothing, and doesn't sink the unspent one
+	const again = await exchange([a, c], 2);
+	assert.equal(again.status, 200);
+	const back = (await again.json()) as { signed: string[]; spent: number };
+	assert.equal(back.spent, 1);
+	assert.equal(back.signed.length, 1);
+	assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM net_spent").get()!.n, 3);
+	assert.deepEqual(((await (await exchange([a], 1)).json()) as { signed: string[] }).signed, []);
 
 	// forged: a signature by another key, or over another message
 	const other = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -468,10 +472,11 @@ test("credits: exchange spends good tokens once, refuses forged ones, and spends
 	assert.equal((await exchange([{ ...c, randomizer: "00" }], 1)).status, 400);
 
 	// a forged one beside a good one: only the good one counts
-	const mixed = await exchange([forged, c], 1);
+	const d = directToken();
+	const mixed = await exchange([forged, d], 1);
 	assert.equal(mixed.status, 200);
 	assert.equal(((await mixed.json()) as { spent: number }).spent, 1);
-	assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM net_spent").get()!.n, 3);
+	assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM net_spent").get()!.n, 4);
 });
 
 test("unknown paths under /api/net/ answer JSON 404s", async () => {
