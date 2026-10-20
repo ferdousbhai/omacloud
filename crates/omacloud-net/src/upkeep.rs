@@ -25,6 +25,26 @@ use crate::{
 /// How far a holder's clock may be from this computer's.
 const SLACK: u64 = 3600;
 
+/// How long a copy's index entry may come after it was stored: one
+/// object's upload. Well under a day, so only one daily renewal can find a
+/// copy stored before it but indexed after.
+const INDEX_LAG: u64 = 6 * 3600;
+
+/// Since when a copy may be owed, its holder last renewed at `last` (0:
+/// never): since then; a copy a repair placed since may be owed from when
+/// the holder held it before (0: up to a longest lease); one stored just
+/// before that renewal may have reached the index after it, so is owed
+/// since it was stored. Each allowance holds for one renewal only.
+fn owed_since(placed: u64, stored: u64, last: u64) -> u64 {
+    if placed + SLACK > last {
+        0
+    } else if stored > 0 && stored + INDEX_LAG > last {
+        stored.min(last)
+    } else {
+        last
+    }
+}
+
 /// Blobs renewed a request: well inside a request's size limit.
 const RENEW_BATCH: usize = 10_000;
 
@@ -180,23 +200,9 @@ pub async fn round(bucket: &Bucket, audits: usize, renew: Option<Renew>, wallet:
             let mut renewed = true;
             // in batches a request can carry
             for held in held.chunks(RENEW_BATCH) {
-                // what each copy may be owed since: since it was last renewed;
-                // one a repair placed since may be owed from when the holder
-                // held it before (up to a longest lease, from 0); one stored
-                // within a first lease before that renewal may have reached
-                // the index after it, so is owed since it was stored
-                let since = |(placed, stored): (u64, u64)| {
-                    if placed + SLACK > last {
-                        0
-                    } else if stored > 0 && stored + crate::node::FIRST_LEASE + SLACK > last {
-                        stored.min(last)
-                    } else {
-                        last
-                    }
-                };
                 let mut by_since: BTreeMap<u64, u64> = BTreeMap::new();
                 for (e, h) in held {
-                    *by_since.entry(since((h.placed, h.stored))).or_default() += e.blob_size();
+                    *by_since.entry(owed_since(h.placed, h.stored, last)).or_default() += e.blob_size();
                 }
                 // as of now, holder by holder: a round can run long
                 let allowed = |now| -> u64 {
@@ -328,6 +334,20 @@ pub async fn round(bucket: &Bucket, audits: usize, renew: Option<Renew>, wallet:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_allowance_for_a_copy_holds_for_one_renewal() {
+        let day = 24 * 3600;
+        let t = 100 * MONTH;
+        // renewed since it was placed by a repair or stored: since then
+        assert_eq!(owed_since(0, t, t + 2 * day), t + 2 * day);
+        // placed by a repair after the last renewal: up to a longest lease
+        assert_eq!(owed_since(t + day, t, t), 0);
+        // stored an hour before a renewal that couldn't see it yet: since
+        // it was stored, that once; the next day's renewal, as any other
+        assert_eq!(owed_since(0, t, t + 3600), t);
+        assert_eq!(owed_since(0, t, t + day), t + day);
+    }
 
     #[test]
     fn a_holder_can_ask_for_the_months_it_served_and_no_more() {
