@@ -1844,15 +1844,30 @@ impl Engine {
             .lookup(Some(snap.tree), path)?
             .filter(|n| n.is_file())
             .ok_or_else(|| anyhow!("{} is not a file at head {seq}", path.display()))?;
-        if let Some(dir) = dest.parent() {
-            fs::create_dir_all(dir)?;
+        // written aside (sync passes it by) and moved over at once: a
+        // download that fails or is half done never stands in for the file
+        let dir = dest
+            .parent()
+            .filter(|d| !d.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        fs::create_dir_all(dir)?;
+        let name = dest
+            .file_name()
+            .ok_or_else(|| anyhow!("{} is no file name", dest.display()))?;
+        let tmp = dir.join(format!("{TEMP_PREFIX}{}", name.to_string_lossy()));
+        let written = (|| -> Result<()> {
+            let mut f = File::create(&tmp)?;
+            repo.dump(&node, &mut f)?;
+            if let Some(mode) = node.meta.mode {
+                f.set_permissions(fs::Permissions::from_mode(mode & 0o777))?;
+            }
+            f.sync_all()?;
+            Ok(fs::rename(&tmp, dest)?)
+        })();
+        if written.is_err() {
+            _ = fs::remove_file(&tmp);
         }
-        let mut f = File::create(dest)?;
-        repo.dump(&node, &mut f)?;
-        if let Some(mode) = node.meta.mode {
-            f.set_permissions(fs::Permissions::from_mode(mode & 0o777))?;
-        }
-        Ok(())
+        written
     }
 
     /// Each of `heads` whose snapshot is still kept, with it, in order:

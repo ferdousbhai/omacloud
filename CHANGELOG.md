@@ -70,6 +70,9 @@
   versions of a verified history; tidying picks the latest version by the
   history's order, not a computer's clock; an account whose repository
   can't be made is no longer left half created.
+- `restore` writes the version aside and moves it into place once it's
+  whole, so a download that fails, or a sync meanwhile, never leaves a
+  half-written file in place of the one restored over.
 - A read-only file whose content matched no longer fails every sync;
   `receive` won't write through a file or link already at its destination.
 - A holder's credits no longer get stuck: a token spent before buys
