@@ -577,7 +577,6 @@ impl Group for Chromium {
         if kind == "bookmarks.json" {
             return bookmarks::merge_values(base, ours, theirs);
         }
-        let empty = Map::new();
         let map = |v: &Value| v.as_object().cloned().unwrap_or_default();
         let (o, mut t) = (map(ours), map(theirs));
         let b = base.and_then(Value::as_object);
@@ -615,14 +614,7 @@ impl Group for Chromium {
             _ => format!("Chromium setting {k}"),
         };
         let fields = kind != "preferences.json";
-        let value = merged::merge_map(
-            b.or(Some(&empty)).filter(|m| !m.is_empty()),
-            &o,
-            &t,
-            fields,
-            &label,
-            &mut conflicts,
-        );
+        let value = merged::merge_map(b.filter(|m| !m.is_empty()), &o, &t, fields, &label, &mut conflicts);
         Merged {
             value: Value::Object(value),
             conflicts,

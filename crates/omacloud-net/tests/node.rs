@@ -117,6 +117,27 @@ async fn a_holder_is_paid_for_time_served_and_a_paid_blob_gets_its_grace() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_blob_stored_again_starts_afresh() -> Result<()> {
+    use client::Renewal;
+    let tmp = tempfile::tempdir()?;
+    let kp = KeyPairSha384PSSRandomized::generate(&mut DefaultRng, 2048)?;
+    let n = holder(tmp.path(), 10 << 20, Some(kp.pk.clone())).await?;
+    let me = endpoint().await?;
+    let blob = client::store(&me, &n.addr(), &[8u8; 1000]).await?;
+    client::renew(&me, &n.addr(), vec![blob], now() + 2 * node::MONTH, Vec::new()).await?;
+    // its lease run out, a repair places the same copy back here: owed
+    // from now
+    n.backdate(70 * 24 * 3600)?;
+    client::store(&me, &n.addr(), &[8u8; 1000]).await?;
+    assert_eq!(
+        client::renew(&me, &n.addr(), vec![blob], now() + 2 * node::MONTH, Vec::new()).await?,
+        Renewal::Kept(vec![true])
+    );
+    n.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_blob_never_paid_for_gets_no_grace() -> Result<()> {
     let tmp = tempfile::tempdir()?;
     let kp = KeyPairSha384PSSRandomized::generate(&mut DefaultRng, 2048)?;

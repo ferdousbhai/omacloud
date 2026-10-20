@@ -599,14 +599,13 @@ pub fn parse(uuid: &str, text: &str) -> Saved {
     let mode = get("802-11-wireless.mode");
     let mgmt = get("802-11-wireless-security.key-mgmt");
     let psk = get("802-11-wireless-security.psk");
-    let security = match mgmt.as_str() {
-        "" => Some("open"),
-        "owe" | "wpa-psk" | "sae" => Some(mgmt.as_str()),
-        "none" => Some("wep"),
-        _ => Some("enterprise"),
-    }
-    .filter(|_| !ssid.is_empty() && (mode.is_empty() || mode == "infrastructure"));
-    let key = security.map(|sec| format!("{sec} {ssid}"));
+    let kind = match mgmt.as_str() {
+        "" => "open",
+        "owe" | "wpa-psk" | "sae" => mgmt.as_str(),
+        "none" => "wep",
+        _ => "enterprise",
+    };
+    let key = (!ssid.is_empty() && (mode.is_empty() || mode == "infrastructure")).then(|| format!("{kind} {ssid}"));
     let network = (|| {
         if ssid.is_empty() {
             return Err("no network name".to_string());
@@ -614,13 +613,10 @@ pub fn parse(uuid: &str, text: &str) -> Saved {
         if !mode.is_empty() && mode != "infrastructure" {
             return Err("a hotspot this computer makes".into());
         }
-        let security = match mgmt.as_str() {
-            "" => "open",
-            "owe" => "owe",
-            "wpa-psk" => "wpa-psk",
-            "sae" => "sae",
-            "none" => return Err("WEP, not synced".into()),
-            _ => return Err("enterprise (802.1X), not synced".into()),
+        let security = match kind {
+            "wep" => return Err("WEP, not synced".into()),
+            "enterprise" => return Err("enterprise (802.1X), not synced".into()),
+            k => k,
         };
         let needs_key = matches!(security, "wpa-psk" | "sae");
         if needs_key && psk.is_empty() {

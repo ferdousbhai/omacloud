@@ -123,8 +123,8 @@ sync engine. Nothing in it is trusted for anything but availability.
   are kept as two copies too.
 - **What a holder keeps** (`node.rs`): a blob only if its bytes hash to the
   id it was stored under. Anyone may read any blob, as it's ciphertext. A
-  first lease is 7 days, unpaid (a blob gone within its first month costs
-  nothing). A renewal keeps a blob up to three months
+  first lease is 7 days, unpaid (a blob gone before its first month end
+  costs nothing). A renewal keeps a blob up to three months
   on credit and pays for the time it was already kept: each month end
   passed since a blob was last paid for. Month ends are the same for every
   blob (whole multiples of a month), so a holder's blobs come due together,

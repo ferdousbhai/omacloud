@@ -21,6 +21,11 @@
   request; a renewal after a lease ran out pays for the lease and not the
   grace since, and the grace is for blobs paid for; a holder's credits are banked a batch at a time; a repair
   that can't place enough new holders keeps the entry that still reads.
+- Turning settings sync on or off, or changing the space given, restarts
+  a running daemon into it (it kept the old choice until the next login);
+  a starter grant that falls short of a payment is kept, not lost;
+  `unshare` without the Worker leaves the take-down to the daemon; a
+  merged bookmarks note no longer shows a literal `{ME}`.
 - A read-only file whose content matched no longer fails every sync;
   `receive` won't write through a file or link already at its destination.
 

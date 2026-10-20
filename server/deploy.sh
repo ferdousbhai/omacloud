@@ -17,9 +17,13 @@ case $# in
   1) [ "$1" = --first ] || { echo "usage: server/deploy.sh [--first]" >&2; exit 1; }; first=1 ;;
   *) echo "usage: server/deploy.sh [--first]" >&2; exit 1 ;;
 esac
-if [ -n "$first" ] && npx cf workers secrets list --worker omacloud 2>/dev/null | grep -q '"CREDIT_KEY"'; then
-  echo "omacloud already has a credit key: deploy without --first" >&2
-  exit 1
+# a listing that fails must stop --first, or a new key voids every token
+if [ -n "$first" ]; then
+  secrets=$(npx cf workers secrets list --worker omacloud) || exit 1
+  if grep -q CREDIT_KEY <<<"$secrets"; then
+    echo "omacloud already has a credit key: deploy without --first" >&2
+    exit 1
+  fi
 fi
 
 npx cf workers types >/dev/null

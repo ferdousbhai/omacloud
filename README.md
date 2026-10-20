@@ -180,8 +180,8 @@ and why.
 A fresh machine catches up in one go:
 
 ```sh
-omacloud restore-machine --from laptop    # settings, files, laptop's packages
-omacloud secrets restore --from laptop    # ssh and gpg keys: asks for the recovery code
+omacloud restore-machine --from laptop --yes  # settings, files, laptop's packages
+omacloud secrets restore --from laptop --yes  # ssh and gpg keys: asks for the recovery code
 ```
 
 ## Versions and leaving
@@ -189,7 +189,8 @@ omacloud secrets restore --from laptop    # ssh and gpg keys: asks for the recov
 Earlier versions and deleted files stay for 30 days, the least of what
 iCloud, Dropbox and Google Drive keep, which keeps what your account
 stores (and spends credits on) small: `omacloud versions notes.md` lists
-a file's versions, and `omacloud restore notes.md --at 3` brings one back. `omacloud deleted`
+a file's versions, and `omacloud restore notes.md --at 3` writes version 3
+beside you as `notes.md.v3` (`--to` elsewhere, the file itself included). `omacloud deleted`
 lists the files deleted in the last 30 days with the
 version to restore, and the app's Recently Deleted, under Overview, puts
 one back where it was.
@@ -307,8 +308,8 @@ binary), 1 for anything else.
 ```toml
 # ~/.config/omacloud/config.toml (written by `omacloud init`)
 [limits]
-bandwidth = "5MiB"            # per second; see below
-connections = 4               # parallel requests to the storage
+# bandwidth = "5MiB"          # per second, if you set one; see below
+# connections = 4             # parallel requests to the storage, if set
 pause_on_battery_below = 20   # percent while discharging; 0 never pauses
 
 [network]
@@ -322,8 +323,9 @@ asking to join, a setting that needs a choice, this computer removed).
 
 Ignore rules use gitignore syntax, from three places: built-in defaults
 (editor swap files, desktop junk), `~/.config/omacloud/ignore` for this
-computer only, and `.omacloudignore` at the folder root, which syncs so every
-computer follows it. Ignored paths are neither pushed nor pulled.
+computer only, and `.omacloudignore` at the folder root: syncing folders of
+home (the default) that's `~/.omacloudignore`, for this computer too;
+syncing one whole folder, it syncs, so every computer follows it. Ignored paths are neither pushed nor pulled.
 
 The daemon runs at nice 10 with idle I/O priority. The bandwidth cap
 holds on average across all transfers: each one, large or small, waits for

@@ -117,7 +117,7 @@ for target in (path, Path(str(path) + '.sig')):
     target.write_bytes(contents)
 PY
   done
-  gpg --batch --armor --export "$fingerprint" > "$assets/$database-signing-key.asc"
+  gpg --batch --armor --export-filter keep-uid="uid =~ Omacloud" --export "$fingerprint" > "$assets/$database-signing-key.asc"
 done
 cp "$staging/install.sh" "$assets/install.sh"
 awk -v v="## $version" '$0 ~ "^"v"([ (]|$)" {on=1; next} /^## / && on {exit} on' "$staging/CHANGELOG.md" > "$staging/notes.md"

@@ -1148,17 +1148,22 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     // through: a sync that keeps failing mustn't walk every file each poll
     let mut rescan_at: Option<Instant> = None;
     loop {
-        // `omacloud folders` edits the config: follow it without a restart
+        // the config was edited: folders are followed as they are; settings
+        // sync turned on or off, or the space given, restart into it (exit
+        // 75, as for an upgrade, which the unit restarts)
         let now = config_mtime();
         if now != config_seen {
             config_seen = now;
-            if let Ok(Config {
-                folders: Some(choice), ..
-            }) = load(paths)
-            {
-                info!("folder choice changed");
-                engine.set_folders(choice.add, choice.skip);
-                folders_changed = true;
+            if let Ok(c) = load(paths) {
+                if c.settings != config.settings || c.net().map(|n| n.give) != config.net().map(|n| n.give) {
+                    info!("settings sync or the space given changed; restarting into it");
+                    return Ok(Ended::Upgraded);
+                }
+                if let Some(choice) = c.folders {
+                    info!("folder choice changed");
+                    engine.set_folders(choice.add, choice.skip);
+                    folders_changed = true;
+                }
             }
         }
         // between syncs: an upgrade restarts into the new binary
@@ -1958,11 +1963,33 @@ fn run(cli: Cli) -> Out {
         Cmd::Unshare => {
             let (net, secret) = share_link(&paths)?;
             let removed = session(&paths, &net)?.unshare(&secret);
-            // ours or not, a link taken back is no longer kept
             let mut shares = net::read_shares(&paths.data);
             shares.retain(|s| s.secret != secret);
+            // not taken down for want of the Worker: ended, so the daemon
+            // takes it down when it can (ours or not)
+            let pending = removed
+                .as_ref()
+                .is_err_and(|e| !format!("{e:#}").contains("nothing is shared under this link"));
+            if pending {
+                let now = omacloud_net::node::now();
+                shares.push(net::Shared {
+                    secret: secret.clone(),
+                    name: "a link taken back".into(),
+                    made: now,
+                    until: now,
+                    renewed_at: 0,
+                    holders: std::collections::BTreeMap::new(),
+                });
+            }
             net::write_shares(&paths.data, &shares)?;
-            removed.map_err(|e| fail::unavailable(format!("{e:#}")))?;
+            removed.map_err(|e| {
+                let e = fail::unavailable(format!("{e:#}"));
+                if pending {
+                    e.hint("the daemon takes it down when it can")
+                } else {
+                    e
+                }
+            })?;
             Ok(Response::new(
                 Value::Null,
                 "the link opens nothing now; holders drop the file when its lease ends",
@@ -2573,7 +2600,7 @@ fn settings(paths: &Paths, action: SettingsCmd) -> Out {
             if config.settings {
                 say!(
                     out,
-                    "they sync at the next `omacloud sync`, or right away if the daemon runs (restart it: systemctl --user restart omacloud)"
+                    "they sync at the next `omacloud sync`, or right away if the daemon runs"
                 );
             }
             let summary = if config.settings {
@@ -3183,12 +3210,7 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
         let list: Vec<&str> = skipped.iter().map(String::as_str).collect();
         say!(out, "skipped here: {}", list.join(", "));
     }
-    if changed {
-        say!(
-            out,
-            "(a running daemon picks this up when restarted: systemctl --user restart omacloud)"
-        );
-    }
+
     let data = json!({
         "synced": synced.iter().map(|(name, path)| json!({ "name": name, "path": path })).collect::<Vec<_>>(),
         "skipped": skipped,
@@ -3245,12 +3267,10 @@ fn node(paths: &Paths, action: NodeCmd) -> Out {
                 .ok_or_else(|| fail::unsupported("this account isn't on the Omacloud network"))?;
             net.give = give;
             save(paths, &config)?;
-            Ok(
-                Response::new(json!({ "give": give }), format!("giving {}", net::human(give))).human(format!(
-                    "giving {} (a running daemon picks this up when restarted: systemctl --user restart omacloud)",
-                    net::human(give)
-                )),
-            )
+            Ok(Response::new(
+                json!({ "give": give }),
+                format!("giving {}", net::human(give)),
+            ))
         }
         NodeCmd::Run {
             give,

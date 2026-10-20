@@ -1,8 +1,9 @@
 //! Which paths don't sync, in gitignore syntax.
 //!
 //! Rules come from built-in defaults, the user's own list, and a
-//! `.omacloudignore` file at the folder root. That file syncs like any other,
-//! so every device follows the same rules. An ignored path is neither pushed
+//! `.omacloudignore` file at the folder root. Syncing one whole folder, that
+//! file syncs like any other, so every device follows the same rules;
+//! syncing folders of home, it's `~/.omacloudignore`, kept per computer. An ignored path is neither pushed
 //! nor pulled; copies already in history stay there.
 
 use std::path::Path;

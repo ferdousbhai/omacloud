@@ -120,7 +120,10 @@ impl Contribution {
         // that holder was last renewed
         let renewed = read_number(&self.data.join("renewed"));
         let mut last = read_node_times(&self.data.join("holders.json"));
-        let due = now().saturating_sub(renewed) >= RENEW_EVERY;
+        // stamped with when the round began: a holder renewed before a
+        // month end the round runs past was paid up to before it
+        let started = now();
+        let due = started.saturating_sub(renewed) >= RENEW_EVERY;
         let renew = due.then(|| Renew {
             until: now() + LEASE,
             last: last.clone(),
@@ -142,8 +145,8 @@ impl Contribution {
             )?;
         }
         if due {
-            write_private(&self.data.join("renewed"), now().to_string().as_bytes())?;
-            last.extend(report.renewed.iter().map(|n| (*n, now())));
+            write_private(&self.data.join("renewed"), started.to_string().as_bytes())?;
+            last.extend(report.renewed.iter().map(|n| (*n, started)));
             write_private(&self.data.join("holders.json"), &serde_json::to_vec(&hexed(&last))?)?;
         }
         let space = serde_json::json!({ "stored": report.stored, "monthly": report.monthly, "at": now() });
@@ -183,7 +186,8 @@ impl Contribution {
         let network = session.network();
         let mut changed = shares.len() != before;
         for s in &mut shares {
-            let Some(until) = s.renewal(now()) else { continue };
+            let started = now();
+            let Some(until) = s.renewal(started) else { continue };
             let key = omacloud_net::share::bucket_key(&s.secret);
             let mut pay = |n: u64| take(&wallet, n, || network.starter(STARTER));
             let last: BTreeMap<omacloud_net::blob::NodeId, u64> = s
@@ -193,11 +197,11 @@ impl Contribution {
                 .collect();
             match session.upkeep(&key, 0, Some(Renew { until, last }), &mut pay) {
                 Ok(r) => {
-                    s.holders.extend(r.renewed.iter().map(|n| (hex::encode(n), now())));
+                    s.holders.extend(r.renewed.iter().map(|n| (hex::encode(n), started)));
                     // a holder that didn't renew is replaced this round; the
-                    // next one, tomorrow, renews the new copies
+                    // next tick, six hours on, renews the new copies
                     if r.failed == 0 {
-                        s.renewed_at = now();
+                        s.renewed_at = started;
                     }
                     changed = true;
                 }
@@ -281,14 +285,12 @@ pub fn space(data: &Path) -> serde_json::Value {
     let last: serde_json::Value = read_json(&data.join("space.json"));
     let tokens = read_wallet(&data.join("wallet.json")).len() as u64;
     let monthly = last["monthly"].as_u64();
-    let renewed = read_number(&data.join("renewed"));
     serde_json::json!({
         "stored": last["stored"],
         "monthly": monthly,
         "tokens": tokens,
         // whole months the wallet pays at this size, after what's paid
         "months": monthly.filter(|m| *m > 0).map(|m| tokens / m),
-        "paid_until": (renewed > 0).then_some(renewed + LEASE),
         "checked_at": last["at"],
     })
 }
@@ -303,6 +305,8 @@ fn take(wallet: &Path, n: u64, starter: impl FnOnce() -> Result<Vec<Token>>) -> 
     let mut tokens = read_wallet(wallet);
     if tokens.len() < n {
         tokens.extend(starter()?);
+        // banked at once: the grant comes once a month, short or not
+        write_private(wallet, &serde_json::to_vec(&tokens)?)?;
     }
     anyhow::ensure!(
         tokens.len() >= n,
@@ -452,7 +456,6 @@ mod tests {
         let s = space(dir.path());
         assert_eq!((s["stored"].as_u64(), s["tokens"].as_u64()), (Some(5000), Some(7)));
         assert_eq!(s["months"], 2);
-        assert_eq!(s["paid_until"], 100 + LEASE);
         Ok(())
     }
 

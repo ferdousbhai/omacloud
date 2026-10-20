@@ -15,8 +15,8 @@
 //!      it. If another device appended first, go around again; blobs already
 //!      uploaded are reused.
 //!
-//! Regular files, directories and symlinks are synced. Empty directories are
-//! not kept.
+//! Regular files, directories and symlinks are synced, empty directories
+//! too.
 
 use std::{
     cell::RefCell,

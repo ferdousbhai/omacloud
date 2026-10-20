@@ -233,7 +233,10 @@ pub fn merge(base: Option<&Doc>, ours: &Doc, theirs: &Doc) -> (Doc, Vec<String>)
                 n.parent = Some(back);
             }
         }
-        conflicts.push("bookmarks moved into each other on {ME} and another computer; kept {ME}'s moves".into());
+        conflicts.push(format!(
+            "bookmarks moved into each other on {me} and another computer; kept {me}'s moves",
+            me = crate::merged::ME
+        ));
     }
     // can't happen (ours has no cycles), but never loop: park under other
     while let Some(cycle) = find_cycle(&out) {

@@ -14,7 +14,7 @@
 //! So a coordinator that shows a new device a fake account is caught at
 //! approval, the same moment the user compares device fingerprints.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use anyhow::Result;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -432,12 +432,6 @@ pub fn genesis(root: &SigningKey, device: &SigningKey, name: &str) -> DeviceEntr
             name: name.to_string(),
         },
     )
-}
-
-/// The keys in `members`, for callers that only need membership.
-#[must_use]
-pub fn keys(members: &Members) -> BTreeSet<String> {
-    members.valid.keys().cloned().collect()
 }
 
 #[cfg(test)]

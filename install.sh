@@ -81,30 +81,6 @@ if [[ ! $SIGNING_KEY_FINGERPRINT =~ ^[0-9A-F]{40}$ ]]; then
   exit 1
 fi
 
-# Before its rename this was OneCloud, from an [onecloud] repository with
-# its own pacman.conf Include and Omarchy hook: those go, and so does the
-# old package (its setup doesn't carry over; set up again in the app).
-remove_onecloud() {
-  local sudo='' conf=/etc/pacman.d/onecloud.conf include rest user home
-  (( EUID == 0 )) || sudo=sudo
-  include="Include = $conf"
-  if pacman -Q onecloud >/dev/null 2>&1; then
-    echo "Removing OneCloud, the earlier name"
-    $sudo pacman -Rns --noconfirm onecloud
-  fi
-  if grep -qxF "$include" /etc/pacman.conf; then
-    rest="$(grep -vxF "$include" /etc/pacman.conf)"
-    printf '%s\n' "$rest" | $sudo tee /etc/pacman.conf >/dev/null
-  fi
-  $sudo rm -f "$conf"
-  user="${SUDO_USER:-${USER:-$(id -un)}}"
-  home="$(getent passwd "$user" | cut -d: -f6)"
-  [[ -n $home ]] && rm -f "$home/.config/omarchy/hooks/pre-refresh-pacman.d/onecloud"
-  return 0
-}
-# first: syncing would fail on the old repository, which no longer exists
-remove_onecloud
-
 # Remove a repository this installer added: its pacman.conf Include, its
 # file and its Omarchy hook. The signing key stays trusted; it signs nothing
 # else.
@@ -121,6 +97,21 @@ remove_repo() {
   home="$(getent passwd "$user" | cut -d: -f6)"
   [[ -z $home ]] || $sudo rm -f "$home/.config/omarchy/hooks/pre-refresh-pacman.d/$name"
 }
+
+# Before its rename this was OneCloud, from an [onecloud] repository with
+# its own pacman.conf Include and Omarchy hook: those go, and so does the
+# old package (its setup doesn't carry over; set up again in the app).
+remove_onecloud() {
+  local sudo=''
+  (( EUID == 0 )) || sudo=sudo
+  if pacman -Q onecloud >/dev/null 2>&1; then
+    echo "Removing OneCloud, the earlier name"
+    $sudo pacman -Rns --noconfirm onecloud
+  fi
+  remove_repo onecloud
+}
+# first: syncing would fail on the old repository, which no longer exists
+remove_onecloud
 
 # Earlier installers added the x86_64 repository even on ARM. Leaving it
 # enabled would keep exposing incompatible packages during system updates.

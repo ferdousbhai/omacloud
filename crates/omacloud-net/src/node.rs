@@ -280,13 +280,19 @@ impl Inner {
 
     async fn store(&self, blob: BlobId, size: u64, recv: &mut iroh::endpoint::RecvStream) -> Result<Reply> {
         let name = hex::encode(blob.0);
-        let have = self
-            .db
-            .lock()
-            .expect("node db")
-            .query_row("SELECT 1 FROM blobs WHERE blob = ?1", [&name], |_| Ok(()))
-            .optional()?
-            .is_some();
+        let have = {
+            let db = self.db.lock().expect("node db");
+            // one whose lease ran out (a repair placing a copy back here)
+            // starts afresh, as if placed now: a lease still running keeps
+            // what's owed, or storing again would wipe it
+            db.execute(
+                "UPDATE blobs SET expires = ?2, paid_to = ?2 WHERE blob = ?1 AND expires < ?3",
+                params![name, now() + FIRST_LEASE, now()],
+            )?;
+            db.query_row("SELECT 1 FROM blobs WHERE blob = ?1", [&name], |_| Ok(()))
+                .optional()?
+                .is_some()
+        };
         if have {
             return Ok(Reply::Stored);
         }

@@ -22,6 +22,9 @@ use crate::{
     proto::BlobId,
 };
 
+/// How far a holder's clock may be from this computer's.
+const SLACK: u64 = 3600;
+
 /// Blobs renewed a request: well inside a request's size limit.
 const RENEW_BATCH: usize = 10_000;
 
@@ -66,10 +69,13 @@ pub struct Report {
 #[must_use]
 fn most_earned(bytes: u64, last: u64, now: u64) -> u64 {
     let longest = crate::node::LONGEST_LEASE.div_ceil(MONTH);
+    // an hour either side, for the holder's clock against this one's
     let months = if last == 0 {
         longest
     } else {
-        (now / MONTH).saturating_sub(last / MONTH).min(longest)
+        ((now + SLACK) / MONTH)
+            .saturating_sub(last.saturating_sub(SLACK) / MONTH)
+            .min(longest)
     };
     tokens_for(bytes * months)
 }
@@ -193,7 +199,9 @@ pub async fn round(
                     }
                 }
             }
-            if renewed {
+            // only a holder none of whose copies failed: one left out of
+            // the renewal (a failed audit) would still be owed from before
+            if renewed && !bad.values().any(|b| b.contains(&node)) {
                 report.renewed.insert(node);
             }
         }
@@ -246,8 +254,10 @@ mod tests {
         let now = 100 * MONTH + 3600;
         // renewed yesterday, with a month end since: that month
         assert_eq!(most_earned(gib, now - 24 * 3600, now), 1);
-        // renewed an hour ago, after it: nothing
-        assert_eq!(most_earned(gib, now - 60, now), 0);
+        // renewed a day after it: nothing
+        assert_eq!(most_earned(gib, now + 24 * 3600 - 60, now + 24 * 3600), 0);
+        // within an hour of a month end, either side: that month (clocks)
+        assert_eq!(most_earned(gib, now - 60, now), 1);
         assert_eq!(most_earned(3 * gib, now - 2 * MONTH, now), 6);
         assert_eq!(most_earned(gib, now - 12 * MONTH, now), 3, "at most a longest lease");
         assert_eq!(most_earned(gib, 0, now), 3);

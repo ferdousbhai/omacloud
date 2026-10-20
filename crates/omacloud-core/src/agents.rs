@@ -59,7 +59,6 @@ impl Agents {
         FILES.iter().find(|(d, _, _)| *d == doc).map(|(_, f, k)| (*f, *k))
     }
 
-    /// A file of the home that's a link isn't ours to write through.
     /// A file of the home, unless it or a folder on the way to it is a link
     /// (`~/.codex` pointing at a dotfiles repo): that isn't ours to read or
     /// write through.
