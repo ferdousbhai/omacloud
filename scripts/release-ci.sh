@@ -123,7 +123,10 @@ for target in (path, Path(str(path) + '.sig')):
     target.write_bytes(contents)
 PY
   done
-  gpg --batch --armor --export-filter keep-uid="uid =~ Omacloud" --export "$fingerprint" > "$assets/$database-signing-key.asc"
+  gpg --batch --armor --export "$fingerprint" > "$assets/$database-signing-key.asc"
+  # pacman-key won't sign a key without a user ID locally: installs would fail
+  gpg --batch --with-colons --show-keys "$assets/$database-signing-key.asc" | grep -q '^uid:' \
+    || { echo "The exported signing key has no user ID; not releasing." >&2; exit 1; }
 done
 cp "$staging/install.sh" "$assets/install.sh"
 awk -v v="## $version" '$0 ~ "^"v"([ (]|$)" {on=1; next} /^## / && on {exit} on' "$staging/CHANGELOG.md" > "$staging/notes.md"

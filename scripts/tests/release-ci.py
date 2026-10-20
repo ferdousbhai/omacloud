@@ -101,6 +101,7 @@ if [[ "$*" == *--detach-sign* ]]; then
 fi
 if [[ "$*" == *--verify* && $FAILURE == signature ]]; then exit 1; fi
 if [[ "$*" == *--export* ]]; then echo public-key; fi
+if [[ "$*" == *--show-keys* && $FAILURE != no-uid ]]; then echo 'uid:-::::1::x::Test (package signing):'; fi
 ''',
             'repo-add': '''#!/bin/bash
 [[ $FAILURE != database ]] || exit 1
@@ -150,5 +151,5 @@ done
         print(f'{failure or "success"}: passed')
 
 
-for failure in ('', 'flaky', 'ci', 'manifest', 'metadata', 'signing', 'signature', 'database', 'master-moved'):
+for failure in ('', 'flaky', 'ci', 'manifest', 'metadata', 'signing', 'signature', 'database', 'master-moved', 'no-uid'):
     check(failure)
