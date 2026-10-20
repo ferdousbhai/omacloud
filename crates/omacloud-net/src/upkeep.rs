@@ -26,11 +26,14 @@ use crate::{
 const RENEW_BATCH: usize = 10_000;
 
 /// A renewal: keep every good copy until `until`, paying each holder for
-/// the time it kept them since the last renewal, at `last` (0: none yet).
-#[derive(Debug, Clone, Copy)]
+/// the month ends since it was last renewed, as `last` says (a holder not
+/// in it: none known). Per holder, as what each is owed is: one left
+/// unrenewed (unpaid, out of reach) keeps its date, and its next charge
+/// stays within what it's allowed.
+#[derive(Debug, Clone, Default)]
 pub struct Renew {
     pub until: u64,
-    pub last: u64,
+    pub last: BTreeMap<NodeId, u64>,
 }
 
 /// What a round of upkeep found and did.
@@ -52,6 +55,8 @@ pub struct Report {
     /// Holders that failed: an audit, a renewal, or asked more than they
     /// could have earned.
     pub failed_nodes: BTreeSet<NodeId>,
+    /// Holders whose every copy asked was renewed this round.
+    pub renewed: BTreeSet<NodeId>,
 }
 
 /// The most a holder keeping `bytes` can have earned since the renewal at
@@ -142,6 +147,8 @@ pub async fn round(
             let Some(addr) = nodes.iter().find(|n| n.node.id == node).map(|n| n.addr.clone()) else {
                 continue;
             };
+            let last = last.get(&node).copied().unwrap_or(0);
+            let mut renewed = true;
             // in batches a request can carry
             for held in held.chunks(RENEW_BATCH) {
                 let bytes: u64 = held.iter().map(|(e, _)| e.blob_size()).sum();
@@ -161,6 +168,7 @@ pub async fn round(
                             // the other holders and the repairs go on
                             Err(e) => {
                                 log::warn!("paying {}: {e:#}", hex::encode(&node[..4]));
+                                renewed = false;
                                 continue;
                             }
                         }
@@ -178,11 +186,15 @@ pub async fn round(
                         if let Err(err) = &answer {
                             log::info!("renewing with {}: {err:#}", hex::encode(&node[..4]));
                         }
+                        renewed = false;
                         for (e, _) in held {
                             bad.entry(e.key.clone()).or_default().insert(node);
                         }
                     }
                 }
+            }
+            if renewed {
+                report.renewed.insert(node);
             }
         }
     }

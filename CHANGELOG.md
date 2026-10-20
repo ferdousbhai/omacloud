@@ -7,8 +7,11 @@
   could be lost. Renewals now come daily; holders charge at month ends
   shared by every blob, so a holder bills an account once a month however
   often it renews, and an owner refuses any charge between month ends;
-  shares likewise. A share that ends is taken down, and a payment that
-  fails no longer stops renewing and repairing everything else.
+  shares likewise. What a holder may charge is counted from when that
+  holder was last renewed, so one left unpaid or out of reach for a day
+  isn't taken for a cheat the next. A share that ends is taken down, and a
+  payment that fails no longer stops renewing and repairing everything
+  else.
 - A computer records the version it stands on as soon as it pulls, so
   tidying keeps it even if the rest of that sync fails; a sharded object
   is repaired from holders counted bad for a missed renewal when the good

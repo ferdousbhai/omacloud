@@ -449,7 +449,7 @@ impl Session {
     /// If the Worker can't be reached.
     pub fn take_down(&self, secret: &str) -> Result<()> {
         let bucket = self.gateway.bucket(&crate::share::bucket_key(secret));
-        self.rt.block_on(bucket.delete("share"))
+        self.rt.block_on(crate::share::take_down(&bucket))
     }
 
     /// Never choose these holders (failed this computer lately) for new copies.

@@ -132,12 +132,14 @@ sync engine. Nothing in it is trusted for anything but availability.
   it served, as the owner's audits found it, never ahead, so there's
   nothing to take and run with. Asked with too little, a holder says
   what's owed; the owner pays it unless it's more than every byte for
-  every month end since its last renewal, which marks the holder a cheat
-  (asking anything between month ends does). A blob that was paid for
-  gets 180 days' grace after its lease before it's dropped, so deletes are
-  slow by design; a renewal after a lease ran out pays for the lease, not
-  the grace, though what the lease left unpaid stays owed. A holder never
-  learns whose blobs it has.
+  every month end since it last renewed that holder, which marks the
+  holder a cheat (asking anything between month ends does). A blob that
+  was paid for, from its first month end on, gets 180 days' grace after
+  its lease before it's dropped, so deletes are slow by design (an
+  account whose computers were all lost keeps its newest few weeks only
+  until their lease ends); a renewal after a lease ran out pays for the lease, not
+  the grace, and counts afresh from then. A holder never learns whose
+  blobs it has.
 - **Scrambling** (`blob.rs`). Each holder gets its own copy, the restic
   object XORed with ChaCha20 keyed per epoch, its nonce from the object key
   and the holder's id, so no two holders store the same bytes and a holder

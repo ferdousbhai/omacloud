@@ -1905,6 +1905,7 @@ fn run(cli: Cli) -> Out {
                 made,
                 until: made + days * 86_400,
                 renewed_at: 0,
+                holders: std::collections::BTreeMap::new(),
             });
             net::write_shares(&paths.data, &shares)?;
             let link = omacloud_net::share::link(&net.url, &secret);

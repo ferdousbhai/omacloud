@@ -3,6 +3,7 @@
 //! account's copies, and keep the tokens that pay for them.
 
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -115,11 +116,14 @@ impl Contribution {
             .options
             .get("access_key_id")
             .context("the repository isn't on the network")?;
-        // daily; each holder is paid as each whole month goes by
+        // daily; each holder is paid at each month end, counted from when
+        // that holder was last renewed
         let renewed = read_number(&self.data.join("renewed"));
-        let renew = (now().saturating_sub(renewed) >= RENEW_EVERY).then_some(Renew {
+        let mut last = read_node_times(&self.data.join("holders.json"));
+        let due = now().saturating_sub(renewed) >= RENEW_EVERY;
+        let renew = due.then(|| Renew {
             until: now() + LEASE,
-            last: renewed,
+            last: last.clone(),
         });
         let wallet = self.data.join("wallet.json");
         let network = session.network();
@@ -137,8 +141,10 @@ impl Contribution {
                 &serde_json::to_vec(&hexed(&suspects))?,
             )?;
         }
-        if renew.is_some() {
+        if due {
             write_private(&self.data.join("renewed"), now().to_string().as_bytes())?;
+            last.extend(report.renewed.iter().map(|n| (*n, now())));
+            write_private(&self.data.join("holders.json"), &serde_json::to_vec(&hexed(&last))?)?;
         }
         let space = serde_json::json!({ "stored": report.stored, "monthly": report.monthly, "at": now() });
         write_private(&self.data.join("space.json"), space.to_string().as_bytes())?;
@@ -180,18 +186,21 @@ impl Contribution {
             let Some(until) = s.renewal(now()) else { continue };
             let key = omacloud_net::share::bucket_key(&s.secret);
             let mut pay = |n: u64| take(&wallet, n, || network.starter(STARTER));
-            let renew = Renew {
-                until,
-                last: s.renewed_at,
-            };
-            match session.upkeep(&key, 0, Some(renew), &mut pay) {
-                // a holder that didn't renew is replaced this round; the
-                // next one renews the new copies
-                Ok(r) if r.failed == 0 => {
-                    s.renewed_at = now();
+            let last: BTreeMap<omacloud_net::blob::NodeId, u64> = s
+                .holders
+                .iter()
+                .filter_map(|(id, t)| Some((hex::decode(id).ok()?.try_into().ok()?, *t)))
+                .collect();
+            match session.upkeep(&key, 0, Some(Renew { until, last }), &mut pay) {
+                Ok(r) => {
+                    s.holders.extend(r.renewed.iter().map(|n| (hex::encode(n), now())));
+                    // a holder that didn't renew is replaced this round; the
+                    // next one, tomorrow, renews the new copies
+                    if r.failed == 0 {
+                        s.renewed_at = now();
+                    }
                     changed = true;
                 }
-                Ok(_) => {}
                 Err(e) => warn!("keeping the shared {}: {e:#}", s.name),
             }
         }
@@ -224,9 +233,13 @@ pub struct Shared {
     pub name: String,
     pub made: u64,
     pub until: u64,
-    /// When it was last renewed (and its holders paid up to).
+    /// When it was last renewed.
     #[serde(default)]
     pub renewed_at: u64,
+    /// When each holder (hex node id) was last renewed: what it may charge
+    /// is counted from then.
+    #[serde(default)]
+    pub holders: BTreeMap<String, u64>,
 }
 
 impl Shared {
@@ -235,7 +248,7 @@ impl Shared {
     /// ahead and never past `until`.
     #[must_use]
     pub fn renewal(&self, now: u64) -> Option<u64> {
-        (self.until > self.made + FIRST_LEASE && now.saturating_sub(self.renewed_at) >= RENEW_EVERY)
+        (now < self.until && self.until > self.made + FIRST_LEASE && now.saturating_sub(self.renewed_at) >= RENEW_EVERY)
             .then(|| self.until.min(now + LEASE))
     }
 }
@@ -314,20 +327,24 @@ fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
         .unwrap_or_default()
 }
 
-/// Holders that failed this computer, and until when they're passed over;
-/// those whose time is up are left out.
-fn read_suspects(data: &Path) -> std::collections::BTreeMap<omacloud_net::blob::NodeId, u64> {
-    let kept: std::collections::BTreeMap<String, u64> = read_json(&data.join("suspects.json"));
-    kept.into_iter()
-        .filter(|(_, until)| *until > now())
-        .filter_map(|(id, until)| Some((hex::decode(id).ok()?.try_into().ok()?, until)))
+/// A map of node to time kept in `path`, empty when there's none.
+fn read_node_times(path: &Path) -> BTreeMap<omacloud_net::blob::NodeId, u64> {
+    read_json::<BTreeMap<String, u64>>(path)
+        .into_iter()
+        .filter_map(|(id, t)| Some((hex::decode(id).ok()?.try_into().ok()?, t)))
         .collect()
 }
 
-fn hexed(
-    suspects: &std::collections::BTreeMap<omacloud_net::blob::NodeId, u64>,
-) -> std::collections::BTreeMap<String, u64> {
-    suspects.iter().map(|(id, until)| (hex::encode(id), *until)).collect()
+/// Holders that failed this computer, and until when they're passed over;
+/// those whose time is up are left out.
+fn read_suspects(data: &Path) -> BTreeMap<omacloud_net::blob::NodeId, u64> {
+    let mut suspects = read_node_times(&data.join("suspects.json"));
+    suspects.retain(|_, until| *until > now());
+    suspects
+}
+
+fn hexed(times: &BTreeMap<omacloud_net::blob::NodeId, u64>) -> BTreeMap<String, u64> {
+    times.iter().map(|(id, t)| (hex::encode(id), *t)).collect()
 }
 
 fn read_number(path: &Path) -> u64 {
@@ -392,6 +409,7 @@ mod tests {
             made: 0,
             until: 7 * day,
             renewed_at: 0,
+            holders: BTreeMap::new(),
         };
         assert_eq!(week.renewal(day), None, "its first lease covers it");
         let year = Shared {
@@ -405,12 +423,13 @@ mod tests {
         };
         assert_eq!(renewed.renewal(day + 3600), None, "once a day");
         assert_eq!(renewed.renewal(2 * day), Some(2 * day + LEASE));
-        // never past its end
+        // never past its end, and not once it ended (its take-down retried)
         let month = Shared {
             until: 30 * day,
             ..week
         };
         assert_eq!(month.renewal(day), Some(30 * day));
+        assert_eq!(month.renewal(31 * day), None);
     }
 
     #[test]

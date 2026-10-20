@@ -44,7 +44,9 @@ pub const FIRST_LEASE: u64 = 7 * 24 * 3600;
 pub const LONGEST_LEASE: u64 = 3 * MONTH;
 
 /// How long a paid blob is kept after its lease ends, unpaid: an account
-/// whose every computer was lost has this long to come back for it.
+/// whose every computer was lost has this long to come back for it. A blob
+/// is paid for at its first month end, up to five weeks after it's placed;
+/// newer ones go when their lease ends, two months on.
 pub const GRACE: u64 = 180 * 24 * 3600;
 
 /// What a node is set up with.
@@ -216,16 +218,14 @@ impl Node {
 /// owner renews and whenever each was placed. Charged are the month ends
 /// passed since it was paid up to, until now or its lease's end if that
 /// came first: the grace after a lease is unpaid, and is forgiven on a
-/// renewal after it, though what the lease left unpaid stays owed.
+/// renewal after it, which counts afresh from then.
 fn charge(paid_to: u64, expires: u64, now: u64) -> (u64, u64) {
     let until = now.min(expires);
     let months = (until / MONTH).saturating_sub(paid_to / MONTH);
-    let paid_to = if months > 0 { until / MONTH * MONTH } else { paid_to };
     if expires < now {
-        // lapsed: the grace drops out, the lease's unpaid end carries on
-        (months, now - expires.saturating_sub(paid_to))
+        (months, now)
     } else {
-        (months, paid_to)
+        (months, if months > 0 { until } else { paid_to })
     }
 }
 
@@ -440,17 +440,16 @@ mod tests {
             charge(100 * m + 5 * day, 102 * m, 100 * m + 20 * day),
             (0, 100 * m + 5 * day)
         );
-        // past a month end: one month, paid up to it
-        assert_eq!(charge(100 * m + 5 * day, 102 * m, 101 * m + 1), (1, 101 * m));
+        // past a month end: one month, paid up to now
+        assert_eq!(charge(100 * m + 5 * day, 102 * m, 101 * m + 1), (1, 101 * m + 1));
         // two blobs placed on different days come due on the same day
         assert_eq!(charge(100 * m + 2 * day, 103 * m, 101 * m + day).0, 1);
         assert_eq!(charge(100 * m + 25 * day, 103 * m, 101 * m + day).0, 1);
-        // back a year after the lease ended: its months, not the grace
-        let (months, paid_to) = charge(100 * m, 102 * m + 5 * day, 112 * m + 10 * day);
-        assert_eq!(months, 2);
-        // the lease's unpaid five days carry on from now
-        assert_eq!(paid_to, 112 * m + 5 * day);
+        // back a year after the lease ended, early in a month: its months,
+        // not the grace, and counting afresh from now
+        let (months, paid_to) = charge(100 * m, 102 * m + 5 * day, 112 * m + 2 * day);
+        assert_eq!((months, paid_to), (2, 112 * m + 2 * day));
         // so the next day nothing more is owed
-        assert_eq!(charge(paid_to, 114 * m, 112 * m + 11 * day).0, 0);
+        assert_eq!(charge(paid_to, 114 * m, 112 * m + 3 * day).0, 0);
     }
 }

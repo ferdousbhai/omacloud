@@ -85,6 +85,16 @@ pub async fn remove(bucket: &Bucket) -> Result<()> {
     bucket.delete(OBJECT).await
 }
 
+/// Take down a share, whether or not it's still there: its index entry
+/// goes.
+///
+/// # Errors
+///
+/// If the Worker can't be reached.
+pub async fn take_down(bucket: &Bucket) -> Result<()> {
+    bucket.delete(OBJECT).await
+}
+
 /// A share link: the network's Worker (or `dir:` path), then the secret
 /// after `/s#`.
 #[must_use]

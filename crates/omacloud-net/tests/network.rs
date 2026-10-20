@@ -176,7 +176,7 @@ async fn upkeep_replaces_a_holder_that_left_and_one_that_dropped_its_copy() -> R
         100,
         Some(upkeep::Renew {
             until: omacloud_net::node::now() + 3600,
-            last: 0,
+            ..Default::default()
         }),
         &mut free,
     )
@@ -315,7 +315,7 @@ async fn a_copy_placed_between_renewals_outlives_its_free_week() -> Result<()> {
     let mut free = |_| Ok(Vec::new());
     let renew = upkeep::Renew {
         until: now() + 2 * MONTH,
-        last: now() - 24 * 3600,
+        last: net.nodes.iter().map(|n| (n.id(), now() - 24 * 3600)).collect(),
     };
     let r = upkeep::round(&b, 0, Some(renew), &mut free).await?;
     assert_eq!(r.failed, 0, "{r:?}");
