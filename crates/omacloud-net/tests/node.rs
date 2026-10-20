@@ -19,6 +19,7 @@ async fn holder(dir: &std::path::Path, capacity: u64, issuer: Option<credit::Iss
             dir: dir.to_path_buf(),
             capacity,
             issuer,
+            trade: None,
         },
     )
     .await
@@ -61,7 +62,7 @@ async fn a_full_holder_refuses_and_an_unpaid_blob_goes_when_its_lease_ends() -> 
     // no longer kept (its bytes are served until the store's next collection)
     assert_eq!(
         client::renew(&me, &n.addr(), vec![blob], now() + node::MONTH, Vec::new()).await?,
-        client::Renewal::Kept(vec![false])
+        client::Renewal::Kept(vec![false], 0)
     );
     // room again
     client::store(&me, &n.addr(), &[2u8; 600]).await?;
@@ -82,7 +83,7 @@ async fn a_holder_is_paid_for_time_served_and_a_paid_blob_gets_its_grace() -> Re
     // in its first week nothing is owed: kept on credit
     assert_eq!(
         client::renew(&me, &n.addr(), vec![blob], until, Vec::new()).await?,
-        Renewal::Kept(vec![true])
+        Renewal::Kept(vec![true], 0)
     );
     // 33 days on, a whole month unpaid: under a GiB, one token
     n.backdate(40 * 24 * 3600)?;
@@ -91,18 +92,18 @@ async fn a_holder_is_paid_for_time_served_and_a_paid_blob_gets_its_grace() -> Re
         Renewal::Owed(1)
     );
     let (blind, pending) = credit::ask(&kp.pk, 1)?;
-    let signed: Vec<Vec<u8>> = blind.iter().map(|b| kp.sk.blind_sign(b).unwrap().0).collect();
+    let signed: Vec<_> = blind.iter().map(|b| Some(kp.sk.blind_sign(b).unwrap().0)).collect();
     let tokens = pending.finish(&kp.pk, &signed)?;
     assert_eq!(
         client::renew(&me, &n.addr(), vec![blob, BlobId([9; 32])], until, tokens.clone()).await?,
-        Renewal::Kept(vec![true, false])
+        Renewal::Kept(vec![true, false], 1)
     );
     assert_eq!(n.tokens()?.len(), 1);
     // paid for that month (the days since carry over): nothing more owed
     // now, and spent tokens buy nothing later
     assert_eq!(
         client::renew(&me, &n.addr(), vec![blob], until, Vec::new()).await?,
-        Renewal::Kept(vec![true])
+        Renewal::Kept(vec![true], 0)
     );
     n.backdate(31 * 24 * 3600)?;
     assert_eq!(
@@ -113,6 +114,61 @@ async fn a_holder_is_paid_for_time_served_and_a_paid_blob_gets_its_grace() -> Re
     let until = until - 31 * 24 * 3600;
     assert_eq!(n.sweep_as_of(until + 60).await?, 0, "kept through its grace");
     assert_eq!(n.sweep_as_of(until + node::GRACE + 60).await?, 1);
+    n.shutdown().await;
+    Ok(())
+}
+
+/// A renewal's tokens are traded in before it's answered: ones the payer
+/// spent elsewhere first don't pay.
+#[tokio::test(flavor = "multi_thread")]
+async fn tokens_spent_elsewhere_first_pay_nothing() -> Result<()> {
+    use client::Renewal;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let tmp = tempfile::tempdir()?;
+    let kp = KeyPairSha384PSSRandomized::generate(&mut DefaultRng, 2048)?;
+    let spent = Arc::new(AtomicBool::new(true));
+    let worker = spent.clone();
+    let n = Node::spawn(
+        endpoint().await?,
+        Config {
+            dir: tmp.path().to_path_buf(),
+            capacity: 10 << 20,
+            issuer: Some(kp.pk.clone()),
+            trade: Some(Arc::new(move |t: &[credit::Token]| {
+                Ok(vec![!worker.load(Ordering::SeqCst); t.len()])
+            })),
+        },
+    )
+    .await?;
+    let me = endpoint().await?;
+    let blob = client::store(&me, &n.addr(), &[3u8; 1000]).await?;
+    let until = now() + 2 * node::MONTH;
+    client::renew(&me, &n.addr(), vec![blob], until, Vec::new()).await?;
+    n.backdate(40 * 24 * 3600)?;
+    let pay = || -> Result<Vec<credit::Token>> {
+        let (blind, pending) = credit::ask(&kp.pk, 1)?;
+        let signed: Vec<_> = blind.iter().map(|b| Some(kp.sk.blind_sign(b).unwrap().0)).collect();
+        pending.finish(&kp.pk, &signed)
+    };
+    assert_eq!(
+        client::renew(&me, &n.addr(), vec![blob], until, pay()?).await?,
+        Renewal::Owed(1)
+    );
+    spent.store(false, Ordering::SeqCst);
+    assert_eq!(
+        client::renew(&me, &n.addr(), vec![blob], until, pay()?).await?,
+        Renewal::Kept(vec![true], 1)
+    );
+    // traded in already
+    assert!(n.tokens()?.is_empty());
+    // nothing owed now (another computer just paid): a payment is left
+    assert_eq!(
+        client::renew(&me, &n.addr(), vec![blob], until, pay()?).await?,
+        Renewal::Kept(vec![true], 0)
+    );
     n.shutdown().await;
     Ok(())
 }
@@ -177,6 +233,7 @@ async fn a_computer_reaches_a_holder_through_a_relay_alone() -> Result<()> {
             dir: tmp.path().to_path_buf(),
             capacity: 1 << 20,
             issuer: None,
+            trade: None,
         },
     )
     .await?;

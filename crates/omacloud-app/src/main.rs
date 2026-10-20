@@ -1128,15 +1128,12 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
     );
     let empty = Vec::new();
     let folders = &s["folders"];
-    let home = std::env::var("HOME").unwrap_or_default();
     let mut rows: Vec<(String, String, &'static str)> = Vec::new();
     for f in folders["synced"].as_array().unwrap_or(&empty) {
         rows.push((text(&f["name"]), text(&f["path"]), "synced"));
     }
     for f in folders["skipped"].as_array().unwrap_or(&empty) {
-        let name = text(f);
-        let path = format!("{home}/{name}");
-        rows.push((name, path, "skipped"));
+        rows.push((text(&f["name"]), text(&f["path"]), "skipped"));
     }
     for f in folders["others"].as_array().unwrap_or(&empty) {
         rows.push((text(&f["name"]), text(&f["path"]), "off"));

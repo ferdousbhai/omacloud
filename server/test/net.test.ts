@@ -452,8 +452,8 @@ test("credits: the starter grant per prefix", async () => {
 
 test("credits: exchange spends good tokens once, refuses forged ones, and pays nothing for spent ones", async () => {
 	const { env, sqlite } = setup();
-	const exchange = (tokens: unknown[], n: number) =>
-		call(env, "/api/net/credits/exchange", { method: "POST", body: { tokens, blind: Array.from({ length: n }, () => blind().blind) } });
+	const exchange = (tokens: unknown[], n: number, blinds = Array.from({ length: n }, () => blind().blind)) =>
+		call(env, "/api/net/credits/exchange", { method: "POST", body: { tokens, blind: blinds, each: true } });
 	const [a, b, c] = [directToken(), directToken(), directToken()];
 
 	// more blind messages than tokens: refused, nothing spent
@@ -463,11 +463,16 @@ test("credits: exchange spends good tokens once, refuses forged ones, and pays n
 	assert.equal((await exchange([a, a], 2)).status, 400);
 	assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM net_spent").get()!.n, 0);
 
-	const res = await exchange([a, b], 2);
+	const asked = [blind().blind, blind().blind];
+	const res = await exchange([a, b], 2, asked);
 	assert.equal(res.status, 200);
 	const out = (await res.json()) as { signed: string[]; spent: number };
 	assert.equal(out.spent, 2);
 	assert.equal(out.signed.length, 2);
+	// the same exchange again (its answer lost): signed again, the same
+	assert.deepEqual(await (await exchange([a, b], 2, asked)).json(), out);
+	// other blind messages for those tokens: nothing
+	assert.deepEqual(((await (await exchange([a, b], 2)).json()) as { signed: unknown[] }).signed, [null, null]);
 	assert.deepEqual(
 		(sqlite.prepare("SELECT id FROM net_spent ORDER BY id").all() as { id: string }[]).map((r) => r.id),
 		[sha256(Buffer.from(a.msg, "hex")), sha256(Buffer.from(b.msg, "hex"))].sort(),
@@ -476,11 +481,12 @@ test("credits: exchange spends good tokens once, refuses forged ones, and pays n
 	// a spent token again buys nothing, and doesn't sink the unspent one
 	const again = await exchange([a, c], 2);
 	assert.equal(again.status, 200);
-	const back = (await again.json()) as { signed: string[]; spent: number };
+	const back = (await again.json()) as { signed: (string | null)[]; spent: number };
 	assert.equal(back.spent, 1);
-	assert.equal(back.signed.length, 1);
+	assert.equal(back.signed[0], null);
+	assert.equal(typeof back.signed[1], "string");
 	assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM net_spent").get()!.n, 3);
-	assert.deepEqual(((await (await exchange([a], 1)).json()) as { signed: string[] }).signed, []);
+	assert.deepEqual(((await (await exchange([a], 1)).json()) as { signed: unknown[] }).signed, [null]);
 
 	// forged: a signature by another key, or over another message
 	const other = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -501,6 +507,12 @@ test("credits: exchange spends good tokens once, refuses forged ones, and pays n
 	assert.equal(mixed.status, 200);
 	assert.equal(((await mixed.json()) as { spent: number }).spent, 1);
 	assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM net_spent").get()!.n, 4);
+
+	// an older computer, asking without `each`: the first blind messages,
+	// one for each token spent now, and no nulls
+	const e = directToken();
+	const older = await call(env, "/api/net/credits/exchange", { method: "POST", body: { tokens: [a, e], blind: [blind().blind, blind().blind] } });
+	assert.deepEqual(((await older.json()) as { signed: string[] }).signed.map((x) => typeof x), ["string"]);
 });
 
 test("unknown paths under /api/net/ answer JSON 404s", async () => {

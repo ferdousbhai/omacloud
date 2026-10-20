@@ -45,9 +45,13 @@ pub enum Request {
 #[serde(tag = "reply", rename_all = "snake_case")]
 pub enum Reply {
     Stored,
-    /// Per blob asked, whether it's kept now.
+    /// Per blob asked, whether it's kept now, and how many of the tokens
+    /// given it took (the first ones: no more than owed; none said, from
+    /// an older holder: all).
     Renewed {
         kept: Vec<bool>,
+        #[serde(default)]
+        taken: Option<u64>,
     },
     Refused {
         why: String,

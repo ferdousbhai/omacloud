@@ -58,7 +58,26 @@ pub struct Config {
     /// The Worker's token key; without one (development, tests), storage
     /// is free.
     pub issuer: Option<IssuerKey>,
+    /// Trades a batch of tokens (at most [`TRADE_BATCH`]) in at the Worker,
+    /// banking what they bring, and says which it paid for: a renewal's
+    /// tokens are traded before it's answered, so a payer can't spend them
+    /// again elsewhere. Without it, or while the Worker is out of reach,
+    /// they wait for [`Node::trade_in`].
+    pub trade: Option<Trade>,
 }
+
+/// See [`Config::trade`].
+pub type Trade = Arc<dyn Fn(&[Token]) -> Result<Vec<bool>> + Send + Sync>;
+
+/// Tokens the Worker takes in one trade.
+pub const TRADE_BATCH: usize = 100;
+
+/// How long a renewal waits on trading its tokens in: well inside what an
+/// owner waits for an answer. The trade goes on after.
+const TRADE_WAIT: Duration = Duration::from_secs(20);
+
+/// The least a renewal waits on its trade, however long it queued.
+const TRADE_FLOOR: Duration = Duration::from_secs(5);
 
 /// A running node.
 pub struct Node {
@@ -66,12 +85,18 @@ pub struct Node {
     inner: Arc<Inner>,
 }
 
-#[derive(Debug)]
 struct Inner {
     store: FsStore,
     db: Mutex<rusqlite::Connection>,
     capacity: u64,
     issuer: Option<IssuerKey>,
+    trade: Option<Trade>,
+    /// One renewal at a time: two at once (two computers of an account)
+    /// would each charge the same month.
+    renewing: tokio::sync::Mutex<()>,
+    /// One trade at a time: a renewal's that ran past its wait, and the
+    /// daemon's of what waited, would otherwise both bank the same tokens.
+    trading: Mutex<()>,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +124,9 @@ impl Node {
             db: Mutex::new(db),
             capacity: config.capacity,
             issuer: config.issuer,
+            trade: config.trade,
+            renewing: tokio::sync::Mutex::new(()),
+            trading: Mutex::new(()),
         });
         let router = Router::builder(endpoint)
             .accept(iroh_blobs::ALPN, BlobsProtocol::new(&inner.store, None))
@@ -139,17 +167,16 @@ impl Node {
         rows.map(|t| Ok(serde_json::from_str(&t?)?)).collect()
     }
 
-    /// Note tokens as traded in at the Worker.
+    /// Trade in the tokens taken and not yet traded (the Worker was out of
+    /// reach then). Returns how many the Worker took.
     ///
     /// # Errors
     ///
-    /// If the records can't be written.
-    pub fn mark_deposited(&self, tokens: &[Token]) -> Result<()> {
-        let db = self.inner.db.lock().expect("node db");
-        for t in tokens {
-            db.execute("UPDATE tokens SET deposited = 1 WHERE id = ?1", [hex::encode(t.id())])?;
-        }
-        Ok(())
+    /// If the Worker can't be reached or the records can't be read.
+    pub async fn trade_in(&self) -> Result<usize> {
+        let tokens = self.tokens()?;
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || inner.trade_in(&tokens)).await?
     }
 
     /// Drop the blobs whose lease (and, once paid, grace) ran out; their
@@ -271,7 +298,57 @@ pub fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
+impl std::fmt::Debug for Inner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inner")
+            .field("capacity", &self.capacity)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Inner {
+    /// Trade `tokens` in, a batch at a time, each noted as traded once it's
+    /// banked: tokens the Worker took are spent, and those it gave for
+    /// them, banked, mustn't be asked for again. Returns how many it paid.
+    fn trade_in(&self, tokens: &[Token]) -> Result<usize> {
+        let Some(trade) = &self.trade else { return Ok(0) };
+        let _one = self.trading.lock().expect("node trading");
+        // traded in meanwhile (by another trade): not again, and paid for
+        // only if the Worker paid then (`deposited` 1; 2 when it didn't)
+        let traded = |t: &Token| -> Result<i64> {
+            let db = self.db.lock().expect("node db");
+            Ok(db
+                .query_row(
+                    "SELECT deposited FROM tokens WHERE id = ?1",
+                    [hex::encode(t.id())],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .unwrap_or(0))
+        };
+        let mut good = 0;
+        let mut waiting = Vec::new();
+        for t in tokens {
+            match traded(t)? {
+                0 => waiting.push(t.clone()),
+                1 => good += 1,
+                _ => {}
+            }
+        }
+        for batch in waiting.chunks(TRADE_BATCH) {
+            let paid = trade(batch)?;
+            let db = self.db.lock().expect("node db");
+            for (t, p) in batch.iter().zip(paid) {
+                good += usize::from(p);
+                db.execute(
+                    "UPDATE tokens SET deposited = ?1 WHERE id = ?2",
+                    params![if p { 1 } else { 2 }, hex::encode(t.id())],
+                )?;
+            }
+        }
+        Ok(good)
+    }
+
     fn used(&self) -> Result<u64> {
         let db = self.db.lock().expect("node db");
         let used: i64 = db.query_row("SELECT COALESCE(SUM(size), 0) FROM blobs", [], |r| r.get(0))?;
@@ -293,7 +370,9 @@ impl Inner {
             .optional()?;
         if let Some((expires, paid)) = held {
             let kept_until = u64::try_from(expires).unwrap_or(0) + if paid != 0 { GRACE } else { 0 };
-            if kept_until < now() + FIRST_LEASE {
+            // under two days left: its owners' daily renewal may not
+            // come in time
+            if kept_until < now() + 2 * 24 * 3600 {
                 return Ok(Reply::Refused {
                     why: "held, but about to be let go".into(),
                 });
@@ -324,13 +403,66 @@ impl Inner {
         Ok(Reply::Stored)
     }
 
-    fn renew(&self, blobs: &[BlobId], until: u64, tokens: Vec<Token>) -> Result<Reply> {
+    async fn renew(self: &Arc<Self>, blobs: &[BlobId], until: u64, tokens: Vec<Token>) -> Result<Reply> {
         let now = now();
         if until > now + LONGEST_LEASE {
             return Ok(Reply::Refused {
                 why: "that lease is too long".into(),
             });
         }
+        // the wait on trading counts from when the request came: one
+        // queued behind a slow one doesn't wait again
+        let deadline = tokio::time::Instant::now() + TRADE_WAIT;
+        let _one = self.renewing.lock().await;
+        // but its tokens are always checked a moment: a pile of requests
+        // can't wait out every check
+        let deadline = deadline.max(tokio::time::Instant::now() + TRADE_FLOOR);
+        let (kept, charged, owed, fresh) = match self.charges(blobs, &tokens, now)? {
+            Ok(c) => c,
+            Err(reply) => return Ok(reply),
+        };
+        let taken = fresh.len();
+        if self.trade.is_some() && !fresh.is_empty() {
+            let inner = self.clone();
+            let trading = tokio::task::spawn_blocking(move || inner.trade_in(&fresh));
+            match tokio::time::timeout_at(deadline, trading).await {
+                // spent elsewhere first: not paid after all
+                Ok(Ok(Ok(good))) if (good as u64) < owed => return Ok(Reply::Owed { tokens: owed }),
+                Ok(Ok(Ok(_))) => {}
+                Ok(Ok(Err(e))) => log::info!("trading tokens in later: {e:#}"),
+                Ok(Err(e)) => return Err(e.into()),
+                Err(_) => log::info!("the Worker is slow: trading tokens in later"),
+            }
+        }
+        let db = self.db.lock().expect("node db");
+        for ((b, k), (months, paid_to)) in blobs.iter().zip(&kept).zip(&charged) {
+            if *k {
+                // the grace after a lease is for blobs paid for (storage is
+                // free without a token key): so a lease can't be lapsed and
+                // renewed for nothing, again and again
+                let paid = *months > 0 || self.issuer.is_none();
+                db.execute(
+                    "UPDATE blobs SET expires = MAX(expires, ?1), paid = MAX(paid, ?2), paid_to = ?3 WHERE blob = ?4",
+                    params![until, i64::from(paid), i64::try_from(*paid_to)?, hex::encode(b.0)],
+                )?;
+            }
+        }
+        Ok(Reply::Renewed {
+            kept,
+            taken: Some(taken as u64),
+        })
+    }
+
+    /// What renewing `blobs` charges, paid with `tokens`: per blob, whether
+    /// it's kept and its months and new `paid_to`; the tokens owed; and the
+    /// good ones not taken before, now taken. Or the reply when too few are.
+    #[allow(clippy::type_complexity)]
+    fn charges(
+        &self,
+        blobs: &[BlobId],
+        tokens: &[Token],
+        now: u64,
+    ) -> Result<Result<(Vec<bool>, Vec<(u64, u64)>, u64, Vec<Token>), Reply>> {
         let db = self.db.lock().expect("node db");
         let mut kept = Vec::with_capacity(blobs.len());
         let mut charged = Vec::with_capacity(blobs.len());
@@ -357,52 +489,48 @@ impl Inner {
             });
             charged.push((months, paid_to));
         }
-        if let Some(issuer) = &self.issuer {
-            let owed = tokens_for(byte_months);
-            // each good token once, however often it's given
-            let mut fresh = std::collections::BTreeSet::new();
-            for t in &tokens {
-                if t.verify(issuer).is_err() {
-                    continue;
-                }
-                let id = hex::encode(t.id());
-                let taken = db
-                    .query_row("SELECT 1 FROM tokens WHERE id = ?1", [&id], |_| Ok(()))
-                    .optional()?
-                    .is_some();
-                if !taken {
-                    fresh.insert(id);
-                }
+        let Some(issuer) = &self.issuer else {
+            return Ok(Ok((kept, charged, 0, Vec::new())));
+        };
+        let owed = tokens_for(byte_months);
+        // each good token once, however often it's given, in the order
+        // given; only as many as owed are taken (another of the account's
+        // computers may have just paid), the rest left to the payer
+        let mut fresh: Vec<(String, &Token)> = Vec::new();
+        for t in tokens {
+            if fresh.len() as u64 >= owed {
+                break;
             }
-            let fresh = fresh.len() as u64;
-            if fresh < owed {
-                return Ok(Reply::Owed { tokens: owed });
+            if t.verify(issuer).is_err() {
+                continue;
             }
-            for t in &tokens {
-                if t.verify(issuer).is_ok() {
-                    db.execute(
-                        "INSERT OR IGNORE INTO tokens (id, token) VALUES (?1, ?2)",
-                        params![hex::encode(t.id()), serde_json::to_string(t)?],
-                    )?;
-                }
+            let id = hex::encode(t.id());
+            let taken = db
+                .query_row("SELECT 1 FROM tokens WHERE id = ?1", [&id], |_| Ok(()))
+                .optional()?
+                .is_some();
+            if !taken && !fresh.iter().any(|(f, _)| *f == id) {
+                fresh.push((id, t));
             }
         }
-        for ((b, k), (months, paid_to)) in blobs.iter().zip(&kept).zip(&charged) {
-            if *k {
-                // the grace after a lease is for blobs paid for (storage is
-                // free without a token key): so a lease can't be lapsed and
-                // renewed for nothing, again and again
-                let paid = *months > 0 || self.issuer.is_none();
-                db.execute(
-                    "UPDATE blobs SET expires = MAX(expires, ?1), paid = MAX(paid, ?2), paid_to = ?3 WHERE blob = ?4",
-                    params![until, i64::from(paid), i64::try_from(*paid_to)?, hex::encode(b.0)],
-                )?;
-            }
+        if (fresh.len() as u64) < owed {
+            return Ok(Err(Reply::Owed { tokens: owed }));
         }
-        Ok(Reply::Renewed { kept })
+        for (id, t) in &fresh {
+            db.execute(
+                "INSERT OR IGNORE INTO tokens (id, token) VALUES (?1, ?2)",
+                params![id, serde_json::to_string(t)?],
+            )?;
+        }
+        Ok(Ok((
+            kept,
+            charged,
+            owed,
+            fresh.into_iter().map(|(_, t)| t.clone()).collect(),
+        )))
     }
 
-    async fn serve(&self, conn: Connection) -> Result<()> {
+    async fn serve(self: &Arc<Self>, conn: Connection) -> Result<()> {
         loop {
             let (mut send, mut recv) = match conn.accept_bi().await {
                 Ok(pair) => pair,
@@ -412,7 +540,7 @@ impl Inner {
             let request: Request = proto::recv(&mut recv).await?;
             let reply = match request {
                 Request::Store { blob, size } => self.store(blob, size, &mut recv).await,
-                Request::Renew { blobs, until, tokens } => self.renew(&blobs, until, tokens),
+                Request::Renew { blobs, until, tokens } => self.renew(&blobs, until, tokens).await,
             }
             .unwrap_or_else(|e| Reply::Refused { why: format!("{e:#}") });
             proto::send(&mut send, &reply).await?;

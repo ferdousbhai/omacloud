@@ -42,7 +42,8 @@ export function d1(): D1Database & { sqlite: DatabaseSync } {
 			db.exec("BEGIN");
 			try {
 				const out = [];
-				for (const s of stmts) out.push(await s.run());
+				// a query answers with its rows, as in D1
+				for (const s of stmts) out.push(await (/^\s*SELECT/i.test(s.sql) ? s.all() : s.run()));
 				db.exec("COMMIT");
 				return out;
 			} catch (e) {

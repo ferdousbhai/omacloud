@@ -131,7 +131,12 @@ async function tokenId(key: Key, t: unknown): Promise<string | null> {
 
 /** POST /credits/exchange: good unspent tokens for as many fresh signatures.
  * A token spent before buys nothing, but doesn't sink the rest of the
- * batch (such as tokens an owner gave two holders). */
+ * batch (such as tokens an owner gave two holders). Asked with `each`,
+ * each token is paired with the blind message in its place, kept with it
+ * when it's spent: the same exchange asked again (its answer lost) is
+ * signed again, and `signed` holds a signature for each blind message, or
+ * null. Without it (older computers), the first blind messages are signed,
+ * one for each token spent now. */
 export async function exchange(req: Request, env: Env): Promise<Response> {
 	const key = await creditKey(env);
 	const body = await readObject(req, 512 * 1024);
@@ -142,10 +147,16 @@ export async function exchange(req: Request, env: Env): Promise<Response> {
 	if (ms.length > ids.length) throw new HttpError(400, "more blind messages than good tokens");
 	if (ids.length === 0) return json({ signed: [], spent: 0 });
 	const db = env.DB;
+	if (body.each !== true) {
+		const results = await db.batch(ids.map((id) => db.prepare("INSERT OR IGNORE INTO net_spent (id) VALUES (?)").bind(id)));
+		const fresh = results.filter((r) => (r.meta.changes ?? 0) > 0).length;
+		return json({ signed: ms.slice(0, fresh).map((m) => sign(key, m)), spent: fresh });
+	}
+	const tags = await Promise.all(ms.map((m) => sha256Hex(bigToHex(m, key.bytes))));
 	// spent ids are taken create-only, so of two requests with one token
 	// only one gets it
-	const results = await db.batch(ids.map((id) => db.prepare("INSERT OR IGNORE INTO net_spent (id) VALUES (?)").bind(id)));
-	const fresh = results.filter((r) => (r.meta.changes ?? 0) > 0).length;
-	// one signature for each token spent now, on the first blind messages
-	return json({ signed: ms.slice(0, fresh).map((m) => sign(key, m)), spent: fresh });
+	await db.batch(ids.map((id, i) => db.prepare("INSERT OR IGNORE INTO net_spent (id, blind) VALUES (?, ?)").bind(id, tags[i] ?? null)));
+	const kept = tags.length === 0 ? [] : await db.batch(tags.map((_, i) => db.prepare("SELECT blind FROM net_spent WHERE id = ?").bind(ids[i])));
+	const signed = ms.map((m, i) => ((kept[i].results[0] as { blind: string | null } | undefined)?.blind === tags[i] ? sign(key, m) : null));
+	return json({ signed, spent: signed.filter((x) => x !== null).length });
 }

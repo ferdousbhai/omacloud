@@ -55,8 +55,16 @@ impl Contribution {
     /// If the node can't start.
     pub fn start(session: &Session, data: &Path, give: u64) -> Result<Self> {
         let key = omacloud_net::session::node_key(&data.join("node.key"))?;
+        let wallet = data.join("wallet.json");
+        let trade = if give > 0 {
+            session
+                .network()
+                .trader(key.to_bytes(), std::sync::Arc::new(move |fresh| bank(&wallet, fresh)))?
+        } else {
+            None
+        };
         let node = if give > 0 {
-            let node = session.serve(key.clone(), data.join("node"), give)?;
+            let node = session.serve(key.clone(), data.join("node"), give, trade)?;
             info!(
                 "giving {} to the network as node {}",
                 human(give),
@@ -92,7 +100,7 @@ impl Contribution {
             if let Err(e) = session.network().heartbeat(&self.key, node, self.give) {
                 warn!("telling the network this node is up: {e:#}");
             }
-            if let Err(e) = self.deposit(session, node) {
+            if let Err(e) = session.block_on(node.trade_in()) {
                 warn!("trading in tokens: {e:#}");
             }
             if let Err(e) = session.block_on(node.sweep()) {
@@ -238,21 +246,6 @@ impl Contribution {
             warn!("saving shares: {e:#}");
         }
     }
-
-    /// Trade the tokens this node took for fresh ones, into the wallet.
-    fn deposit(&self, session: &Session, node: &Node) -> Result<()> {
-        let wallet = self.data.join("wallet.json");
-        // a batch the Worker takes at a time, each banked before the next:
-        // tokens it took are spent, so what it gave back must not be lost
-        for batch in node.tokens()?.chunks(100) {
-            let fresh = session.network().exchange(batch)?;
-            let mut tokens = read_wallet(&wallet);
-            tokens.extend(fresh);
-            write_private(&wallet, &serde_json::to_vec(&tokens)?)?;
-            node.mark_deposited(batch)?;
-        }
-        Ok(())
-    }
 }
 
 /// A file this computer shared by link, kept until `until`. The secret is
@@ -332,14 +325,11 @@ impl omacloud_net::upkeep::Wallet for FileWallet<'_> {
     fn pay(&mut self, n: u64) -> Result<Vec<Token>> {
         take(&self.path, n, || self.network.starter(STARTER))
     }
-    fn refund(&mut self, tokens: Vec<Token>) {
-        let mut held = read_wallet(&self.path);
-        held.extend(tokens);
-        if let Err(e) = serde_json::to_vec(&held)
-            .map_err(anyhow::Error::from)
-            .and_then(|b| write_private(&self.path, &b))
-        {
-            warn!("putting unspent tokens back in the wallet: {e:#}");
+    fn put_back(&mut self, tokens: Vec<Token>) {
+        // reissued, not banked as they are: a holder may say it didn't take
+        // tokens it did
+        if let Err(e) = self.network.reissue(&tokens).and_then(|fresh| bank(&self.path, fresh)) {
+            warn!("putting tokens a holder didn't take back in the wallet: {e:#}");
         }
     }
 }
@@ -351,12 +341,14 @@ fn take(wallet: &Path, n: u64, starter: impl FnOnce() -> Result<Vec<Token>>) -> 
     if n == 0 {
         return Ok(Vec::new());
     }
-    let mut tokens = read_wallet(wallet);
-    if tokens.len() < n {
-        tokens.extend(starter()?);
-        // banked at once: the grant comes once a month, short or not
-        write_private(wallet, &serde_json::to_vec(&tokens)?)?;
+    // short: the starter grant, asked outside the lock (the node banks
+    // into the wallet meanwhile), and banked at once: it comes once a
+    // month, short or not
+    if read_wallet(wallet).len() < n {
+        bank(wallet, starter()?)?;
     }
+    let _held = WALLET.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut tokens = read_wallet(wallet);
     anyhow::ensure!(
         tokens.len() >= n,
         "out of storage credit: {n} tokens needed, {} held; give more space to the network",
@@ -365,6 +357,23 @@ fn take(wallet: &Path, n: u64, starter: impl FnOnce() -> Result<Vec<Token>>) -> 
     let rest = tokens.split_off(n);
     write_private(wallet, &serde_json::to_vec(&rest)?)?;
     Ok(tokens)
+}
+
+/// The wallet is paid from here and banked into from the node's renewals:
+/// one at a time.
+static WALLET: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Put fresh tokens in the wallet, each once: an exchange asked again is
+/// signed again, the same.
+fn bank(wallet: &Path, fresh: Vec<Token>) -> Result<()> {
+    let _held = WALLET.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut tokens = read_wallet(wallet);
+    for t in fresh {
+        if !tokens.iter().any(|h| h.id() == t.id()) {
+            tokens.push(t);
+        }
+    }
+    write_private(wallet, &serde_json::to_vec(&tokens)?)
 }
 
 fn read_wallet(path: &Path) -> Vec<Token> {

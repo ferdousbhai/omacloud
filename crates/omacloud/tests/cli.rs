@@ -300,6 +300,16 @@ fn usage_errors_follow_the_contract() {
     assert_eq!(e["hint"], "run `omacloud --help`");
     machine_error(&h.run("a", &["folders", "add", "--json"]), "usage", 2);
     machine_error(&h.run("a", &["restore", "x", "--at", "many"]), "usage", 2);
+    // a folder of home is a name directly in it, as `folders add` takes
+    let (repo, coord) = (h.path("repo"), h.path("coord"));
+    let mut bad = h.cmd("a", &["init", "--folders", "Documents,.ssh"]);
+    _ = bad.arg("--repo").arg(&repo).arg("--coordinator").arg(&coord);
+    machine_error(&bad.output().unwrap(), "usage", 2);
+    // none at all (the app's setup with every folder off) is no error
+    let mut none = h.cmd("a", &["init", "--folders", ""]);
+    _ = none.arg("--repo").arg(&repo).arg("--coordinator").arg(&coord);
+    let (out, c) = on_tty(none);
+    assert_eq!(c, 0, "{out}");
     // text mode: clap's own words on stderr
     let text = h.run("a", &["no-such-command", "--styled"]);
     assert_eq!(code(&text), 2);
@@ -483,6 +493,70 @@ fn a_deleted_file_is_listed_and_put_back() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep me");
     assert_eq!(code(&h.run("a", &["sync"])), 0);
     assert_eq!(json(&h.run("a", &["deleted", "--count"])), 0);
+}
+
+/// With home's folders and settings synced, a folder another computer
+/// added, or one skipped here (named in another language), is still a
+/// folder, not settings.
+#[test]
+fn versions_find_a_folder_another_computer_added() {
+    let h = Home::new();
+    let (repo, coord) = (h.path("repo"), h.path("coord"));
+    // Pictures named in another language here
+    std::fs::create_dir_all(h.path("home/.config")).unwrap();
+    std::fs::write(
+        h.path("home/.config/user-dirs.dirs"),
+        "XDG_PICTURES_DIR=\"$HOME/Bilder\"\n",
+    )
+    .unwrap();
+    let init = |device: &str, folders: &str| {
+        let mut c = h.cmd(
+            device,
+            &["init", "--folders", folders, "--settings", "--device", device],
+        );
+        _ = c.arg("--repo").arg(&repo).arg("--coordinator").arg(&coord);
+        c
+    };
+    let (out, c) = on_tty(init("a", "Documents,Pictures"));
+    assert_eq!(c, 0, "{out}");
+    let recovery = out
+        .lines()
+        .find_map(|l| l.strip_prefix("recovery code: "))
+        .unwrap()
+        .trim()
+        .to_string();
+    let song = h.path("home/Notes/song.txt");
+    std::fs::create_dir_all(song.parent().unwrap()).unwrap();
+    std::fs::write(&song, "la").unwrap();
+    // and one that b skips
+    let cat = h.path("home/Bilder/cat.txt");
+    std::fs::create_dir_all(cat.parent().unwrap()).unwrap();
+    std::fs::write(&cat, "meow").unwrap();
+    assert_eq!(code(&h.run("a", &["folders", "add", "Notes"])), 0);
+    assert_eq!(code(&h.run("a", &["sync"])), 0);
+
+    let out = init("b", "Documents")
+        .env("OMACLOUD_RECOVERY_CODE", &recovery)
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
+    assert_eq!(code(&h.run("b", &["sync"])), 0);
+    for f in [&song, &cat] {
+        let v = json(&h.run("b", &["versions", &f.to_string_lossy()]));
+        assert_eq!(v["ok"], true, "{v}");
+    }
+    // skipped, with where it lives here
+    let st = json(&h.run("b", &["status"]));
+    let skipped = st["data"]["folders"]["skipped"].as_array().unwrap();
+    let pictures = skipped
+        .iter()
+        .find(|f| f["name"] == "Pictures")
+        .expect("Pictures skipped");
+    assert_eq!(pictures["path"], h.path("home/Bilder").to_string_lossy().as_ref());
+    // added by its name here, it's the account's Pictures
+    let ids = stdout(&h.run("b", &["folders", "add", "Bilder", "--ids-only"]));
+    assert!(ids.lines().any(|l| l == "Pictures"), "{ids}");
+    assert!(!ids.lines().any(|l| l == "Bilder"), "{ids}");
 }
 
 #[test]

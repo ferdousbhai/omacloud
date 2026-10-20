@@ -10,8 +10,9 @@
 
 use anyhow::{Context, Result};
 use blind_rsa_signatures::{
-    BlindSignature, BlindingResult, DefaultRng, MessageRandomizer, PublicKeySha384PSSRandomized, Signature,
+    BlindSignature, BlindingResult, MessageRandomizer, PublicKeySha384PSSRandomized, Signature,
 };
+use chacha20::{ChaCha20Rng, rand_core::SeedableRng};
 use serde::{Deserialize, Serialize};
 
 /// The Worker's token key.
@@ -66,10 +67,24 @@ pub struct Pending {
 ///
 /// If blinding fails (a key that isn't a usable RSA key).
 pub fn ask(issuer: &IssuerKey, n: usize) -> Result<(Vec<Vec<u8>>, Pending)> {
-    let mut asked = Vec::with_capacity(n);
-    for _ in 0..n {
-        let msg: [u8; 32] = rand::random();
-        let blinded = issuer.blind(&mut DefaultRng, msg).context("blinding a token")?;
+    let seeds: Vec<[u8; 32]> = (0..n).map(|_| rand::random()).collect();
+    ask_from(issuer, &seeds)
+}
+
+/// [`ask`], a token for each seed, all of it drawn from that seed: the
+/// same seed asks the same, so an exchange whose answer was lost can be
+/// asked again. Only whoever keeps a seed can turn its signature into a
+/// token.
+///
+/// # Errors
+///
+/// As [`ask`].
+pub fn ask_from(issuer: &IssuerKey, seeds: &[[u8; 32]]) -> Result<(Vec<Vec<u8>>, Pending)> {
+    let mut asked = Vec::with_capacity(seeds.len());
+    for seed in seeds {
+        let mut rng = ChaCha20Rng::from_seed(blake3::keyed_hash(seed, b"blinding").into());
+        let msg: [u8; 32] = blake3::keyed_hash(seed, b"message").into();
+        let blinded = issuer.blind(&mut rng, msg).context("blinding a token")?;
         asked.push((msg, blinded));
     }
     let blind = asked.iter().map(|(_, b)| b.blind_message.0.clone()).collect();
@@ -77,35 +92,59 @@ pub fn ask(issuer: &IssuerKey, n: usize) -> Result<(Vec<Vec<u8>>, Pending)> {
 }
 
 impl Pending {
-    /// Unblind the Worker's signatures, in the order asked: as many as it
-    /// signed, the first ones (an exchange pays nothing for a token spent
-    /// before).
+    /// Unblind the Worker's signatures, each in the place of the blind
+    /// message it signs: those it didn't sign are `None` (an exchange pays
+    /// nothing for a token spent before), or missing at the end.
     ///
     /// # Errors
     ///
     /// If the count is off or a signature isn't the Worker's.
-    pub fn finish(self, issuer: &IssuerKey, signed: &[Vec<u8>]) -> Result<Vec<Token>> {
+    pub fn finish(self, issuer: &IssuerKey, signed: &[Option<Vec<u8>>]) -> Result<Vec<Token>> {
+        Ok(self.finish_each(issuer, signed)?.into_iter().flatten().collect())
+    }
+
+    /// [`Self::finish`], a place for each asked: `None` where nothing was
+    /// signed.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::finish`].
+    pub fn finish_each(self, issuer: &IssuerKey, signed: &[Option<Vec<u8>>]) -> Result<Vec<Option<Token>>> {
         anyhow::ensure!(
             signed.len() <= self.asked.len(),
             "asked for {} tokens, got {}",
             self.asked.len(),
             signed.len()
         );
-        self.asked
+        let n = self.asked.len();
+        let mut out: Vec<Option<Token>> = self
+            .asked
             .into_iter()
             .zip(signed)
             .map(|((msg, blinded), sig)| {
+                let Some(sig) = sig else { return Ok(None) };
                 let sig = issuer
                     .finalize(&BlindSignature(sig.clone()), &blinded, msg)
                     .context("a token the Worker didn't sign properly")?;
-                Ok(Token {
+                Ok(Some(Token {
                     msg,
                     randomizer: blinded.msg_randomizer.context("randomized tokens")?.0,
                     sig: sig.0,
-                })
+                }))
             })
-            .collect()
+            .collect::<Result<_>>()?;
+        out.resize(n, None);
+        Ok(out)
     }
+}
+
+/// The seed a holder blinds the token it trades `token` for from: its
+/// node's secret key's and the token's, so the same whatever batch it's
+/// asked in, and nobody else (not the owner who paid with it) can ask it.
+#[must_use]
+pub fn deposit_seed(node_secret: &[u8; 32], token: &Token) -> [u8; 32] {
+    let key = blake3::derive_key("omacloud deposit blinding", node_secret);
+    blake3::keyed_hash(&key, &token.id()).into()
 }
 
 /// Tokens for keeping `bytes` for a month, rounded up.
@@ -116,7 +155,7 @@ pub fn tokens_for(bytes: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use blind_rsa_signatures::KeyPairSha384PSSRandomized;
+    use blind_rsa_signatures::{DefaultRng, KeyPairSha384PSSRandomized};
 
     use super::*;
 
@@ -124,9 +163,9 @@ mod tests {
     fn tokens_verify_and_can_not_be_linked_to_what_was_signed() -> Result<()> {
         let kp = KeyPairSha384PSSRandomized::generate(&mut DefaultRng, 2048)?;
         let (blind, pending) = ask(&kp.pk, 2)?;
-        let signed: Vec<Vec<u8>> = blind
+        let signed: Vec<Option<Vec<u8>>> = blind
             .iter()
-            .map(|b| kp.sk.blind_sign(b).map(|s| s.0))
+            .map(|b| kp.sk.blind_sign(b).map(|s| Some(s.0)))
             .collect::<Result<_, _>>()?;
         let tokens = pending.finish(&kp.pk, &signed)?;
         assert_eq!(tokens.len(), 2);
@@ -134,7 +173,7 @@ mod tests {
             t.verify(&kp.pk)?;
             // what the Worker saw shares nothing with what comes back
             assert!(blind.iter().all(|b| !b.windows(32).any(|w| w == t.msg)));
-            assert!(signed.iter().all(|s| *s != t.sig));
+            assert!(signed.iter().all(|s| s.as_ref() != Some(&t.sig)));
         }
         assert_ne!(tokens[0].id(), tokens[1].id());
         Ok(())
@@ -145,7 +184,9 @@ mod tests {
         let kp = KeyPairSha384PSSRandomized::generate(&mut DefaultRng, 2048)?;
         let other = KeyPairSha384PSSRandomized::generate(&mut DefaultRng, 2048)?;
         let (blind, pending) = ask(&kp.pk, 1)?;
-        let mut t = pending.finish(&kp.pk, &[kp.sk.blind_sign(&blind[0])?.0])?.remove(0);
+        let mut t = pending
+            .finish(&kp.pk, &[Some(kp.sk.blind_sign(&blind[0])?.0)])?
+            .remove(0);
         assert!(t.verify(&other.pk).is_err());
         t.msg[0] ^= 1;
         assert!(t.verify(&kp.pk).is_err());
@@ -153,7 +194,22 @@ mod tests {
         let (blind, pending) = ask(&kp.pk, 1)?;
         let (stray, _) = ask(&kp.pk, 1)?;
         assert_ne!(blind, stray);
-        assert!(pending.finish(&kp.pk, &[kp.sk.blind_sign(&stray[0])?.0]).is_err());
+        assert!(pending.finish(&kp.pk, &[Some(kp.sk.blind_sign(&stray[0])?.0)]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn the_same_seed_asks_the_same_and_skips_what_wasnt_signed() -> Result<()> {
+        let kp = KeyPairSha384PSSRandomized::generate(&mut DefaultRng, 2048)?;
+        let (blind, _) = ask_from(&kp.pk, &[[1; 32], [2; 32]])?;
+        let (again, pending) = ask_from(&kp.pk, &[[1; 32], [2; 32]])?;
+        assert_eq!(blind, again);
+        // a seed asks the same wherever it is
+        assert_eq!(ask_from(&kp.pk, &[[2; 32]])?.0[0], blind[1]);
+        assert_ne!(blind[0], blind[1]);
+        let tokens = pending.finish(&kp.pk, &[None, Some(kp.sk.blind_sign(&blind[1])?.0)])?;
+        assert_eq!(tokens.len(), 1);
+        tokens[0].verify(&kp.pk)?;
         Ok(())
     }
 

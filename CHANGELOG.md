@@ -26,8 +26,13 @@
   a copy a repair placed back on it; a holder refuses a copy stored again
   that it's about to let go; renewal dates are kept per bucket, so a key
   rotation starts them afresh; a month end between asking and paying is
-  topped up rather than taken for cheating, and tokens a holder didn't
-  take go back to the wallet. A repair that finds no new holder keeps the
+  topped up rather than taken for cheating. A holder paid is counted as
+  renewed, so one that takes tokens and asks again is held to what it has
+  earned since, and a computer's first renewal of a copy allows what it
+  could have earned since it was stored, not a longest lease. A holder
+  with a copy left out of a renewal keeps its old date, so it isn't
+  flagged for charging for that copy the next day; a re-store a moment
+  after a store is no longer refused as about to be let go. A repair that finds no new holder keeps the
   old one named instead of dropping a copy; a round in which no holder
   answers is this computer offline, not every holder failing; a copy
   records when it was stored, so an upload landing after another
@@ -52,7 +57,11 @@
   full) is no longer lost as a transport error.
 - With home's folders synced, `versions` and `restore` find settings, and
   they and `deleted` find files in a folder named in another language
-  (`~/Dokumente`);
+  (`~/Dokumente`) or added on another computer; `deleted` lists only what
+  syncs here; `folders add` and `skip`, and `init --folders`, take a
+  folder by its name here (`Bilder`) as the account's (`Pictures`);
+  `status` and `folders` list skipped folders as `{name, path}`, with
+  where each lives here, which the app shows;
   undoing crossed bookmark moves brings back a folder the other side
   deleted, rather than losing what was in it; a key rotation copies the
   versions of a verified history; tidying picks the latest version by the
@@ -62,7 +71,12 @@
   `receive` won't write through a file or link already at its destination.
 - A holder's credits no longer get stuck: a token spent before buys
   nothing but no longer sinks the rest of its batch at the Worker, and
-  deposits go 100 at a time.
+  deposits go 100 at a time. A deposit whose answer was lost is asked
+  again the same and signed again, rather than paid nothing (migration
+  0007), and a holder trades a renewal's tokens in before answering (for
+  up to 20 seconds; later if the Worker is slow), so a payer can't spend
+  them again elsewhere; a holder renews one request at a time, so two
+  computers renewing at once aren't both charged.
 - A shared file holds up to 127 MiB (it must fit, sealed, in the largest
   object a holder takes).
 - A config file passed with `--config` counts as the default only when it

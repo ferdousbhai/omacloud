@@ -513,6 +513,14 @@ impl Engine {
     /// the reverse of [`Self::on_disk`].
     #[must_use]
     pub fn synced_path(&self, rel: &Path) -> Option<PathBuf> {
+        self.account_path(rel).filter(|p| self.syncs(p))
+    }
+
+    /// The account's name for a path on disk under the folder, whether or
+    /// not its folder syncs here (a folder named in another language has
+    /// its account name).
+    #[must_use]
+    pub fn account_path(&self, rel: &Path) -> Option<PathBuf> {
         let Some(f) = &self.folders else {
             return Some(rel.to_path_buf());
         };
@@ -523,9 +531,18 @@ impl Engine {
             .iter()
             .find(|(_, local)| *local == first)
             .map_or(first, |(name, _)| name.as_str());
-        self.synced
-            .contains(name)
-            .then(|| Path::new(name).join(parts.as_path()))
+        Some(Path::new(name).join(parts.as_path()))
+    }
+
+    /// Whether a synced path's folder syncs here.
+    #[must_use]
+    pub fn syncs(&self, path: &Path) -> bool {
+        self.folders.is_none()
+            || path
+                .components()
+                .next()
+                .and_then(|c| c.as_os_str().to_str())
+                .is_some_and(|n| self.synced.contains(n))
     }
 
     /// A synced folder itself (`Documents`), as opposed to what's in it.

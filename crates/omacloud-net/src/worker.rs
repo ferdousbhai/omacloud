@@ -19,6 +19,7 @@ use crate::{
 /// Where the network's Worker answers.
 pub const URL: &str = "https://omacloud.computer";
 
+#[derive(Clone)]
 pub struct Worker {
     base: String,
     agent: ureq::Agent,
@@ -171,11 +172,12 @@ impl Worker {
     /// # Errors
     ///
     /// If the Worker can't be reached, or refuses a batch (a token not its).
-    pub fn exchange(&self, issuer: &IssuerKey, tokens: &[Token]) -> Result<Vec<Token>> {
+    pub fn exchange(&self, issuer: &IssuerKey, tokens: &[Token], seeds: &[[u8; 32]]) -> Result<Vec<Option<Token>>> {
         // the Worker takes 100 a request (the caller banks each batch); one
         // spent before is paid nothing but doesn't sink the rest
         anyhow::ensure!(tokens.len() <= 100, "at most 100 tokens an exchange");
-        let (blind, pending) = credit::ask(issuer, tokens.len())?;
+        anyhow::ensure!(seeds.len() == tokens.len(), "a seed for each token");
+        let (blind, pending) = credit::ask_from(issuer, seeds)?;
         let v = self.ok(
             "POST",
             "/api/net/credits/exchange",
@@ -183,18 +185,25 @@ impl Worker {
             Some(&json!({
                 "tokens": tokens,
                 "blind": blind.iter().map(hex::encode).collect::<Vec<_>>(),
+                // a signature or null in the place of each
+                "each": true,
             })),
         )?;
-        pending.finish(issuer, &signed(&v)?)
+        pending.finish_each(issuer, &signed(&v)?)
     }
 }
 
-fn signed(v: &Value) -> Result<Vec<Vec<u8>>> {
+/// Signatures in the places of the blind messages asked, `None` where
+/// none was given.
+fn signed(v: &Value) -> Result<Vec<Option<Vec<u8>>>> {
     v["signed"]
         .as_array()
         .context("no signatures")?
         .iter()
-        .map(|s| Ok(hex::decode(s.as_str().context("not a signature")?)?))
+        .map(|s| match s {
+            Value::Null => Ok(None),
+            s => Ok(Some(hex::decode(s.as_str().context("not a signature")?)?)),
+        })
         .collect()
 }
 

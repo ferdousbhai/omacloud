@@ -31,15 +31,17 @@ const SLACK: u64 = 3600;
 const INDEX_LAG: u64 = 6 * 3600;
 
 /// Since when a copy may be owed, its holder last renewed at `last` (0:
-/// never): since then; a copy a repair placed since may be owed from when
-/// the holder held it before (0: up to a longest lease); one stored just
-/// before that renewal may have reached the index after it, so is owed
-/// since it was stored. Each allowance holds for one renewal only.
+/// never): since then, or since it was stored when never; a copy a repair
+/// placed since may be owed from when the holder held it before (0: up to
+/// a longest lease); one stored just before that renewal may have reached
+/// the index after it, so is owed since it was stored. Each allowance
+/// holds for one renewal only.
 fn owed_since(placed: u64, stored: u64, last: u64) -> u64 {
-    if placed + SLACK > last {
+    if placed > 0 && placed + SLACK > last {
         0
     } else if stored > 0 && stored + INDEX_LAG > last {
-        stored.min(last)
+        // never renewed here: since it was stored
+        if last == 0 { stored } else { stored.min(last) }
     } else {
         last
     }
@@ -56,8 +58,10 @@ pub trait Wallet: Send {
     ///
     /// If it holds too few, and can't get more.
     fn pay(&mut self, n: u64) -> Result<Vec<Token>>;
-    /// Tokens taken out but never spent, put back.
-    fn refund(&mut self, tokens: Vec<Token>);
+    /// Tokens paid that the holder says it didn't take (another of the
+    /// account's computers paid it first), put back: as fresh ones, as it
+    /// may have.
+    fn put_back(&mut self, tokens: Vec<Token>);
 }
 
 /// A wallet for storage that costs nothing (no token key: tests, `dir:`
@@ -68,7 +72,7 @@ impl Wallet for Free {
     fn pay(&mut self, _: u64) -> Result<Vec<Token>> {
         Ok(Vec::new())
     }
-    fn refund(&mut self, _: Vec<Token>) {}
+    fn put_back(&mut self, _: Vec<Token>) {}
 }
 
 /// A renewal: keep every good copy until `until`, paying each holder for
@@ -101,7 +105,8 @@ pub struct Report {
     /// Holders that failed: an audit, a renewal, or asked more than they
     /// could have earned.
     pub failed_nodes: BTreeSet<NodeId>,
-    /// Holders whose every copy asked was renewed this round.
+    /// Holders whose every copy asked was renewed this round, or that were
+    /// paid: what they're owed counts from now.
     pub renewed: BTreeSet<NodeId>,
 }
 
@@ -197,9 +202,17 @@ pub async fn round(bucket: &Bucket, audits: usize, renew: Option<Renew>, wallet:
                 continue;
             };
             let last = last.get(&node).copied().unwrap_or(0);
-            let mut renewed = true;
+            // what it's owed counts from now only if every copy it holds was
+            // renewed or paid for: none left out (a failed audit), none in a
+            // batch that wasn't
+            let mut covered = !bad.values().any(|b| b.contains(&node));
             // in batches a request can carry
             for held in held.chunks(RENEW_BATCH) {
+                // tokens handed over are gone whatever the holder says next: a
+                // holder that took them and asks again is held to what's
+                // been earned since
+                let mut paid = false;
+                let mut given = Vec::new();
                 let mut by_since: BTreeMap<u64, u64> = BTreeMap::new();
                 for (e, h) in held {
                     *by_since.entry(owed_since(h.placed, h.stored, last)).or_default() += e.blob_size();
@@ -223,6 +236,8 @@ pub async fn round(bucket: &Bucket, audits: usize, renew: Option<Renew>, wallet:
                     } else {
                         match wallet.pay(owed) {
                             Ok(mut tokens) => {
+                                paid = !tokens.is_empty();
+                                given.clone_from(&tokens);
                                 answer =
                                     client::renew(bucket.endpoint(), &addr, blobs.clone(), until, tokens.clone()).await;
                                 // a month end passed between asking and paying:
@@ -235,37 +250,39 @@ pub async fn round(bucket: &Bucket, audits: usize, renew: Option<Renew>, wallet:
                                     match wallet.pay(more - owed) {
                                         Ok(extra) => {
                                             tokens.extend(extra);
+                                            given.clone_from(&tokens);
                                             answer =
                                                 client::renew(bucket.endpoint(), &addr, blobs, until, tokens.clone())
                                                     .await;
                                         }
                                         // as when the first payment fails: not
-                                        // the holder's doing
+                                        // the holder's doing (an honest one
+                                        // took none of the first tokens)
                                         Err(e) => {
                                             log::warn!("paying {}: {e:#}", hex::encode(&node[..4]));
-                                            wallet.refund(tokens);
-                                            renewed = false;
+                                            covered = false;
                                             continue;
                                         }
                                     }
-                                }
-                                // still owed: the holder kept none of them
-                                if let Ok(Renewal::Owed(_)) = answer {
-                                    wallet.refund(tokens);
                                 }
                             }
                             // not the holder's doing: it isn't counted bad, and
                             // the other holders and the repairs go on
                             Err(e) => {
                                 log::warn!("paying {}: {e:#}", hex::encode(&node[..4]));
-                                renewed = false;
+                                covered = false;
                                 continue;
                             }
                         }
                     }
                 }
                 match answer {
-                    Ok(Renewal::Kept(kept)) => {
+                    Ok(Renewal::Kept(kept, taken)) => {
+                        if let Ok(taken) = usize::try_from(taken)
+                            && taken < given.len()
+                        {
+                            wallet.put_back(given.split_off(taken));
+                        }
                         for ((e, _), k) in held.iter().zip(kept) {
                             if !k {
                                 bad.entry(e.key.clone()).or_default().insert(node);
@@ -276,16 +293,16 @@ pub async fn round(bucket: &Bucket, audits: usize, renew: Option<Renew>, wallet:
                         if let Err(err) = &answer {
                             log::info!("renewing with {}: {err:#}", hex::encode(&node[..4]));
                         }
-                        renewed = false;
+                        // paid and still owed: it took them (an error may
+                        // have come before it did)
+                        covered &= paid && answer.is_ok();
                         for (e, _) in held {
                             bad.entry(e.key.clone()).or_default().insert(node);
                         }
                     }
                 }
             }
-            // only a holder none of whose copies failed: one left out of
-            // the renewal (a failed audit) would still be owed from before
-            if renewed && !bad.values().any(|b| b.contains(&node)) {
+            if covered {
                 report.renewed.insert(node);
             }
         }
@@ -343,6 +360,10 @@ mod tests {
         assert_eq!(owed_since(0, t, t + 2 * day), t + 2 * day);
         // placed by a repair after the last renewal: up to a longest lease
         assert_eq!(owed_since(t + day, t, t), 0);
+        // never renewed here (a new computer, a new key): since it was stored
+        assert_eq!(owed_since(0, t, 0), t);
+        assert_eq!(owed_since(0, 0, 0), 0);
+        assert_eq!(owed_since(t, t, 0), 0);
         // stored an hour before a renewal that couldn't see it yet: since
         // it was stored, that once; the next day's renewal, as any other
         assert_eq!(owed_since(0, t, t + 3600), t);

@@ -20,11 +20,11 @@ use omacloud_core::RepoSpec;
 use crate::{
     blob::NodeId,
     coord::{Account, NetworkCoordinator},
-    credit::{IssuerKey, Token},
+    credit::{self, IssuerKey, Token},
     dirstore::DirStore,
     gateway::{BUCKET, Gateway},
     mirror::Mirror,
-    node::{Config, Node},
+    node::{Config, Node, Trade},
     records::Records,
     registry::{Listed, Registry},
     upkeep::{self, Report},
@@ -37,6 +37,9 @@ enum Place {
     Worker(Worker),
     Dir(DirStore),
 }
+
+/// Where a node's fresh tokens go.
+pub type Bank = Arc<dyn Fn(Vec<Token>) -> Result<()> + Send + Sync>;
 
 /// The Worker's part of the network, and this computer's copy of what it
 /// read and wrote there ([`Mirror`]), which reads fall back to when the
@@ -96,16 +99,47 @@ impl Network {
         }
     }
 
-    /// Trade tokens taken as a holder for fresh ones.
+    /// Fresh tokens for `tokens` this computer paid out and a holder said
+    /// it didn't take: traded in here, so any it did take (and spent)
+    /// bring nothing back. None on a `dir:` network.
     ///
     /// # Errors
     ///
-    /// If the Worker refuses them.
-    pub fn exchange(&self, tokens: &[Token]) -> Result<Vec<Token>> {
-        match &self.place {
-            Place::Worker(w) => w.exchange(&w.issuer()?, tokens),
-            Place::Dir(_) => Ok(Vec::new()),
+    /// If the Worker can't be reached.
+    pub fn reissue(&self, tokens: &[Token]) -> Result<Vec<Token>> {
+        let Place::Worker(w) = &self.place else {
+            return Ok(Vec::new());
+        };
+        let issuer = w.issuer()?;
+        let mut fresh = Vec::new();
+        for batch in tokens.chunks(crate::node::TRADE_BATCH) {
+            let seeds: Vec<[u8; 32]> = batch.iter().map(|_| rand::random()).collect();
+            fresh.extend(w.exchange(&issuer, batch, &seeds)?.into_iter().flatten());
         }
+        Ok(fresh)
+    }
+
+    /// How a node with secret key `node_secret` trades a batch of tokens
+    /// it took in at the Worker, giving the fresh ones to `bank` (none on a
+    /// `dir:` network, where storage is free). Each is blinded from a
+    /// secret of the node's and the token, so one whose answer was lost is
+    /// asked again the same, and signed again.
+    ///
+    /// # Errors
+    ///
+    /// If the Worker can't be reached for its token key.
+    pub fn trader(&self, node_secret: [u8; 32], bank: Bank) -> Result<Option<Trade>> {
+        let Place::Worker(w) = &self.place else {
+            return Ok(None);
+        };
+        let (w, issuer) = (w.clone(), w.issuer()?);
+        Ok(Some(Arc::new(move |batch: &[Token]| {
+            let seeds: Vec<_> = batch.iter().map(|t| credit::deposit_seed(&node_secret, t)).collect();
+            let fresh = w.exchange(&issuer, batch, &seeds)?;
+            let paid: Vec<bool> = fresh.iter().map(Option::is_some).collect();
+            bank(fresh.into_iter().flatten().collect())?;
+            Ok(paid)
+        })))
     }
 
     /// Put this computer's copy back where the Worker lacks it: the
@@ -394,7 +428,13 @@ impl Session {
     /// # Errors
     ///
     /// If the node can't start or the Worker can't be reached.
-    pub fn serve(&self, key: SecretKey, dir: PathBuf, capacity: u64) -> Result<Node> {
+    pub fn serve(
+        &self,
+        key: SecretKey,
+        dir: PathBuf,
+        capacity: u64,
+        trade: Option<crate::node::Trade>,
+    ) -> Result<Node> {
         let issuer = self.network.issuer()?;
         let node = self.rt.block_on(async {
             let ep = endpoint(&self.relays, Some(key.clone())).await?;
@@ -403,7 +443,16 @@ impl Session {
             if !self.relays.is_empty() {
                 _ = tokio::time::timeout(std::time::Duration::from_secs(15), ep.online()).await;
             }
-            Node::spawn(ep, Config { dir, capacity, issuer }).await
+            Node::spawn(
+                ep,
+                Config {
+                    dir,
+                    capacity,
+                    issuer,
+                    trade,
+                },
+            )
+            .await
         })?;
         self.network.heartbeat(&key, &node, capacity)?;
         Ok(node)

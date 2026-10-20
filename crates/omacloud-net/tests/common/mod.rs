@@ -32,6 +32,7 @@ pub async fn holders(dir: &Path, n: u8, registry: &MemRegistry) -> Result<Vec<No
                 dir: dir.join(format!("node{i}")),
                 capacity: 1 << 30,
                 issuer: None,
+                trade: None,
             },
         )
         .await?;

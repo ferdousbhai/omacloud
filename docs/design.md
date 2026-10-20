@@ -162,13 +162,17 @@ sync engine. Nothing in it is trusted for anything but availability.
 - **Credits** (`credit.rs`). Storage is paid in blind-signed tokens (RFC
   9474), each a GiB kept for a month. The Worker issues and redeems them
   and can't link a token to whoever it gave it to. A holder checks tokens
-  against the Worker's public key, trades them for fresh ones of its own,
-  and spends those on its own account's storage: giving space earns what
-  storing costs. A computer short of tokens asks for a small starter grant.
+  against the Worker's public key, trades them for fresh ones of its own
+  before it answers a renewal (so a payer can't spend them again
+  elsewhere; while the Worker is out of reach, later), and spends those on
+  its own account's storage: giving space earns what storing costs. Each
+  fresh token is blinded from a secret of the node's and the token it
+  replaces, so an exchange whose answer was lost is asked again the same,
+  and the Worker signs it again. A computer short of tokens asks for a small starter grant.
   There's no money in it, by design: credits are only earned by giving
   space, never bought or sold.
 - **Upkeep** (`upkeep.rs`, run by the daemon). Every 15 minutes a node
-  tells the directory it's up and trades in the tokens it took. Every 6
+  tells the directory it's up and trades in any tokens still waiting. Every 6
   hours the account's computer reads back 32 random ranges of its copies,
   daily renews them, paying each holder at each month end (from a wallet
   in its data directory; daily, so a copy placed or repaired since never

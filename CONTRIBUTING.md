@@ -173,7 +173,9 @@ docker import --platform linux/arm64 /tmp/omacloud-arch-arm.tar.gz omacloud-arch
 Then use `ARM_VERIFY_IMAGE=omacloud-arch-arm`. Docker needs native execution
 or configured emulation for both platforms. Verification pins the installer and repository assets to the release tag.
 Only a confirmed defect after installation removes the release and tag;
-infrastructure and installer failures retain them for investigation.
+infrastructure and installer failures retain them for investigation. A
+release taken down this way leaves `release.sh`'s local tag: `git tag -d
+v<version>` before releasing again.
 
 ## Checking a release
 

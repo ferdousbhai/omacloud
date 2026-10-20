@@ -88,8 +88,9 @@ pub async fn store(ep: &Endpoint, to: &EndpointAddr, data: &[u8]) -> Result<Blob
 /// What a holder said to a renewal.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Renewal {
-    /// Per blob, whether it's kept until the date asked.
-    Kept(Vec<bool>),
+    /// Per blob, whether it's kept until the date asked; and how many of
+    /// the tokens given were taken, the first ones.
+    Kept(Vec<bool>, u64),
     /// Not enough was paid: this many tokens are owed.
     Owed(u64),
 }
@@ -108,7 +109,8 @@ pub async fn renew(
     tokens: Vec<Token>,
 ) -> Result<Renewal> {
     match ask(ep, to, &Request::Renew { blobs, until, tokens }, None).await? {
-        Reply::Renewed { kept } => Ok(Renewal::Kept(kept)),
+        // a holder that doesn't say (an older one) took them all
+        Reply::Renewed { kept, taken } => Ok(Renewal::Kept(kept, taken.unwrap_or(u64::MAX))),
         Reply::Owed { tokens } => Ok(Renewal::Owed(tokens)),
         Reply::Refused { why } => anyhow::bail!("{} refused the renewal: {why}", about(to)),
         other => anyhow::bail!("{} answered {other:?}", about(to)),
@@ -131,6 +133,9 @@ pub async fn read(ep: &Endpoint, from: &EndpointAddr, blob: BlobId, range: Optio
         Some(r) => GetRequest::blob_ranges(hash, ChunkRanges::bytes(r.clone())),
         None => GetRequest::blob(hash),
     };
+    // a holder trickling bytes is held to a pace overall, too
+    let size = range.as_ref().map_or(proto::MAX_OBJECT, |r| r.end - r.start);
+    let limit = STALL + Duration::from_secs(size / PACE);
     let got = async {
         let mut progress = std::pin::pin!(mem.remote().execute_get(conn.clone(), request).stream());
         loop {
@@ -142,9 +147,12 @@ pub async fn read(ep: &Endpoint, from: &EndpointAddr, blob: BlobId, range: Optio
                 Ok(None) => anyhow::bail!("the read ended early"),
             }
         }
-    }
-    .await
-    .with_context(|| format!("reading a blob from {}", about(from)));
+    };
+    let got = tokio::time::timeout(limit, got)
+        .await
+        .map_err(|_| anyhow::anyhow!("not done in {}s", limit.as_secs()))
+        .and_then(|r| r)
+        .with_context(|| format!("reading a blob from {}", about(from)));
     conn.close(0u32.into(), b"done");
     got?;
     let data = match range {

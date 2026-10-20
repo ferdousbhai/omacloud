@@ -626,6 +626,28 @@ fn user_dirs(home: &Path) -> Vec<(&'static str, String)> {
     .collect()
 }
 
+/// The account's name for a folder of home given by its name here
+/// (`Bilder` is `Pictures` when that's where Pictures lives here), or a
+/// usage error when it isn't a folder directly in home.
+fn folder_name(home: &Path, name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() || name.contains('/') || name.starts_with('.') {
+        return Err(fail::usage(format!("{name:?} isn't a folder directly in home"))
+            .hint("give one like Music")
+            .into());
+    }
+    Ok(xdg_names(home)
+        .into_iter()
+        .find(|(_, local)| local == name)
+        .map_or_else(|| name.to_string(), |(account, _)| account))
+}
+
+/// A folder of home by its account name, and where it lives here (`local`:
+/// [`xdg_names`]).
+fn folder_here(home: &Path, local: &BTreeMap<String, String>, name: &str) -> Value {
+    json!({ "name": name, "path": home.join(local.get(name).map_or(name, String::as_str)) })
+}
+
 /// This machine's names for the XDG user folders, where they differ from
 /// the English names the account uses (`Documents` -> `Dokumente`). Only
 /// folders directly in home count.
@@ -954,7 +976,9 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<String>, new_code: O
     }
     let network = config.coordinator == NETWORK;
     // the refusals that need no account come before anything is made here:
-    // no folder, device key or coordination skeleton is left behind. A
+    // no folder, device key or coordination skeleton is left behind (one
+    // for a code the network has no account for comes later, and leaves the
+    // device key, which a retry reuses). A
     // shared directory is only looked at, as opening it makes its skeleton
     let creating = if network {
         new_code.is_some()
@@ -1584,6 +1608,17 @@ fn run(cli: Cli) -> Out {
             if repo.as_deref().is_some_and(|r| r.starts_with("opendal:")) {
                 return Err(fail::usage("--repo takes a path").into());
             }
+            // folder names are checked before anything is made here
+            let chosen = chosen
+                .map(|c| -> Result<Vec<String>> {
+                    let home = home_dir()?;
+                    // none chosen (`--folders ""`): settings only
+                    c.iter()
+                        .filter(|n| !n.trim().is_empty())
+                        .map(|n| folder_name(&home, n))
+                        .collect()
+                })
+                .transpose()?;
             // the network, unless a shared directory is given (development)
             let (coordinator, repo, network, new_code) = match coordinator {
                 Some(c) => {
@@ -1665,11 +1700,7 @@ fn run(cli: Cli) -> Out {
                     let add = chosen
                         .map_or_else(
                             || DEFAULT_FOLDERS.iter().map(|s| (*s).to_string()).collect(),
-                            |c| {
-                                c.into_iter()
-                                    .filter(|n| !n.trim().is_empty())
-                                    .collect::<std::collections::BTreeSet<_>>()
-                            },
+                            |c| c.into_iter().collect::<std::collections::BTreeSet<_>>(),
                         )
                         .into_iter()
                         .filter(|n| !at_home.contains(n))
@@ -1732,7 +1763,7 @@ fn run(cli: Cli) -> Out {
         Cmd::Versions { path } => {
             let config = load(&paths)?;
             let mut e = engine(&paths, &config)?;
-            let rel = relative(&config, &e, &path)?;
+            let rel = relative(&config, &mut e, &path)?;
             let versions = e.versions(&rel)?;
             if versions.is_empty() {
                 return Err(fail::not_found(format!("no versions of {}", rel.display()))
@@ -1771,7 +1802,10 @@ fn run(cli: Cli) -> Out {
             let now = omacloud_core::jiff::Timestamp::now();
             let since = omacloud_core::jiff::Timestamp::from_second(now.as_second() - i64::from(days) * 86_400)?;
             let mut e = engine(&paths, &config)?;
-            let gone = e.deleted(since)?;
+            e.load_folders()?;
+            let mut gone = e.deleted(since)?;
+            // only what syncs here: a folder skipped here has none to put back
+            gone.retain(|d| e.syncs(&d.path));
             let mut out = String::new();
             let mut data = Vec::new();
             for d in &gone {
@@ -1794,7 +1828,7 @@ fn run(cli: Cli) -> Out {
                 }));
             }
             if let Some(d) = gone.first() {
-                let path = config.folder.join(&d.path);
+                let path = e.on_disk(&d.path);
                 say!(
                     out,
                     "\nput one back: omacloud restore {p} --at {} --to {p}",
@@ -2064,7 +2098,7 @@ fn run(cli: Cli) -> Out {
         Cmd::Restore { path, at, to, yes } => {
             let config = load(&paths)?;
             let mut e = engine(&paths, &config)?;
-            let rel = relative(&config, &e, &path)?;
+            let rel = relative(&config, &mut e, &path)?;
             let dest = to.unwrap_or_else(|| {
                 let name = rel.file_name().map_or_else(Default::default, |n| n.to_string_lossy());
                 PathBuf::from(format!("{name}.v{at}"))
@@ -2741,7 +2775,9 @@ fn groups_text(groups: &[omacloud_core::merged::Item], indent: &str) -> String {
 
 /// A path given on the command line, relative to the synced folder, or
 /// (for a setting under home) under the settings prefix.
-fn relative(config: &Config, e: &Engine, path: &Path) -> Result<PathBuf> {
+fn relative(config: &Config, e: &mut Engine, path: &Path) -> Result<PathBuf> {
+    // the account's folders, those other computers added among them
+    e.load_folders()?;
     let abs = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -2749,11 +2785,17 @@ fn relative(config: &Config, e: &Engine, path: &Path) -> Result<PathBuf> {
     };
     if let Ok(rel) = abs.strip_prefix(&config.folder) {
         // with folders the folder is home: what's outside them is settings
-        if let Some(synced) = e.synced_path(rel) {
-            return Ok(synced);
-        }
-        if !config.settings {
-            return Ok(rel.to_path_buf());
+        if let Some(path) = e.account_path(rel) {
+            // a folder skipped here is still the account's folder
+            let skipped = config.folders.as_ref().is_some_and(|f| {
+                path.components()
+                    .next()
+                    .and_then(|c| c.as_os_str().to_str())
+                    .is_some_and(|n| f.skip.contains(n))
+            });
+            if e.syncs(&path) || skipped || !config.settings {
+                return Ok(path);
+            }
         }
     }
     if config.settings
@@ -3138,20 +3180,19 @@ fn status(paths: &Paths) -> Out {
             // the usual folders this computer doesn't sync, with where they'd be
             let local = xdg_names(&config.folder);
             let at_home = xdg_at_home(&config.folder);
+            let here = |name: &str| folder_here(&config.folder, &local, name);
             let others: Vec<_> = USUAL_FOLDERS
                 .iter()
                 .filter(|u| !synced.iter().any(|(n, _)| n == *u) && !f.skip.contains(**u))
                 .filter(|u| !at_home.iter().any(|h| h == *u))
-                .map(|u| {
-                    let path = config.folder.join(local.get(*u).map_or(*u, String::as_str));
-                    json!({ "name": u, "path": path })
-                })
+                .map(|u| here(u))
                 .collect();
+            let skipped: Vec<_> = f.skip.iter().map(|s| here(s)).collect();
             json!({
                 "synced": synced.iter()
                     .map(|(name, path)| json!({ "name": name, "path": path }))
                     .collect::<Vec<_>>(),
-                "skipped": f.skip,
+                "skipped": skipped,
                 "others": others,
             })
         }),
@@ -3181,6 +3222,17 @@ fn status(paths: &Paths) -> Out {
 
 fn folders(paths: &Paths, action: FoldersCmd) -> Out {
     let mut config = load(paths)?;
+    // folders the account or this computer has by a name: kept as given,
+    // though it's also another's name here (an account folder `Bilder`
+    // where Pictures is `~/Bilder`)
+    let known: std::collections::BTreeSet<String> = match &action {
+        FoldersCmd::Skip { .. } if config.folders.is_some() => {
+            let mut e = engine(paths, &config)?;
+            e.load_folders()?;
+            e.folder_list().into_iter().map(|(name, _)| name).collect()
+        }
+        _ => Default::default(),
+    };
     let Some(choice) = config.folders.as_mut() else {
         return Err(fail::unsupported(format!(
             "this device syncs all of {}; folders are for setups that sync folders of home",
@@ -3188,18 +3240,10 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
         ))
         .into());
     };
-    let valid = |name: &str| -> Result<()> {
-        if name.is_empty() || name.contains('/') || name.starts_with('.') {
-            return Err(fail::usage(format!("{name:?} isn't a folder directly in home"))
-                .hint("give one like Music")
-                .into());
-        }
-        Ok(())
-    };
     let changed = match action {
         FoldersCmd::List => false,
         FoldersCmd::Add { name } => {
-            valid(&name)?;
+            let name = folder_name(&config.folder, &name)?;
             let here = xdg_names(&config.folder)
                 .get(&name)
                 .cloned()
@@ -3209,11 +3253,18 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
             choice.add.insert(name)
         }
         FoldersCmd::Skip { name } => {
-            valid(&name)?;
+            let given = name.trim();
+            let name = if known.contains(given) || choice.add.contains(given) || choice.skip.contains(given) {
+                given.to_string()
+            } else {
+                folder_name(&config.folder, given)?
+            };
             _ = choice.add.remove(&name);
             choice.skip.insert(name)
         }
-        FoldersCmd::Unskip { name } => choice.skip.remove(&name),
+        FoldersCmd::Unskip { name } => {
+            choice.skip.remove(name.trim()) || choice.skip.remove(&folder_name(&config.folder, &name)?)
+        }
     };
     if changed {
         save(paths, &config)?;
@@ -3232,9 +3283,11 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
         say!(out, "skipped here: {}", list.join(", "));
     }
 
+    let local = xdg_names(&config.folder);
+    let skipped_here: Vec<_> = skipped.iter().map(|s| folder_here(&config.folder, &local, s)).collect();
     let data = json!({
         "synced": synced.iter().map(|(name, path)| json!({ "name": name, "path": path })).collect::<Vec<_>>(),
-        "skipped": skipped,
+        "skipped": skipped_here,
         "changed": changed,
     });
     let ids = synced.iter().map(|(name, _)| name.clone()).collect();
