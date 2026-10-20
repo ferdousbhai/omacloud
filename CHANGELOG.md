@@ -23,7 +23,10 @@
   grace is for blobs paid for; a holder's credits are banked a batch at a
   time; a repair that can't place enough new holders keeps the entry that
   still reads, and an owner allows for what a holder may still be owed on
-  a copy a repair placed back on it.
+  a copy a repair placed back on it; a holder refuses a copy stored again
+  that it's about to let go; renewal dates are kept per bucket, so a key
+  rotation starts them afresh; a month end between asking and paying is
+  topped up rather than taken for cheating.
 - Tidying is done by the lowest-key computer among those that synced in
   the last 30 days, so one no longer used but never removed doesn't stop
   it; coordination logs are read in pages, and an answer cut short is an

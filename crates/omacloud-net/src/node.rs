@@ -281,15 +281,23 @@ impl Inner {
     async fn store(&self, blob: BlobId, size: u64, recv: &mut iroh::endpoint::RecvStream) -> Result<Reply> {
         let name = hex::encode(blob.0);
         // one held already (a repair placing a copy back here) keeps what
-        // it's owed: its owner allows for it (`Held::placed`)
-        let have = self
+        // it's owed: its owner allows for it (`Held::placed`). One about to
+        // be let go is refused, so the copy goes somewhere it lasts
+        let held: Option<(i64, i64)> = self
             .db
             .lock()
             .expect("node db")
-            .query_row("SELECT 1 FROM blobs WHERE blob = ?1", [&name], |_| Ok(()))
-            .optional()?
-            .is_some();
-        if have {
+            .query_row("SELECT expires, paid FROM blobs WHERE blob = ?1", [&name], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?;
+        if let Some((expires, paid)) = held {
+            let kept_until = u64::try_from(expires).unwrap_or(0) + if paid != 0 { GRACE } else { 0 };
+            if kept_until < now() + FIRST_LEASE {
+                return Ok(Reply::Refused {
+                    why: "held, but about to be let go".into(),
+                });
+            }
             return Ok(Reply::Stored);
         }
         if size > MAX_OBJECT {

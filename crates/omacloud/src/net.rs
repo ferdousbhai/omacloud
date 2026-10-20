@@ -119,7 +119,9 @@ impl Contribution {
         // daily; each holder is paid at each month end, counted from when
         // that holder was last renewed
         let renewed = read_number(&self.data.join("renewed"));
-        let mut last = read_node_times(&self.data.join("holders.json"));
+        // per bucket: a key rotation's new one starts afresh, as its copies
+        // weren't in the old one's renewals
+        let mut last = read_holders(&self.data.join("holders.json"), key);
         // stamped with when the round began: a holder renewed before a
         // month end the round runs past was paid up to before it
         let started = now();
@@ -147,7 +149,8 @@ impl Contribution {
         if due {
             write_private(&self.data.join("renewed"), started.to_string().as_bytes())?;
             last.extend(report.renewed.iter().map(|n| (*n, started)));
-            write_private(&self.data.join("holders.json"), &serde_json::to_vec(&hexed(&last))?)?;
+            let kept = serde_json::json!({ "bucket": bucket_of(key), "last": hexed(&last) });
+            write_private(&self.data.join("holders.json"), kept.to_string().as_bytes())?;
         }
         let space = serde_json::json!({ "stored": report.stored, "monthly": report.monthly, "at": now() });
         write_private(&self.data.join("space.json"), space.to_string().as_bytes())?;
@@ -350,6 +353,25 @@ fn read_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
         .unwrap_or_default()
 }
 
+/// When each holder was last renewed for the bucket `key` reaches, as
+/// `holders.json` keeps it: empty for another bucket (an older epoch's).
+fn read_holders(path: &Path, key: &str) -> BTreeMap<omacloud_net::blob::NodeId, u64> {
+    let kept: serde_json::Value = read_json(path);
+    if kept["bucket"].as_str() != Some(bucket_of(key).as_str()) {
+        return BTreeMap::new();
+    }
+    serde_json::from_value::<BTreeMap<String, u64>>(kept["last"].clone())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(id, t)| Some((hex::decode(id).ok()?.try_into().ok()?, t)))
+        .collect()
+}
+
+/// Which bucket an access key reaches, without keeping the key itself.
+fn bucket_of(key: &str) -> String {
+    omacloud_net::seal::Keys::from_secret(key).scope
+}
+
 /// A map of node to time kept in `path`, empty when there's none.
 fn read_node_times(path: &Path) -> BTreeMap<omacloud_net::blob::NodeId, u64> {
     read_json::<BTreeMap<String, u64>>(path)
@@ -453,6 +475,19 @@ mod tests {
         };
         assert_eq!(month.renewal(day), Some(30 * day));
         assert_eq!(month.renewal(31 * day), None);
+    }
+
+    #[test]
+    fn holders_renewal_dates_belong_to_one_bucket() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("holders.json");
+        let last: BTreeMap<omacloud_net::blob::NodeId, u64> = [([7u8; 32], 100)].into();
+        let kept = serde_json::json!({ "bucket": bucket_of("epoch 1 key"), "last": hexed(&last) });
+        fs::write(&path, kept.to_string())?;
+        assert_eq!(read_holders(&path, "epoch 1 key"), last);
+        // after a rotation, the new bucket starts afresh
+        assert!(read_holders(&path, "epoch 2 key").is_empty());
+        Ok(())
     }
 
     #[test]

@@ -125,14 +125,19 @@ async fn storing_a_blob_again_keeps_what_it_owes() -> Result<()> {
     let me = endpoint().await?;
     let blob = client::store(&me, &n.addr(), &[8u8; 1000]).await?;
     client::renew(&me, &n.addr(), vec![blob], now() + 2 * node::MONTH, Vec::new()).await?;
-    // months on, the same copy is stored again (a repair, or someone who
+    // weeks on, the same copy is stored again (a repair, or someone who
     // knows its id): what it owes isn't wiped
-    n.backdate(70 * 24 * 3600)?;
+    n.backdate(40 * 24 * 3600)?;
     client::store(&me, &n.addr(), &[8u8; 1000]).await?;
     assert!(matches!(
         client::renew(&me, &n.addr(), vec![blob], now() + 2 * node::MONTH, Vec::new()).await?,
         Renewal::Owed(_)
     ));
+    // and once its lease ran out (unpaid, no grace), it's refused: the
+    // copy goes to a holder where it lasts
+    n.backdate(60 * 24 * 3600)?;
+    let e = client::store(&me, &n.addr(), &[8u8; 1000]).await.unwrap_err();
+    assert!(format!("{e:#}").contains("about to be let go"), "{e:#}");
     n.shutdown().await;
     Ok(())
 }

@@ -148,7 +148,6 @@ pub async fn round(
                 }
             }
         }
-        let now = crate::node::now();
         for (node, held) in per_holder {
             let Some(addr) = nodes.iter().find(|n| n.node.id == node).map(|n| n.addr.clone()) else {
                 continue;
@@ -162,18 +161,35 @@ pub async fn round(
                 let placed = |p: u64| p + SLACK > last;
                 let fresh: u64 = held.iter().filter(|h| placed(h.2)).map(|(e, ..)| e.blob_size()).sum();
                 let rest: u64 = held.iter().filter(|h| !placed(h.2)).map(|(e, ..)| e.blob_size()).sum();
-                let allowed = most_earned(fresh, 0, now) + most_earned(rest, last, now);
+                // as of now, holder by holder: a round can run long
+                let allowed = |now| most_earned(fresh, 0, now) + most_earned(rest, last, now);
                 let blobs: Vec<BlobId> = held.iter().map(|(_, b, _)| *b).collect();
                 // asked first without paying: the holder says what it's owed
                 let mut answer = client::renew(bucket.endpoint(), &addr, blobs.clone(), until, Vec::new()).await;
                 if let Ok(Renewal::Owed(owed)) = answer {
-                    if owed > allowed {
+                    if owed > allowed(crate::node::now()) {
                         log::info!("{} asked {owed} tokens, more than it served", hex::encode(&node[..4]));
                         answer = Err(anyhow::anyhow!("asked too much"));
                     } else {
                         match pay(owed) {
-                            Ok(tokens) => {
-                                answer = client::renew(bucket.endpoint(), &addr, blobs, until, tokens).await;
+                            Ok(mut tokens) => {
+                                answer =
+                                    client::renew(bucket.endpoint(), &addr, blobs.clone(), until, tokens.clone()).await;
+                                // a month end passed between asking and paying:
+                                // once more, the same tokens and what the new
+                                // month adds (the holder kept none of them)
+                                if let Ok(Renewal::Owed(more)) = answer
+                                    && more > owed
+                                    && more <= allowed(crate::node::now())
+                                {
+                                    answer = match pay(more - owed) {
+                                        Ok(extra) => {
+                                            tokens.extend(extra);
+                                            client::renew(bucket.endpoint(), &addr, blobs, until, tokens).await
+                                        }
+                                        Err(e) => Err(e),
+                                    };
+                                }
                             }
                             // not the holder's doing: it isn't counted bad, and
                             // the other holders and the repairs go on

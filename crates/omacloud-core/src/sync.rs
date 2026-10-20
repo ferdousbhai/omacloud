@@ -1600,8 +1600,9 @@ impl Engine {
     /// and the one each member computer last synced. The data only the others used is marked
     /// for deletion, and deleted by a later tidy if nothing took it up
     /// again: rustic's lock-free prune, safe beside other computers
-    /// syncing. Only one computer of an account tidies, the member with the
-    /// lowest device key, so two never prune at once. Returns how many
+    /// syncing. Only one computer of an account tidies, so two never prune
+    /// at once: the member with the lowest device key among those that
+    /// synced within the window (the lowest of all when none did). Returns how many
     /// versions went, or `None` when another computer is the one to tidy.
     ///
     /// # Errors
