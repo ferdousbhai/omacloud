@@ -441,6 +441,17 @@ impl Session {
         self.rt.block_on(crate::share::remove(&bucket))
     }
 
+    /// Take down an ended share: its index entry goes, whether or not it's
+    /// still there, so its holders' grace keeps nothing opening.
+    ///
+    /// # Errors
+    ///
+    /// If the Worker can't be reached.
+    pub fn take_down(&self, secret: &str) -> Result<()> {
+        let bucket = self.gateway.bucket(&crate::share::bucket_key(secret));
+        self.rt.block_on(bucket.delete("share"))
+    }
+
     /// Never choose these holders (failed this computer lately) for new copies.
     pub fn set_avoid(&self, avoid: BTreeSet<NodeId>) {
         self.gateway.set_avoid(avoid);

@@ -55,17 +55,16 @@ pub struct Report {
 }
 
 /// The most a holder keeping `bytes` can have earned since the renewal at
-/// `last` (0: none): every byte for every whole month since, and one more
-/// for a month that was under way then, at most a longest lease's worth.
+/// `last` (0: none): every byte for every month end passed since (holders
+/// charge at month ends shared by all), at most a longest lease's worth. A
+/// holder asking anything between month ends is cheating.
 #[must_use]
 fn most_earned(bytes: u64, last: u64, now: u64) -> u64 {
-    // a holder charges whole months, and a part of one carries over to the
-    // next renewal: so a month more than have passed since the last
     let longest = crate::node::LONGEST_LEASE.div_ceil(MONTH);
     let months = if last == 0 {
         longest
     } else {
-        (now.saturating_sub(last) / MONTH + 1).min(longest)
+        (now / MONTH).saturating_sub(last / MONTH).min(longest)
     };
     tokens_for(bytes * months)
 }
@@ -154,7 +153,17 @@ pub async fn round(
                         log::info!("{} asked {owed} tokens, more than it served", hex::encode(&node[..4]));
                         answer = Err(anyhow::anyhow!("asked too much"));
                     } else {
-                        answer = client::renew(bucket.endpoint(), &addr, blobs, until, pay(owed)?).await;
+                        match pay(owed) {
+                            Ok(tokens) => {
+                                answer = client::renew(bucket.endpoint(), &addr, blobs, until, tokens).await;
+                            }
+                            // not the holder's doing: it isn't counted bad, and
+                            // the other holders and the repairs go on
+                            Err(e) => {
+                                log::warn!("paying {}: {e:#}", hex::encode(&node[..4]));
+                                continue;
+                            }
+                        }
                     }
                 }
                 match answer {
@@ -222,13 +231,13 @@ mod tests {
     #[test]
     fn a_holder_can_ask_for_the_months_it_served_and_no_more() {
         let gib = 1 << 30;
-        let now = 100 * MONTH;
-        // renewed yesterday: a month that was under way may have ended since
+        let now = 100 * MONTH + 3600;
+        // renewed yesterday, with a month end since: that month
         assert_eq!(most_earned(gib, now - 24 * 3600, now), 1);
-        assert_eq!(most_earned(gib, now - MONTH, now), 2);
-        assert_eq!(most_earned(3 * gib, now - 10, now), 3, "at least a month");
+        // renewed an hour ago, after it: nothing
+        assert_eq!(most_earned(gib, now - 60, now), 0);
+        assert_eq!(most_earned(3 * gib, now - 2 * MONTH, now), 6);
         assert_eq!(most_earned(gib, now - 12 * MONTH, now), 3, "at most a longest lease");
         assert_eq!(most_earned(gib, 0, now), 3);
-        assert_eq!(most_earned(1000, now - MONTH, now), 1);
     }
 }

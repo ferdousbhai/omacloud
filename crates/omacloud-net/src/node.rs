@@ -208,12 +208,25 @@ impl Node {
     }
 }
 
-/// Whole months a blob was kept since it was paid up to, until now or its
-/// lease's end if that came first: the grace after a lease is unpaid. Only
-/// whole months count, so an owner may renew as often as it likes, and
-/// pays once a month has gone by.
-fn months_served(paid_to: u64, expires: u64, now: u64) -> u64 {
-    now.min(expires).saturating_sub(paid_to) / MONTH
+/// What a renewal at `now` charges a blob paid up to `paid_to` with its
+/// lease to `expires`: the months owed, and how far it's paid up to after.
+///
+/// Months end at whole multiples of [`MONTH`], the same for every blob, so
+/// a holder's blobs all come due together, once a month, however often an
+/// owner renews and whenever each was placed. Charged are the month ends
+/// passed since it was paid up to, until now or its lease's end if that
+/// came first: the grace after a lease is unpaid, and is forgiven on a
+/// renewal after it, though what the lease left unpaid stays owed.
+fn charge(paid_to: u64, expires: u64, now: u64) -> (u64, u64) {
+    let until = now.min(expires);
+    let months = (until / MONTH).saturating_sub(paid_to / MONTH);
+    let paid_to = if months > 0 { until / MONTH * MONTH } else { paid_to };
+    if expires < now {
+        // lapsed: the grace drops out, the lease's unpaid end carries on
+        (months, now - expires.saturating_sub(paid_to))
+    } else {
+        (months, paid_to)
+    }
 }
 
 fn open_db(path: &Path) -> Result<rusqlite::Connection> {
@@ -310,9 +323,9 @@ impl Inner {
         }
         let db = self.db.lock().expect("node db");
         let mut kept = Vec::with_capacity(blobs.len());
-        let mut served = Vec::with_capacity(blobs.len());
-        // what was served unpaid: bytes kept, times the whole months since
-        // each was last paid for (the first week is free)
+        let mut charged = Vec::with_capacity(blobs.len());
+        // what was served unpaid: bytes kept, times the months ended since
+        // each was last paid for (one gone before its first cost nothing)
         let mut byte_months = 0u64;
         for b in blobs {
             let row: Option<(i64, i64, i64)> = db
@@ -323,22 +336,17 @@ impl Inner {
                 )
                 .optional()?;
             kept.push(row.is_some());
-            let months = row.map_or(0, |(size, paid_to, expires)| {
-                let months = months_served(
+            let (months, paid_to) = row.map_or((0, 0), |(size, paid_to, expires)| {
+                let (months, paid_to) = charge(
                     u64::try_from(paid_to).unwrap_or(0),
                     u64::try_from(expires).unwrap_or(0),
                     now,
                 );
                 byte_months += u64::try_from(size).unwrap_or(0) * months;
-                months
+                (months, paid_to)
             });
-            served.push(months);
+            charged.push((months, paid_to));
         }
-        // the grace after a lease is for blobs that were paid for; storage
-        // is free without a token key
-        // a renewal accepted is an owner standing by its blobs: they get the
-        // grace too, so an account whose computers were all lost keeps its
-        // newest data as long as its oldest
         if let Some(issuer) = &self.issuer {
             let owed = tokens_for(byte_months);
             // each good token once, however often it's given
@@ -369,21 +377,15 @@ impl Inner {
                 }
             }
         }
-        for ((b, k), months) in blobs.iter().zip(&kept).zip(&served) {
+        for ((b, k), (months, paid_to)) in blobs.iter().zip(&kept).zip(&charged) {
             if *k {
-                // paid up to the end of the months paid for: the part of a
-                // month begun waits for the next renewal. A lease that ran
-                // out was paid to its end, and the grace since is forgiven:
-                // from now on it counts afresh
+                // the grace after a lease is for blobs paid for (storage is
+                // free without a token key): so a lease can't be lapsed and
+                // renewed for nothing, again and again
+                let paid = *months > 0 || self.issuer.is_none();
                 db.execute(
-                    "UPDATE blobs SET expires = MAX(expires, ?1), paid = 1, \
-                     paid_to = CASE WHEN expires < ?2 THEN ?2 ELSE paid_to + ?3 END WHERE blob = ?4",
-                    params![
-                        until,
-                        i64::try_from(now)?,
-                        i64::try_from(months * MONTH)?,
-                        hex::encode(b.0)
-                    ],
+                    "UPDATE blobs SET expires = MAX(expires, ?1), paid = MAX(paid, ?2), paid_to = ?3 WHERE blob = ?4",
+                    params![until, i64::from(paid), i64::try_from(*paid_to)?, hex::encode(b.0)],
                 )?;
             }
         }
@@ -430,13 +432,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_holder_charges_for_the_lease_it_served_not_the_grace_after() {
-        let t = 100 * MONTH;
-        assert_eq!(months_served(t, t + 2 * MONTH, t), 0);
-        // a month begun isn't owed yet: renewing often costs nothing more
-        assert_eq!(months_served(t, t + 2 * MONTH, t + MONTH - 1), 0);
-        assert_eq!(months_served(t, t + 2 * MONTH, t + MONTH + 1), 1);
-        // a year on, deep in its grace: still the two months of the lease
-        assert_eq!(months_served(t, t + 2 * MONTH, t + 12 * MONTH), 2);
+    fn a_holder_charges_month_ends_served_and_not_the_grace() {
+        let m = MONTH;
+        let day = 24 * 3600;
+        // within a month: nothing owed, however often renewed
+        assert_eq!(
+            charge(100 * m + 5 * day, 102 * m, 100 * m + 20 * day),
+            (0, 100 * m + 5 * day)
+        );
+        // past a month end: one month, paid up to it
+        assert_eq!(charge(100 * m + 5 * day, 102 * m, 101 * m + 1), (1, 101 * m));
+        // two blobs placed on different days come due on the same day
+        assert_eq!(charge(100 * m + 2 * day, 103 * m, 101 * m + day).0, 1);
+        assert_eq!(charge(100 * m + 25 * day, 103 * m, 101 * m + day).0, 1);
+        // back a year after the lease ended: its months, not the grace
+        let (months, paid_to) = charge(100 * m, 102 * m + 5 * day, 112 * m + 10 * day);
+        assert_eq!(months, 2);
+        // the lease's unpaid five days carry on from now
+        assert_eq!(paid_to, 112 * m + 5 * day);
+        // so the next day nothing more is owed
+        assert_eq!(charge(paid_to, 114 * m, 112 * m + 11 * day).0, 0);
     }
 }

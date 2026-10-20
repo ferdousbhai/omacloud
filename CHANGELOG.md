@@ -4,8 +4,11 @@
 
 - Copies placed between renewals were let go after their free first week,
   as renewals came monthly: data uploaded in the week after a renewal
-  could be lost. Renewals now come daily, and holders charge whole months
-  only, so renewing often costs no more; shares likewise.
+  could be lost. Renewals now come daily; holders charge at month ends
+  shared by every blob, so a holder bills an account once a month however
+  often it renews, and an owner refuses any charge between month ends;
+  shares likewise. A share that ends is taken down, and a payment that
+  fails no longer stops renewing and repairing everything else.
 - A computer records the version it stands on as soon as it pulls, so
   tidying keeps it even if the rest of that sync fails; a sharded object
   is repaired from holders counted bad for a missed renewal when the good
@@ -13,7 +16,7 @@
   own key (they were looked for with the current one, and never found).
 - A holder counts a token given twice once; renewals go 10,000 copies a
   request; a renewal after a lease ran out pays for the lease and not the
-  grace since; a holder's credits are banked a batch at a time; a repair
+  grace since, and the grace is for blobs paid for; a holder's credits are banked a batch at a time; a repair
   that can't place enough new holders keeps the entry that still reads.
 - A read-only file whose content matched no longer fails every sync;
   `receive` won't write through a file or link already at its destination.

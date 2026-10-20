@@ -117,54 +117,18 @@ async fn a_holder_is_paid_for_time_served_and_a_paid_blob_gets_its_grace() -> Re
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn back_after_its_lease_ran_out_an_owner_pays_once_for_the_lease() -> Result<()> {
-    use client::Renewal;
+async fn a_blob_never_paid_for_gets_no_grace() -> Result<()> {
     let tmp = tempfile::tempdir()?;
     let kp = KeyPairSha384PSSRandomized::generate(&mut DefaultRng, 2048)?;
     let n = holder(tmp.path(), 10 << 20, Some(kp.pk.clone())).await?;
     let me = endpoint().await?;
-    let blob = client::store(&me, &n.addr(), &[6u8; 1000]).await?;
-    let pay = |count| -> Result<Vec<omacloud_net::credit::Token>> {
-        let (blind, pending) = credit::ask(&kp.pk, count)?;
-        let signed: Vec<Vec<u8>> = blind.iter().map(|b| kp.sk.blind_sign(b).unwrap().0).collect();
-        pending.finish(&kp.pk, &signed)
-    };
-    // kept on credit two months, then the owner is away a year
-    client::renew(&me, &n.addr(), vec![blob], now() + 2 * node::MONTH, Vec::new()).await?;
-    n.backdate(365 * 24 * 3600)?;
+    let blob = client::store(&me, &n.addr(), &[4u8; 1000]).await?;
+    // renewed in its free week, nothing owed: kept on credit, but no grace,
+    // or a lease could be lapsed and renewed for nothing, again and again
     let until = now() + 2 * node::MONTH;
-    let Renewal::Owed(owed) = client::renew(&me, &n.addr(), vec![blob], until, Vec::new()).await? else {
-        panic!("nothing owed for a lease served");
-    };
-    assert_eq!(
-        client::renew(&me, &n.addr(), vec![blob], until, pay(usize::try_from(owed)?)?).await?,
-        Renewal::Kept(vec![true])
-    );
-    // the next day's renewal owes nothing: the grace since was forgiven
-    n.backdate(24 * 3600)?;
-    assert_eq!(
-        client::renew(&me, &n.addr(), vec![blob], until, Vec::new()).await?,
-        Renewal::Kept(vec![true])
-    );
-    n.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_renewed_blob_gets_its_grace_and_one_never_renewed_none() -> Result<()> {
-    let tmp = tempfile::tempdir()?;
-    let kp = KeyPairSha384PSSRandomized::generate(&mut DefaultRng, 2048)?;
-    let n = holder(tmp.path(), 10 << 20, Some(kp.pk.clone())).await?;
-    let me = endpoint().await?;
-    let renewed = client::store(&me, &n.addr(), &[4u8; 1000]).await?;
-    client::store(&me, &n.addr(), &[7u8; 1000]).await?;
-    // renewed in its free week, nothing owed yet: an owner standing by it
-    let until = now() + 2 * node::MONTH;
-    client::renew(&me, &n.addr(), vec![renewed], until, Vec::new()).await?;
-    // the one never renewed goes when its first lease ends
-    assert_eq!(n.sweep_as_of(now() + node::FIRST_LEASE + 60).await?, 1);
-    assert_eq!(n.sweep_as_of(until + 60).await?, 0, "kept through its grace");
-    assert_eq!(n.sweep_as_of(until + node::GRACE + 60).await?, 1);
+    client::renew(&me, &n.addr(), vec![blob], until, Vec::new()).await?;
+    assert_eq!(n.sweep_as_of(until - 60).await?, 0);
+    assert_eq!(n.sweep_as_of(until + 60).await?, 1);
     n.shutdown().await;
     Ok(())
 }

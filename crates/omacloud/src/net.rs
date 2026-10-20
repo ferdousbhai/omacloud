@@ -159,7 +159,20 @@ impl Contribution {
     fn renew_shares(&self, session: &Session) {
         let mut shares = read_shares(&self.data);
         let before = shares.len();
-        shares.retain(|s| s.until > now());
+        // an ended share is taken down, or its holders' grace would keep it
+        // opening for months; kept to try again if that fails
+        shares.retain(|s| {
+            if s.until > now() {
+                return true;
+            }
+            match session.take_down(&s.secret) {
+                Ok(()) => false,
+                Err(e) => {
+                    warn!("taking down the ended share {}: {e:#}", s.name);
+                    true
+                }
+            }
+        });
         let wallet = self.data.join("wallet.json");
         let network = session.network();
         let mut changed = shares.len() != before;

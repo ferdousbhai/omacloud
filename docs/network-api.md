@@ -25,7 +25,7 @@ Binary values are hex unless noted. `now` is Unix seconds.
 ## Nodes
 
 - `POST /api/net/nodes`, node-signed. Body `{"addr": <iroh EndpointAddr as
-  serde_json gives it, kept verbatim>, "capacity": <bytes free>}`. Upserts
+  serde_json gives it, kept verbatim>, "capacity": <bytes it gives; 0 unlists it>}`. Upserts
   the node, notes this hour as seen, and answers
   `{"asn": <number>, "prefix": "<prefix>"}`: the autonomous system
   (`request.cf.asn`, 0 when absent) and the /24 (IPv4, `a.b.c.0/24`) or /48

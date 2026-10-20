@@ -130,8 +130,8 @@ async function tokenId(key: Key, t: unknown): Promise<string | null> {
 }
 
 /** POST /credits/exchange: good unspent tokens for as many fresh signatures.
- * A token spent before buys nothing, but doesn't sink the rest: a holder
- * whose last exchange answered too late to be heard tries those again. */
+ * A token spent before buys nothing, but doesn't sink the rest of the
+ * batch (such as tokens an owner gave two holders). */
 export async function exchange(req: Request, env: Env): Promise<Response> {
 	const key = await creditKey(env);
 	const body = await readObject(req, 512 * 1024);
