@@ -11,6 +11,10 @@
   is repaired from holders counted bad for a missed renewal when the good
   ones don't suffice; a key rotation's leftovers are deleted with their
   own key (they were looked for with the current one, and never found).
+- A holder counts a token given twice once; renewals go 10,000 copies a
+  request; a renewal after a lease ran out pays for the lease and not the
+  grace since; a holder's credits are banked a batch at a time; a repair
+  that can't place enough new holders keeps the entry that still reads.
 - A read-only file whose content matched no longer fails every sync;
   `receive` won't write through a file or link already at its destination.
 

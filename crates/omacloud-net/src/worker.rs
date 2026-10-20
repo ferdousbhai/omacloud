@@ -165,23 +165,20 @@ impl Worker {
     ///
     /// If the Worker can't be reached, or refuses a batch (a token not its).
     pub fn exchange(&self, issuer: &IssuerKey, tokens: &[Token]) -> Result<Vec<Token>> {
-        let mut fresh = Vec::with_capacity(tokens.len());
-        // the Worker takes 100 a request; one spent before is paid nothing
-        // but doesn't sink the rest
-        for batch in tokens.chunks(100) {
-            let (blind, pending) = credit::ask(issuer, batch.len())?;
-            let v = self.ok(
-                "POST",
-                "/api/net/credits/exchange",
-                &[],
-                Some(&json!({
-                    "tokens": batch,
-                    "blind": blind.iter().map(hex::encode).collect::<Vec<_>>(),
-                })),
-            )?;
-            fresh.extend(pending.finish(issuer, &signed(&v)?)?);
-        }
-        Ok(fresh)
+        // the Worker takes 100 a request (the caller banks each batch); one
+        // spent before is paid nothing but doesn't sink the rest
+        anyhow::ensure!(tokens.len() <= 100, "at most 100 tokens an exchange");
+        let (blind, pending) = credit::ask(issuer, tokens.len())?;
+        let v = self.ok(
+            "POST",
+            "/api/net/credits/exchange",
+            &[],
+            Some(&json!({
+                "tokens": tokens,
+                "blind": blind.iter().map(hex::encode).collect::<Vec<_>>(),
+            })),
+        )?;
+        pending.finish(issuer, &signed(&v)?)
     }
 }
 

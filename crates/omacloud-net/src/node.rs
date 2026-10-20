@@ -336,11 +336,13 @@ impl Inner {
         }
         // the grace after a lease is for blobs that were paid for; storage
         // is free without a token key
-        let mut paid = self.issuer.is_none();
+        // a renewal accepted is an owner standing by its blobs: they get the
+        // grace too, so an account whose computers were all lost keeps its
+        // newest data as long as its oldest
         if let Some(issuer) = &self.issuer {
             let owed = tokens_for(byte_months);
-            paid = owed > 0;
-            let mut fresh = 0u64;
+            // each good token once, however often it's given
+            let mut fresh = std::collections::BTreeSet::new();
             for t in &tokens {
                 if t.verify(issuer).is_err() {
                     continue;
@@ -351,9 +353,10 @@ impl Inner {
                     .optional()?
                     .is_some();
                 if !taken {
-                    fresh += 1;
+                    fresh.insert(id);
                 }
             }
+            let fresh = fresh.len() as u64;
             if fresh < owed {
                 return Ok(Reply::Owed { tokens: owed });
             }
@@ -369,11 +372,18 @@ impl Inner {
         for ((b, k), months) in blobs.iter().zip(&kept).zip(&served) {
             if *k {
                 // paid up to the end of the months paid for: the part of a
-                // month begun waits for the next renewal
+                // month begun waits for the next renewal. A lease that ran
+                // out was paid to its end, and the grace since is forgiven:
+                // from now on it counts afresh
                 db.execute(
-                    "UPDATE blobs SET expires = MAX(expires, ?1), paid = MAX(paid, ?2), paid_to = paid_to + ?3 \
-                     WHERE blob = ?4",
-                    params![until, i64::from(paid), i64::try_from(months * MONTH)?, hex::encode(b.0)],
+                    "UPDATE blobs SET expires = MAX(expires, ?1), paid = 1, \
+                     paid_to = CASE WHEN expires < ?2 THEN ?2 ELSE paid_to + ?3 END WHERE blob = ?4",
+                    params![
+                        until,
+                        i64::try_from(now)?,
+                        i64::try_from(months * MONTH)?,
+                        hex::encode(b.0)
+                    ],
                 )?;
             }
         }

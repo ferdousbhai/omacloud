@@ -332,7 +332,9 @@ impl Bucket {
 
     /// Put `holders` in `entry`'s place. True when they differ from its own.
     async fn replace_holders(&self, entry: &Entry, holders: Vec<Held>) -> Result<bool> {
-        if holders == entry.holders {
+        // too few to read it back: the old entry, whose holders just served
+        // it, stays until new ones can be found
+        if holders == entry.holders || holders.len() < entry.needed() {
             return Ok(false);
         }
         self.put_entry(&Entry {

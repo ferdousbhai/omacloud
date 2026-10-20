@@ -22,6 +22,9 @@ use crate::{
     proto::BlobId,
 };
 
+/// Blobs renewed a request: well inside a request's size limit.
+const RENEW_BATCH: usize = 10_000;
+
 /// A renewal: keep every good copy until `until`, paying each holder for
 /// the time it kept them since the last renewal, at `last` (0: none yet).
 #[derive(Debug, Clone, Copy)]
@@ -140,32 +143,35 @@ pub async fn round(
             let Some(addr) = nodes.iter().find(|n| n.node.id == node).map(|n| n.addr.clone()) else {
                 continue;
             };
-            let bytes: u64 = held.iter().map(|(e, _)| e.blob_size()).sum();
-            let blobs: Vec<BlobId> = held.iter().map(|(_, b)| *b).collect();
-            // asked first without paying: the holder says what it's owed
-            let mut answer = client::renew(bucket.endpoint(), &addr, blobs.clone(), until, Vec::new()).await;
-            if let Ok(Renewal::Owed(owed)) = answer {
-                if owed > most_earned(bytes, last, now) {
-                    log::info!("{} asked {owed} tokens, more than it served", hex::encode(&node[..4]));
-                    answer = Err(anyhow::anyhow!("asked too much"));
-                } else {
-                    answer = client::renew(bucket.endpoint(), &addr, blobs, until, pay(owed)?).await;
+            // in batches a request can carry
+            for held in held.chunks(RENEW_BATCH) {
+                let bytes: u64 = held.iter().map(|(e, _)| e.blob_size()).sum();
+                let blobs: Vec<BlobId> = held.iter().map(|(_, b)| *b).collect();
+                // asked first without paying: the holder says what it's owed
+                let mut answer = client::renew(bucket.endpoint(), &addr, blobs.clone(), until, Vec::new()).await;
+                if let Ok(Renewal::Owed(owed)) = answer {
+                    if owed > most_earned(bytes, last, now) {
+                        log::info!("{} asked {owed} tokens, more than it served", hex::encode(&node[..4]));
+                        answer = Err(anyhow::anyhow!("asked too much"));
+                    } else {
+                        answer = client::renew(bucket.endpoint(), &addr, blobs, until, pay(owed)?).await;
+                    }
                 }
-            }
-            match answer {
-                Ok(Renewal::Kept(kept)) => {
-                    for ((e, _), k) in held.iter().zip(kept) {
-                        if !k {
-                            bad.entry(e.key.clone()).or_default().insert(node);
+                match answer {
+                    Ok(Renewal::Kept(kept)) => {
+                        for ((e, _), k) in held.iter().zip(kept) {
+                            if !k {
+                                bad.entry(e.key.clone()).or_default().insert(node);
+                            }
                         }
                     }
-                }
-                Ok(Renewal::Owed(_)) | Err(_) => {
-                    if let Err(err) = &answer {
-                        log::info!("renewing with {}: {err:#}", hex::encode(&node[..4]));
-                    }
-                    for (e, _) in &held {
-                        bad.entry(e.key.clone()).or_default().insert(node);
+                    Ok(Renewal::Owed(_)) | Err(_) => {
+                        if let Err(err) = &answer {
+                            log::info!("renewing with {}: {err:#}", hex::encode(&node[..4]));
+                        }
+                        for (e, _) in held {
+                            bad.entry(e.key.clone()).or_default().insert(node);
+                        }
                     }
                 }
             }

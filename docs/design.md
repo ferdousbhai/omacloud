@@ -124,14 +124,18 @@ sync engine. Nothing in it is trusted for anything but availability.
 - **What a holder keeps** (`node.rs`): a blob only if its bytes hash to the
   id it was stored under. Anyone may read any blob, as it's ciphertext. A
   first lease is 7 days, free. A renewal keeps a blob up to three months
-  on credit and pays for the time it was already kept: a holder is paid
+  on credit and pays for the time it was already kept, in whole months
+  (a month under way carries over to the next renewal): a holder is paid
   for what it served, as the owner's audits found it, never ahead, so
-  there's nothing to take and run with. Asked with too little, a holder
-  says what's owed; the owner pays it unless it's more than every byte for
-  every month since the last renewal, which marks the holder a cheat. A
-  blob that was paid for gets 180 days' grace after its lease before it's
-  dropped, so deletes are slow by design. A holder never learns whose
-  blobs it has.
+  there's nothing to take and run with, and renewing daily costs no more
+  than monthly. Asked with too little, a holder says what's owed; the owner
+  pays it unless it's more than every byte for every whole month since the
+  last renewal and the one under way then, which marks the holder a cheat.
+  A blob that was renewed gets 180 days' grace after its lease before
+  it's dropped, so deletes are slow by design (an account whose computers
+  were all lost keeps its newest data as long as its oldest); a renewal after a lease ran
+  out pays for the lease, not the grace. A holder never learns whose blobs
+  it has.
 - **Scrambling** (`blob.rs`). Each holder gets its own copy, the restic
   object XORed with ChaCha20 keyed per epoch, its nonce from the object key
   and the holder's id, so no two holders store the same bytes and a holder
@@ -161,8 +165,9 @@ sync engine. Nothing in it is trusted for anything but availability.
 - **Upkeep** (`upkeep.rs`, run by the daemon). Every 15 minutes a node
   tells the directory it's up and trades in the tokens it took. Every 6
   hours the account's computer reads back 32 random ranges of its copies,
-  monthly pays each holder for the month it kept them (from a wallet in its
-  data directory), and gives new copies to objects whose holder failed an
+  daily renews them, paying each holder as each whole month goes by (from a
+  wallet in its data directory; daily, so a copy placed or repaired since
+  never outlives its free week unrenewed), and gives new copies to objects whose holder failed an
   audit or left, fewest copies first. A holder that failed is remembered
   for 30 days and given no new copy meanwhile: kept on this computer,
   reported nowhere, so nobody can get an honest node shunned. Audits are ordinary reads: a holder can't

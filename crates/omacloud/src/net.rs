@@ -25,8 +25,8 @@ const HEARTBEAT: Duration = Duration::from_secs(15 * 60);
 const UPKEEP: Duration = Duration::from_secs(6 * 3600);
 /// Copies read back each round.
 const AUDITS: usize = 32;
-/// Renewals keep copies this far ahead, and come again when less than a
-/// month is left; holders are paid for the time they served.
+/// Renewals keep copies this far ahead; holders are paid for the time they
+/// served.
 const LEASE: u64 = 2 * MONTH;
 /// Tokens asked for when the wallet runs short and nothing else pays.
 const STARTER: usize = 10;
@@ -189,16 +189,16 @@ impl Contribution {
 
     /// Trade the tokens this node took for fresh ones, into the wallet.
     fn deposit(&self, session: &Session, node: &Node) -> Result<()> {
-        let taken = node.tokens()?;
-        if taken.is_empty() {
-            return Ok(());
-        }
-        let fresh = session.network().exchange(&taken)?;
         let wallet = self.data.join("wallet.json");
-        let mut tokens = read_wallet(&wallet);
-        tokens.extend(fresh);
-        write_private(&wallet, &serde_json::to_vec(&tokens)?)?;
-        node.mark_deposited(&taken)?;
+        // a batch the Worker takes at a time, each banked before the next:
+        // tokens it took are spent, so what it gave back must not be lost
+        for batch in node.tokens()?.chunks(100) {
+            let fresh = session.network().exchange(batch)?;
+            let mut tokens = read_wallet(&wallet);
+            tokens.extend(fresh);
+            write_private(&wallet, &serde_json::to_vec(&tokens)?)?;
+            node.mark_deposited(batch)?;
+        }
         Ok(())
     }
 }
