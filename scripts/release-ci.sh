@@ -26,11 +26,17 @@ source_commit=$(retry 60 gh api "repos/$repository/commits/master" --jq .sha)
 # CI runs only when a release starts it: build master's commit now unless a run is named.
 run=${2:-}
 if [[ -z $run ]]; then
+  # the run dispatched now, not an earlier one for the same commit
+  newest() {
+    retry 60 gh run list --repo "$repository" --workflow ci.yml --event workflow_dispatch --commit "$source_commit" \
+      --limit 1 --json databaseId --jq '.[0].databaseId // empty'
+  }
+  before=$(newest)
   gh workflow run ci.yml --repo "$repository" --ref master
   for _ in $(seq 1 30); do
-    run=$(retry 60 gh run list --repo "$repository" --workflow ci.yml --event workflow_dispatch --commit "$source_commit" \
-      --limit 1 --json databaseId --jq '.[0].databaseId // empty')
-    [[ -n $run ]] && break
+    run=$(newest)
+    [[ -n $run && $run != "$before" ]] && break
+    run=
     sleep 5
   done
 fi

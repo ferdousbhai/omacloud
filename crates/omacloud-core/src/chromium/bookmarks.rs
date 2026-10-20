@@ -141,13 +141,6 @@ pub fn merge(base: Option<&Doc>, ours: &Doc, theirs: &Doc) -> (Doc, Vec<String>)
         theirs.clone()
     };
     let base = base.unwrap_or(&empty);
-    let label = |id: &str, n: &Node| {
-        if ROOTS.contains(&id) {
-            format!("bookmarks folder {id}")
-        } else {
-            format!("bookmark \"{}\"", n.name)
-        }
-    };
 
     // each node: kept or not, and its fields
     let ids: BTreeSet<&String> = ours.keys().chain(theirs.keys()).chain(base.keys()).collect();
@@ -194,32 +187,7 @@ pub fn merge(base: Option<&Doc>, ours: &Doc, theirs: &Doc) -> (Doc, Vec<String>)
         }
     }
 
-    // a kept node's folder stays too, from whichever side still has it
-    loop {
-        let orphans: Vec<(String, String)> = out
-            .iter()
-            .filter_map(|(id, n)| {
-                let p = n.parent.as_ref()?;
-                (!out.contains_key(p)).then(|| (id.clone(), p.clone()))
-            })
-            .collect();
-        if orphans.is_empty() {
-            break;
-        }
-        for (id, p) in orphans {
-            if let Some(n) = ours.get(&p).or(theirs.get(&p)).or(base.get(&p)) {
-                if !out.contains_key(&p) {
-                    conflicts.push(format!(
-                        "{}: deleted on one computer while the other added to it; kept",
-                        label(&p, n)
-                    ));
-                    _ = out.insert(p.clone(), n.clone());
-                }
-            } else if let Some(n) = out.get_mut(&id) {
-                n.parent = Some("other".into());
-            }
-        }
-    }
+    keep_parents(&mut out, [ours, &theirs, base], &mut conflicts);
 
     // moves on both sides that make a cycle: this computer's moves win
     for _ in 0..out.len() {
@@ -238,6 +206,8 @@ pub fn merge(base: Option<&Doc>, ours: &Doc, theirs: &Doc) -> (Doc, Vec<String>)
             me = crate::merged::ME
         ));
     }
+    // undoing a move may point back at a folder the other side deleted
+    keep_parents(&mut out, [ours, &theirs, base], &mut conflicts);
     // can't happen (ours has no cycles), but never loop: park under other
     while let Some(cycle) = find_cycle(&out) {
         if let Some(n) = out.get_mut(&cycle[0]) {
@@ -271,6 +241,44 @@ pub fn merge(base: Option<&Doc>, ours: &Doc, theirs: &Doc) -> (Doc, Vec<String>)
         }
     }
     (out, conflicts)
+}
+
+fn label(id: &str, n: &Node) -> String {
+    if ROOTS.contains(&id) {
+        format!("bookmarks folder {id}")
+    } else {
+        format!("bookmark \"{}\"", n.name)
+    }
+}
+
+/// A kept node's folder stays too, from whichever side still has it
+/// (`sides` in order of preference).
+fn keep_parents(out: &mut Doc, sides: [&Doc; 3], conflicts: &mut Vec<String>) {
+    loop {
+        let orphans: Vec<(String, String)> = out
+            .iter()
+            .filter_map(|(id, n)| {
+                let p = n.parent.as_ref()?;
+                (!out.contains_key(p)).then(|| (id.clone(), p.clone()))
+            })
+            .collect();
+        if orphans.is_empty() {
+            break;
+        }
+        for (id, p) in orphans {
+            if let Some(n) = sides.iter().find_map(|d| d.get(&p)) {
+                if !out.contains_key(&p) {
+                    conflicts.push(format!(
+                        "{}: deleted on one computer while the other added to it; kept",
+                        label(&p, n)
+                    ));
+                    _ = out.insert(p.clone(), n.clone());
+                }
+            } else if let Some(n) = out.get_mut(&id) {
+                n.parent = Some("other".into());
+            }
+        }
+    }
 }
 
 fn merge_node(

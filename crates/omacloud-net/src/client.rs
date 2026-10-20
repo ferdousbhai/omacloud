@@ -3,8 +3,10 @@
 use std::{ops::Range, time::Duration};
 
 use anyhow::{Context, Result};
+use futures_util::StreamExt;
 use iroh::{Endpoint, EndpointAddr, endpoint::Connection};
 use iroh_blobs::{
+    api::remote::GetProgressItem,
     protocol::{ChunkRanges, ChunkRangesExt, GetRequest},
     store::mem::MemStore,
 };
@@ -32,17 +34,37 @@ async fn connect(ep: &Endpoint, to: &EndpointAddr, alpn: &[u8]) -> Result<Connec
         .with_context(|| format!("reaching {}", about(to)))
 }
 
+/// How long a holder may go quiet once reached: holders are untrusted,
+/// and one that never answers mustn't hold up a store or a read.
+const STALL: Duration = Duration::from_secs(60);
+/// The slowest pace a body is given time for, in bytes a second.
+const PACE: u64 = 64 << 10;
+
 async fn ask(ep: &Endpoint, to: &EndpointAddr, request: &Request, body: Option<&[u8]>) -> Result<Reply> {
     let conn = connect(ep, to, proto::ALPN).await?;
-    let (mut send, mut recv) = conn.open_bi().await?;
-    proto::send(&mut send, request).await?;
-    if let Some(body) = body {
-        send.write_all(body).await?;
-    }
-    send.finish()?;
-    let reply = proto::recv(&mut recv).await;
+    let limit = STALL + Duration::from_secs(body.map_or(0, |b| b.len() as u64 / PACE));
+    let reply = tokio::time::timeout(limit, exchange(&conn, request, body))
+        .await
+        .map_err(|_| anyhow::anyhow!("{} didn't answer in {}s", about(to), limit.as_secs()))
+        .and_then(|r| r);
     conn.close(0u32.into(), b"done");
     reply
+}
+
+async fn exchange(conn: &Connection, request: &Request, body: Option<&[u8]>) -> Result<Reply> {
+    let (mut send, mut recv) = conn.open_bi().await?;
+    proto::send(&mut send, request).await?;
+    // a holder that won't take the body (it has the blob, or no room)
+    // answers first and stops reading: its answer is what counts
+    let sent = async {
+        if let Some(body) = body {
+            send.write_all(body).await?;
+        }
+        send.finish()?;
+        anyhow::Ok(())
+    }
+    .await;
+    proto::recv(&mut recv).await.map_err(|e| sent.err().unwrap_or(e))
 }
 
 /// Give `data` (a scrambled blob) to a holder. Returns its id.
@@ -109,12 +131,22 @@ pub async fn read(ep: &Endpoint, from: &EndpointAddr, blob: BlobId, range: Optio
         Some(r) => GetRequest::blob_ranges(hash, ChunkRanges::bytes(r.clone())),
         None => GetRequest::blob(hash),
     };
-    mem.remote()
-        .execute_get(conn.clone(), request)
-        .complete()
-        .await
-        .with_context(|| format!("reading a blob from {}", about(from)))?;
+    let got = async {
+        let mut progress = std::pin::pin!(mem.remote().execute_get(conn.clone(), request).stream());
+        loop {
+            match tokio::time::timeout(STALL, progress.next()).await {
+                Err(_) => anyhow::bail!("nothing came in {}s", STALL.as_secs()),
+                Ok(Some(GetProgressItem::Progress(_))) => {}
+                Ok(Some(GetProgressItem::Done(_))) => return Ok(()),
+                Ok(Some(GetProgressItem::Error(e))) => return Err(e.into()),
+                Ok(None) => anyhow::bail!("the read ended early"),
+            }
+        }
+    }
+    .await
+    .with_context(|| format!("reading a blob from {}", about(from)));
     conn.close(0u32.into(), b"done");
+    got?;
     let data = match range {
         Some(r) => mem.blobs().export_ranges(hash, r).concatenate().await?,
         None => mem.blobs().get_bytes(hash).await?.to_vec(),

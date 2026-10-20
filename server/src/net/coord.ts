@@ -14,7 +14,7 @@ const REQUESTS_PER_HOUR = 10;
 type Account = { cap: string; version: number };
 
 async function account(env: Env, id: string): Promise<Account> {
-	const row = await env.DB.prepare("SELECT cap, version FROM net_accounts WHERE id = ?").bind(id).first<Account>();
+	const row = await known(env, id);
 	if (!row) throw new HttpError(404, "no such account");
 	return row;
 }
@@ -63,8 +63,14 @@ export async function replaceCap(req: Request, env: Env, id: string): Promise<Re
 	return noContent();
 }
 
+/** Reads of an account the Worker doesn't have answer as for an empty one,
+ * so its computers see a rollback and fill it again. */
+async function known(env: Env, id: string): Promise<Account | null> {
+	return await env.DB.prepare("SELECT cap, version FROM net_accounts WHERE id = ?").bind(id).first<Account>();
+}
+
 export async function marker(env: Env, id: string): Promise<Response> {
-	return json({ version: (await account(env, id)).version });
+	return json({ version: (await known(env, id))?.version ?? 0 });
 }
 
 /** Records of a log an answer holds at most; `next` asks for more. */
@@ -73,7 +79,6 @@ const LOG_PAGE = 1000;
 /** GET /coord/{account}/{log}?after=n */
 export async function readLog(env: Env, id: string, log: string, after: string | null): Promise<Response> {
 	if (after !== null && !/^-?\d{1,15}$/.test(after)) throw new HttpError(400, "after must be a number");
-	await account(env, id);
 	const { results } = await env.DB.prepare("SELECT seq, body FROM net_logs WHERE account = ? AND log = ? AND seq > ? ORDER BY seq LIMIT ?")
 		.bind(id, log, after === null ? -1 : Number(after), LOG_PAGE)
 		.all<{ seq: number; body: string }>();
@@ -124,7 +129,6 @@ export const KINDS: ReadonlySet<string> = new Set(["grants", "requests", "nodes"
 /** GET named records of a kind, those whose name starts with a prefix. */
 export async function listRecords(env: Env, id: string, kind: Kind, prefix = ""): Promise<Response> {
 	if (prefix !== "" && !NAME.test(prefix)) throw new HttpError(400, "bad name prefix");
-	await account(env, id);
 	const { results } = await env.DB.prepare(
 		"SELECT name, body FROM net_records WHERE account = ?1 AND kind = ?2 AND substr(name, 1, length(?3)) = ?3 ORDER BY name",
 	)

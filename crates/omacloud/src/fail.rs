@@ -9,7 +9,7 @@
 //! |---|---|
 //! | `error` (anything unrecognised), `verification_failed`, `pending`, `command_failed`, `cancelled` | 1 |
 //! | `usage`, `confirmation_required`, `terminal_required`, `ambiguous`, `already_set_up`, `exists`, `unsupported` | 2 |
-//! | `not_set_up`, `storage_gone`, `not_approved`, `removed`, `recovery_code_rejected`, `join_code_rejected`, `shares_rejected`, `settings_off` | 3 |
+//! | `not_set_up`, `storage_gone`, `not_approved`, `removed`, `recovery_code_rejected`, `join_code_rejected`, `no_account`, `shares_rejected`, `settings_off` | 3 |
 //! | `not_found` | 4 |
 //! | `unavailable` | 5 |
 

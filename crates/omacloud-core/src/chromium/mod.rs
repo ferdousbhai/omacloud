@@ -949,6 +949,22 @@ mod tests {
         assert_eq!(m["g"].parent.as_deref(), Some("bookmark_bar"));
         assert!(!c.is_empty());
 
+        // ours: g into f; theirs: f into g, and f's folder p deleted. Undoing
+        // their move puts f back in p, so p comes back too
+        let mut b = base();
+        _ = b.insert("p".into(), folder("bookmark_bar", "p", &["f"]));
+        b.get_mut("f").unwrap().parent = Some("p".into());
+        _ = b.insert("g".into(), folder("bookmark_bar", "g", &[]));
+        b.get_mut("bookmark_bar").unwrap().children = vec!["a".into(), "p".into(), "g".into(), "b".into()];
+        let (mut o, mut t) = (b.clone(), b.clone());
+        o.get_mut("g").unwrap().parent = Some("f".into());
+        t.get_mut("f").unwrap().parent = Some("g".into());
+        _ = t.remove("p");
+        let (m, _) = bookmarks::merge(Some(&b), &o, &t);
+        assert_eq!(m["f"].parent.as_deref(), Some("p"));
+        assert_eq!(m["p"].parent.as_deref(), Some("bookmark_bar"));
+        assert_eq!(m["g"].parent.as_deref(), Some("f"));
+
         // no base: the same bookmark made on both computers counts once
         let mut t = base();
         let a = t.remove("a").unwrap();

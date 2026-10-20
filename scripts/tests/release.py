@@ -30,9 +30,6 @@ def check(host, failure='', manifest=False):
         (root / 'install.sh').write_text((ROOT / 'install.sh').read_text())
         script = root / 'scripts/release.sh'
         script.write_text((ROOT / 'scripts/release.sh').read_text())
-        verify = root / 'scripts/verify-release.sh'
-        verify.write_text('#!/bin/bash\necho "verify $*" >> "$TEST_LOG"\nif [[ $FAILURE == infrastructure ]]; then exit 2; fi\n[[ $FAILURE != verification || $2 != aarch64 ]]\n')
-        verify.chmod(0o755)
         other = 'aarch64' if host == 'x86_64' else 'x86_64'
         host_package = root / f'omacloud-{VERSION}-1-{host}.pkg.tar.zst'
         other_package = root / f'omacloud-{VERSION}-1-{other}.pkg.tar.zst'
@@ -68,26 +65,14 @@ touch "$files.sig"''',
         log = root / 'commands'
         env = {**os.environ, 'PATH': f'{root / "bin"}:/usr/bin:/bin',
                'TEST_LOG': str(log), 'HOST_PACKAGE': str(host_package),
-               'FAILURE': failure, 'ARM_VERIFY_IMAGE': 'test/arch-arm'}
+               'FAILURE': failure}
         result = subprocess.run(['bash', str(script), VERSION, str(other_package)],
                                 env=env, capture_output=True, text=True)
         calls = log.read_text() if log.exists() else ''
         if failure:
             assert result.returncode != 0, result
-            if failure == 'infrastructure':
-                assert result.returncode == 2
-                assert 'gh release create v1.2.3' in calls
-                assert 'gh release delete' not in calls
-                assert 'git push -q origin --delete' not in calls
-            elif failure == 'verification':
-                assert 'gh release create v1.2.3' in calls, calls
-                assert 'gh release delete v1.2.3' in calls, calls
-                assert 'git push -q origin --delete v1.2.3' in calls, calls
-            else:
-                assert 'gh release create' not in calls, calls
-            if failure == 'infrastructure':
-                assert 'git tag -d' not in calls
-            elif failure in ('metadata', 'manifest'):
+            assert 'gh release create' not in calls, calls
+            if failure in ('metadata', 'manifest'):
                 assert 'git tag -a' not in calls, calls
             else:
                 assert 'git tag -d v1.2.3' in calls, calls
@@ -96,7 +81,6 @@ touch "$files.sig"''',
             for arch, repo in (('x86_64', 'omacloud'), ('aarch64', 'omacloud-aarch64')):
                 assert (root / 'dist' / f'{repo}.db').read_text().strip() == f'omacloud-{VERSION}-1-{arch}.pkg.tar.zst'
                 assert (root / 'dist' / f'{repo}-signing-key.asc').read_text() == 'key\n'
-                assert f'verify {VERSION} {arch}' in calls
             assert 'gh release create v1.2.3' in calls
         print(f'{host}, {failure or ('matching manifest' if manifest else 'success')}: passed')
 
@@ -104,5 +88,5 @@ touch "$files.sig"''',
 for host in ('x86_64', 'aarch64'):
     check(host)
 check('aarch64', manifest=True)
-for failure in ('metadata', 'manifest', 'build', 'signing', 'database', 'verification', 'infrastructure'):
+for failure in ('metadata', 'manifest', 'build', 'signing', 'database'):
     check('aarch64', failure)

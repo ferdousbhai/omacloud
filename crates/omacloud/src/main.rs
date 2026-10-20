@@ -100,6 +100,9 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Set up this device: create the repository and account, or join them
+    /// with the code from `omacloud join-code` in OMACLOUD_JOIN_CODE (then
+    /// approved on a computer already in), or with the recovery code in
+    /// OMACLOUD_RECOVERY_CODE
     Init {
         /// Sync this one folder, whole [default: Desktop, Documents and
         /// Pictures in home, as iCloud does; `omacloud folders` changes them]
@@ -125,17 +128,9 @@ enum Cmd {
         /// Name for this device [default: the hostname]
         #[arg(long)]
         device: Option<String>,
-        /// Join with the account's recovery code instead of asking another
-        /// device to approve
-        #[arg(long, env = "OMACLOUD_RECOVERY_CODE", hide_env_values = true)]
-        recovery_code: Option<String>,
-        /// Join your account with the code from `omacloud join-code` (or Show
-        /// Join Code in the app) on one of your computers
-        #[arg(long, env = "OMACLOUD_JOIN_CODE", hide_env_values = true)]
-        join_code: Option<String>,
     },
     /// Print a code another computer joins this account with (`omacloud
-    /// init --join-code`)
+    /// init` with it in OMACLOUD_JOIN_CODE)
     JoinCode,
     /// Sync once and exit
     Sync,
@@ -974,7 +969,6 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<String>, new_code: O
         }
         return Err(fail::terminal_required("the new account's recovery code").into());
     }
-    fs::create_dir_all(&config.folder)?;
     fs::create_dir_all(&paths.data)?;
     let signing = load_or_create_key(&paths.device_key())?;
     let me = fingerprint(&public_hex(&signing));
@@ -984,7 +978,15 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<String>, new_code: O
         None => Arc::new(DirCoordinator::new(&config.coordinator)?),
     };
     let anchor = coord.anchor()?;
+    if network && new_code.is_none() && anchor.is_none() {
+        // the seed came from the code: it's no account's
+        _ = fs::remove_file(paths.seed());
+        return Err(fail::setup("no_account", "the network has no account for that code")
+            .hint("check the code, and that OMACLOUD_NETWORK is the network it came from")
+            .into());
+    }
     let creating = anchor.is_none();
+    fs::create_dir_all(&config.folder)?;
     if let (Some(anchor), Some(code)) = (&anchor, &recovery) {
         let root = omacloud_core::devices::root_key(code).ok().map(|k| public_hex(&k));
         if root.as_deref() != Some(anchor.root.as_str()) {
@@ -1566,9 +1568,10 @@ fn run(cli: Cli) -> Out {
             folders: chosen,
             settings,
             device,
-            recovery_code,
-            join_code,
         } => {
+            // secrets never go on a command line
+            let code = |var| std::env::var(var).ok().filter(|c: &String| !c.trim().is_empty());
+            let (recovery_code, join_code) = (code("OMACLOUD_RECOVERY_CODE"), code("OMACLOUD_JOIN_CODE"));
             if set_aside_old_setup(&paths)? {
                 eprintln!(
                     "The old setup ({}) is kept aside as .before-network; setting up on the network.",
@@ -1728,8 +1731,9 @@ fn run(cli: Cli) -> Out {
         Cmd::Devices { action } => devices(&paths, action.unwrap_or(DevicesCmd::List)),
         Cmd::Versions { path } => {
             let config = load(&paths)?;
-            let rel = relative(&config, &path)?;
-            let versions = engine(&paths, &config)?.versions(&rel)?;
+            let mut e = engine(&paths, &config)?;
+            let rel = relative(&config, &e, &path)?;
+            let versions = e.versions(&rel)?;
             if versions.is_empty() {
                 return Err(fail::not_found(format!("no versions of {}", rel.display()))
                     .hint("give a path inside the synced folder, as it was synced")
@@ -1766,11 +1770,12 @@ fn run(cli: Cli) -> Out {
             let config = load(&paths)?;
             let now = omacloud_core::jiff::Timestamp::now();
             let since = omacloud_core::jiff::Timestamp::from_second(now.as_second() - i64::from(days) * 86_400)?;
-            let gone = engine(&paths, &config)?.deleted(since)?;
+            let mut e = engine(&paths, &config)?;
+            let gone = e.deleted(since)?;
             let mut out = String::new();
             let mut data = Vec::new();
             for d in &gone {
-                let path = config.folder.join(&d.path);
+                let path = e.on_disk(&d.path);
                 say!(
                     out,
                     "{}  {:<12}  {}",
@@ -2058,7 +2063,8 @@ fn run(cli: Cli) -> Out {
         }
         Cmd::Restore { path, at, to, yes } => {
             let config = load(&paths)?;
-            let rel = relative(&config, &path)?;
+            let mut e = engine(&paths, &config)?;
+            let rel = relative(&config, &e, &path)?;
             let dest = to.unwrap_or_else(|| {
                 let name = rel.file_name().map_or_else(Default::default, |n| n.to_string_lossy());
                 PathBuf::from(format!("{name}.v{at}"))
@@ -2075,8 +2081,7 @@ fn run(cli: Cli) -> Out {
                 }
                 confirm(false, "replacing it", &format!("replace {}?", dest.display()))?;
             }
-            engine(&paths, &config)?
-                .restore_version(&rel, at, &dest)
+            e.restore_version(&rel, at, &dest)
                 .map_err(|e| missing_version(e, &rel, at))?;
             Ok(Response::new(
                 json!({ "path": rel, "at": at, "written": dest }),
@@ -2736,15 +2741,20 @@ fn groups_text(groups: &[omacloud_core::merged::Item], indent: &str) -> String {
 
 /// A path given on the command line, relative to the synced folder, or
 /// (for a setting under home) under the settings prefix.
-fn relative(config: &Config, path: &Path) -> Result<PathBuf> {
+fn relative(config: &Config, e: &Engine, path: &Path) -> Result<PathBuf> {
     let abs = if path.is_absolute() {
         path.to_path_buf()
     } else {
         std::env::current_dir()?.join(path)
     };
-    // the file may be deleted, so canonicalize only the folder part
     if let Ok(rel) = abs.strip_prefix(&config.folder) {
-        return Ok(rel.to_path_buf());
+        // with folders the folder is home: what's outside them is settings
+        if let Some(synced) = e.synced_path(rel) {
+            return Ok(synced);
+        }
+        if !config.settings {
+            return Ok(rel.to_path_buf());
+        }
     }
     if config.settings
         && let Ok(rest) = abs.strip_prefix(home_dir()?)

@@ -215,7 +215,10 @@ test("coordination: create-only, capabilities, the marker", async () => {
 	const cap = { "x-cap": "secret-one" };
 	const marker = async () => ((await (await call(env, `${base}/marker`)).json()) as { version: number }).version;
 
-	assert.equal((await call(env, `${base}/marker`)).status, 404);
+	// an account the Worker doesn't have reads as empty
+	assert.deepEqual(await (await call(env, `${base}/marker`)).json(), { version: 0 });
+	assert.deepEqual(await (await call(env, `${base}/heads`)).json(), { records: [] });
+	assert.deepEqual(await (await call(env, `${base}/grants`)).json(), { records: [] });
 	assert.equal((await call(env, base, { method: "PUT" })).status, 401);
 	assert.equal((await call(env, base, { method: "PUT", headers: cap })).status, 201);
 	assert.equal((await call(env, base, { method: "PUT", headers: { "x-cap": "another" } })).status, 409);
@@ -286,7 +289,7 @@ test("coordination: create-only, capabilities, the marker", async () => {
 	assert.equal((await call(env, `${base}/heads/3`, { method: "PUT", headers: { "x-cap": "secret-two" }, body: { body: big } })).status, 413);
 
 	// another account's reads see nothing of this one
-	assert.equal((await call(env, `/api/net/coord/${"c".repeat(32)}/heads`)).status, 404);
+	assert.deepEqual(await (await call(env, `/api/net/coord/${"c".repeat(32)}/heads`)).json(), { records: [] });
 	assert.equal((await call(env, "/api/net/coord/nothex/heads")).status, 400);
 });
 

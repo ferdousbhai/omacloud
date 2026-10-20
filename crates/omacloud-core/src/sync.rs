@@ -496,7 +496,8 @@ impl Engine {
 
     /// Where a path of the synced folder lives on disk: under the folder,
     /// with a synced folder's account name turned into its name here.
-    fn on_disk(&self, path: &Path) -> PathBuf {
+    #[must_use]
+    pub fn on_disk(&self, path: &Path) -> PathBuf {
         let mut parts = path.components();
         let local = self.folders.as_ref().and_then(|f| {
             let first = parts.next()?.as_os_str().to_str()?;
@@ -510,7 +511,8 @@ impl Engine {
 
     /// The synced path for a path on disk under the folder, if it is one:
     /// the reverse of [`Self::on_disk`].
-    fn synced_path(&self, rel: &Path) -> Option<PathBuf> {
+    #[must_use]
+    pub fn synced_path(&self, rel: &Path) -> Option<PathBuf> {
         let Some(f) = &self.folders else {
             return Some(rel.to_path_buf());
         };
@@ -732,8 +734,7 @@ impl Engine {
             // the versions still kept; older ones went with tidying
             let kept: BTreeSet<String> = src.get_all_snapshots()?.iter().map(|s| snapshot_hex(&s.id)).collect();
             let ids: Vec<String> = self
-                .coord
-                .since(0)?
+                .verified_history()?
                 .iter()
                 .filter_map(|h| self.state.epochs.map(&h.snapshot, h.epoch, old_epoch))
                 .filter(|id| !map.contains_key(id) && kept.contains(id))
@@ -1597,14 +1598,15 @@ impl Engine {
     /// Let versions older than `keep` go. Every snapshot from within it
     /// stays, with the newest before it (the state the window opens on, so
     /// whatever was there at any moment in it can come back), the latest,
-    /// and the one each member computer last synced. The data only the others used is marked
-    /// for deletion, and deleted by a later tidy if nothing took it up
-    /// again: rustic's lock-free prune, safe beside other computers
-    /// syncing. Only one computer of an account tidies, so two never prune
-    /// at once: the member with the lowest device key among those standing
-    /// on a version made within the window (the lowest of all when none
-    /// is: then nobody pushed, and nothing new waits to go). Returns how many
-    /// versions went, or `None` when another computer is the one to tidy.
+    /// and the one each member computer last synced. The data only the
+    /// others used is marked for deletion, and deleted by a later tidy if
+    /// nothing took it up again: rustic's lock-free prune, safe beside other
+    /// computers syncing. One computer of an account tidies, from `watch`,
+    /// so two prune at once only as that choice moves: the member with the
+    /// lowest device key among those standing on a version made within the
+    /// window (the lowest of all when none is: then nobody pushed, and
+    /// nothing new waits to go). Returns how many versions went, or `None`
+    /// when another computer is the one to tidy.
     ///
     /// # Errors
     ///
@@ -1638,8 +1640,7 @@ impl Engine {
             .filter_map(|(device, seq)| Some((device, self.snapshot_now(heads.iter().find(|h| h.seq == seq)?)?)))
             .collect();
         let repo = self.open_repo()?;
-        let mut snaps = repo.get_all_snapshots()?;
-        snaps.sort_by_key(|s| s.time.timestamp());
+        let snaps = repo.get_all_snapshots()?;
         let cutoff = Timestamp::now() - jiff::SignedDuration::try_from(keep)?;
         // the member with the lowest key among those that synced within the
         // window tidies: one no longer used, but never removed, doesn't stop
@@ -1661,23 +1662,22 @@ impl Engine {
         // months picks up where it left off
         let mut standing: BTreeSet<String> = standing_on.into_values().collect();
         standing.extend(self.state.base.as_ref().map(|b| b.snapshot.clone()));
-        // the versions the history names: a snapshot a push left behind (it
-        // lost the race for its head) is none of them, and goes once it's old
-        let named: BTreeSet<String> = heads.iter().filter_map(|h| self.snapshot_now(h)).collect();
-        let is_named = |s: &SnapshotFile| named.contains(&snapshot_hex(&s.id));
-        // kept: the latest version, and the one the window opens on
-        let latest = snaps.iter().rposition(&is_named);
-        let opens = snaps.iter().rposition(|s| s.time.timestamp() < cutoff && is_named(s));
+        // kept: the latest version, and the one the window opens on, in the
+        // history's order (a computer's clock may be off). A snapshot a push
+        // left behind (it lost the race for its head) is neither, and goes
+        // once it's old
+        let old: BTreeSet<String> = snaps
+            .iter()
+            .filter(|s| s.time.timestamp() < cutoff)
+            .map(|s| snapshot_hex(&s.id))
+            .collect();
+        let named: Vec<String> = heads.iter().rev().filter_map(|h| self.snapshot_now(h)).collect();
+        standing.extend(named.first().cloned());
+        standing.extend(named.into_iter().find(|id| old.contains(id)));
         let gone: Vec<_> = snaps
             .iter()
-            .enumerate()
-            .filter(|(i, s)| {
-                s.time.timestamp() < cutoff
-                    && Some(*i) != opens
-                    && Some(*i) != latest
-                    && !standing.contains(&snapshot_hex(&s.id))
-            })
-            .map(|(_, s)| s.id)
+            .filter(|s| old.contains(&snapshot_hex(&s.id)) && !standing.contains(&snapshot_hex(&s.id)))
+            .map(|s| s.id)
             .collect();
         if !gone.is_empty() {
             repo.delete_snapshots(&gone)?;

@@ -25,8 +25,8 @@ Files live in a restic repository, written through
 encrypts contents, file names and directory structure (AES-256-CTR with
 Poly1305-AES), deduplicates, and keeps each version as a snapshot, for 30
 days: once a day the lowest-key member among those standing on a version
-from the last 30 days (the lowest of all when none is) forgets older ones
-(`Engine::tidy`), keeping the one each member last synced (recorded in the
+from the last 30 days (the lowest of all when none is), if its daemon runs,
+forgets older ones (`Engine::tidy`), keeping the one each member last synced (recorded in the
 sealed `bases` records) and the one the window opens on, and prunes with
 rustic's lock-free two phases (packs younger than a day are left alone,
 packs marked for deletion wait a week, so data a computer takes up again

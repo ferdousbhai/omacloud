@@ -18,7 +18,7 @@ use crate::{
     blob::NodeId,
     client,
     erasure::{self, Coded},
-    place::{self, PlaceError},
+    place,
     proto::BlobId,
     registry::{Listed, Registry},
     seal::Keys,
@@ -104,11 +104,7 @@ fn pick<'a>(
         .filter(|n| held.iter().any(|h| h.node == n.node.id))
         .map(|n| n.node.clone())
         .collect();
-    let chosen = match place::choose(all, refused, &taken, want) {
-        Ok(c) => c,
-        Err(PlaceError::TooFew { found, .. }) => place::choose(all, refused, &taken, found).unwrap_or_default(),
-    };
-    chosen
+    place::choose_most(all, refused, &taken, want)
         .iter()
         .map(|c| nodes.iter().find(|n| n.node.id == c.id).expect("listed"))
         .collect()

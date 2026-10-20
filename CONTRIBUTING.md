@@ -102,7 +102,7 @@ packages built by a CI run that the script starts on master's commit:
 scripts/release-ci.sh 0.0.14
 ```
 
-This path needs gh, GPG, repo-add, bsdtar, and Python; it does not need local
+This path needs gh, curl, unzip, GPG, repo-add, bsdtar, and Python; it does not need local
 Docker access or a Rust rebuild. It downloads both native packages, checks
 their source manifests and metadata, signs and verifies their signatures,
 and publishes the repository databases and installer at the tested commit.
@@ -151,8 +151,7 @@ outside `dist/`. The release script creates its own tag on a clean `master`
 checkout and builds the host package:
 
 ```sh
-ARM_VERIFY_IMAGE=<your-arch-linux-arm-image> \
-  scripts/release.sh <version> /path/to/omacloud-<version>-1-<other-architecture>.pkg.tar.zst
+scripts/release.sh <version> /path/to/omacloud-<version>-1-<other-architecture>.pkg.tar.zst
 ```
 
 The script checks both packages' names, versions and architectures, signs
@@ -160,10 +159,11 @@ both using the key pinned in `install.sh`, uses zstd package compression on both
 `omacloud` and `omacloud-aarch64` databases. It publishes these with the
 installer and the signing key under both repository names.
 
-Verification installs each architecture's package in a clean container,
-checks its package architecture and runs the CLI. Set `ARM_VERIFY_IMAGE` to
-an Arch Linux ARM image with pacman and archlinuxarm-keyring installed.
-For example, import the official [generic AArch64 root filesystem](https://archlinuxarm.org/platforms/armv8/generic):
+Publishing starts the Release verification workflow either way: it installs
+each architecture's package in a clean container, checks its package
+architecture and runs the CLI. To run `scripts/verify-release.sh` yourself,
+set `ARM_VERIFY_IMAGE` to an Arch Linux ARM image with pacman and
+archlinuxarm-keyring installed. For example, import the official [generic AArch64 root filesystem](https://archlinuxarm.org/platforms/armv8/generic):
 
 ```sh
 curl -fL https://ca.us.mirror.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz -o /tmp/omacloud-arch-arm.tar.gz

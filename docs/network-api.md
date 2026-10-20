@@ -88,6 +88,10 @@ need the account's capability, except join requests.
 - `GET /api/net/coord/{account}/marker`: `{"version"}`, a number that
   changes whenever anything of the account is written.
 
+Reads of an account the Worker doesn't have answer as for an empty one
+(no records, marker 0), so its computers see a rollback and fill it again;
+writes to it answer 404.
+
 `name` and `log` are `[A-Za-z0-9_-]{1,200}`.
 
 ## Credits

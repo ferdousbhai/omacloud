@@ -70,6 +70,19 @@ pub fn choose(
     taken: &[Node],
     copies: usize,
 ) -> Result<Vec<Node>, PlaceError> {
+    let chosen = choose_most(nodes, exclude, taken, copies);
+    if chosen.len() < copies {
+        return Err(PlaceError::TooFew {
+            found: chosen.len(),
+            wanted: copies,
+        });
+    }
+    Ok(chosen)
+}
+
+/// [`choose`], with as many as there are when that's fewer than `copies`.
+#[must_use]
+pub fn choose_most(nodes: &[Node], exclude: &BTreeSet<NodeId>, taken: &[Node], copies: usize) -> Vec<Node> {
     let mut rng = rand::thread_rng();
     let now = crate::node::now();
     // a random order weighted to the preferred (each drawn as u^(1/w))
@@ -113,13 +126,7 @@ pub fn choose(
             chosen.push((*n).clone());
         }
     }
-    if chosen.len() < copies {
-        return Err(PlaceError::TooFew {
-            found: chosen.len(),
-            wanted: copies,
-        });
-    }
-    Ok(chosen)
+    chosen
 }
 
 #[cfg(test)]

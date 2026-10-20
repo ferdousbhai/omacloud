@@ -9,8 +9,8 @@
 # The tag is v<version>; the PKGBUILD takes its version from it. CHANGELOG.md
 # and the workspace version must already say <version>. The release's assets
 # are the package, the repository database, the signing key and install.sh.
-# Once published, scripts/verify-release.sh installs it in a clean Arch
-# container; if that fails, the release and tag are taken back down.
+# Once published, the Release verification workflow installs it in clean
+# containers, and takes the release and tag down after a package defect.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 repo=omacloud
@@ -26,9 +26,6 @@ tag=v$version
 other_package=$(realpath "$1")
 [[ -f $other_package ]] || { echo "Package not found: $other_package" >&2; exit 1; }
 [[ $other_package != "$PWD/dist/"* ]] || { echo "Keep the supplied package outside dist (which is rebuilt)." >&2; exit 1; }
-# ARM verification needs an Arch Linux ARM container with pacman and
-# its distribution keyring installed; there is no official multiarch archlinux Docker image.
-[[ -n ${ARM_VERIFY_IMAGE:-} ]] || { echo "Set ARM_VERIFY_IMAGE to your Arch Linux ARM verification image." >&2; exit 1; }
 
 case "$(uname -m)" in
   x86_64) other_architecture=aarch64 ;;
@@ -110,18 +107,3 @@ printf '%s\n' "$notes" > "$notes_file"
 gh release create "$tag" dist/* --repo "$gh_repo" --title "Omacloud $version" --notes-file "$notes_file" --latest
 echo "Published $tag: https://github.com/$gh_repo/releases/tag/$tag"
 
-# Infrastructure/installer failures retain the release for investigation.
-for architecture in x86_64 aarch64; do
-  result=0
-  scripts/verify-release.sh "$version" "$architecture" || result=$?
-  if (( result == 1 )); then
-    echo "Rolling back $tag after a confirmed package defect." >&2
-    gh release delete "$tag" --repo "$gh_repo" --yes
-    git push -q origin --delete "$tag" || true
-    undo_tag
-    exit 1
-  elif (( result != 0 )); then
-    echo "Verification incomplete; retaining $tag for investigation." >&2
-    exit "$result"
-  fi
-done

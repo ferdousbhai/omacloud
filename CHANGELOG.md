@@ -42,6 +42,22 @@
   a starter grant that falls short of a payment is kept, not lost;
   `unshare` without the Worker leaves the take-down to the daemon; a
   merged bookmarks note no longer shows a literal `{ME}`.
+- A Worker that lost an account answers its reads as empty, so the
+  account's computers fill it again (they read their own copy and never
+  noticed); joining with a code for no account says so at once (exit 3,
+  `no_account`); `init` takes the recovery and join codes only from
+  `OMACLOUD_RECOVERY_CODE` and `OMACLOUD_JOIN_CODE`, never as flags.
+- A holder that stops answering no longer hangs a store or a read; a
+  holder's answer to a large upload it didn't take (held already, or
+  full) is no longer lost as a transport error.
+- With home's folders synced, `versions` and `restore` find settings, and
+  they and `deleted` find files in a folder named in another language
+  (`~/Dokumente`);
+  undoing crossed bookmark moves brings back a folder the other side
+  deleted, rather than losing what was in it; a key rotation copies the
+  versions of a verified history; tidying picks the latest version by the
+  history's order, not a computer's clock; an account whose repository
+  can't be made is no longer left half created.
 - A read-only file whose content matched no longer fails every sync;
   `receive` won't write through a file or link already at its destination.
 - A holder's credits no longer get stuck: a token spent before buys

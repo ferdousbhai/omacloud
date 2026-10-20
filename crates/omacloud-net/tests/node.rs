@@ -29,10 +29,11 @@ async fn a_blob_stored_is_read_back_whole_and_in_verified_ranges() -> Result<()>
     let tmp = tempfile::tempdir()?;
     let n = holder(tmp.path(), 10 << 20, None).await?;
     let me = endpoint().await?;
-    let data: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+    // past a stream's flow-control window
+    let data: Vec<u8> = (0..4_000_000u32).map(|i| (i % 251) as u8).collect();
     let blob = client::store(&me, &n.addr(), &data).await?;
     assert_eq!(blob.0, *blake3::hash(&data).as_bytes());
-    // storing again is a no-op
+    // storing again is a no-op: the holder answers without taking the body
     client::store(&me, &n.addr(), &data).await?;
     assert_eq!(n.used()?, data.len() as u64);
 

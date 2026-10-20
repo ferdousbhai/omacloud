@@ -232,7 +232,12 @@ impl Records for DirStore {
     fn put_named(&self, account: &str, cap: Option<&str>, kind: &str, name: &str, body: &str) -> Result<()> {
         let dir = match cap {
             Some(cap) => self.check(account, cap)?,
-            None => self.account(account)?,
+            // a join request, to an account there is (as on the Worker)
+            None => {
+                let dir = self.account(account)?;
+                anyhow::ensure!(dir.join("cap").exists(), "no such account");
+                dir
+            }
         };
         let path = dir.join("named").join(safe(kind)?).join(safe(name)?);
         fs::create_dir_all(path.parent().expect("a parent"))?;

@@ -59,6 +59,9 @@ pub fn create_with_code(
     );
     let root_key = root_key(&recovery_code)?;
     let root = public_hex(&root_key);
+    // the repository first: if that fails, no account is left half made
+    let password = random_secret();
+    let key = repo.keyed(&password).init(&password)?;
     ensure!(
         coord.set_anchor(&Anchor { root: root.clone() })?,
         "an account was created here at the same moment; join it instead"
@@ -67,8 +70,6 @@ pub fn create_with_code(
         coord.append_device(&genesis(&root_key, device, name))?,
         "the device list is not empty"
     );
-    let password = random_secret();
-    let key = repo.keyed(&password).init(&password)?;
     let mut chain = DeviceChain::new(&root);
     chain.advance(coord)?;
     let secret = EpochSecret {
