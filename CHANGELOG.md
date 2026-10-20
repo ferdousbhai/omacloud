@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Holders before this version charge by other rules (ahead, or for every
+  month begun), so a computer on this version takes them for cheats and
+  moves its copies elsewhere: upgrade every computer and seed together.
 - Copies placed between renewals were let go after their free first week,
   as renewals came monthly: data uploaded in the week after a renewal
   could be lost. Renewals now come daily; holders charge at month ends
