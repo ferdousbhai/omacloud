@@ -431,11 +431,12 @@ impl Session {
         self.rt.block_on(crate::share::get(&bucket, secret))
     }
 
-    /// Take back the share under `secret`.
+    /// Take back the share under `secret`: false when nothing was shared
+    /// there (expired, or taken back already).
     ///
     /// # Errors
     ///
-    /// If it's gone already, or the Worker can't be reached.
+    /// If the Worker can't be reached.
     pub fn unshare(&self, secret: &str) -> Result<bool> {
         let bucket = self.gateway.bucket(&crate::share::bucket_key(secret));
         self.rt.block_on(crate::share::remove(&bucket))
@@ -477,10 +478,10 @@ impl Session {
         access_key: &str,
         audits: usize,
         renew: Option<upkeep::Renew>,
-        pay: &mut (dyn FnMut(u64) -> Result<Vec<Token>> + Send),
+        wallet: &mut dyn upkeep::Wallet,
     ) -> Result<Report> {
         let bucket = self.gateway.bucket(access_key);
-        self.rt.block_on(upkeep::round(&bucket, audits, renew, pay))
+        self.rt.block_on(upkeep::round(&bucket, audits, renew, wallet))
     }
 }
 

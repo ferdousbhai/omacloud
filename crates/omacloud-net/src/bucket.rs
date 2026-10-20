@@ -69,6 +69,10 @@ pub struct Held {
     /// owner allows it more than the month ends since it last renewed it.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub placed: u64,
+    /// When it was stored: a copy whose upload landed in the index only
+    /// after another computer renewed its holder is owed from then.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stored: u64,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -274,6 +278,7 @@ impl Bucket {
                 blob: id,
                 shard,
                 placed: 0,
+                stored: crate::node::now(),
             }),
             Err(e) => {
                 log::debug!("{e:#}");
@@ -345,7 +350,9 @@ impl Bucket {
     async fn replace_holders(&self, entry: &Entry, holders: Vec<Held>) -> Result<bool> {
         // too few to read it back: the old entry, whose holders just served
         // it, stays until new ones can be found
-        if holders == entry.holders || holders.len() < entry.needed() {
+        // the same holders, in whatever order, are no change
+        let same = holders.len() == entry.holders.len() && holders.iter().all(|h| entry.holders.contains(h));
+        if same || holders.len() < entry.needed() {
             return Ok(false);
         }
         let now = crate::node::now();
@@ -402,7 +409,15 @@ impl Bucket {
                 .filter(|(i, _)| !kept.contains(i))
                 .collect();
             let avoid: BTreeSet<NodeId> = gone.union(avoid).copied().collect();
-            let holders = self.place_shards(&entry.key, missing, good, &avoid).await?;
+            let mut holders = self.place_shards(&entry.key, missing, good, &avoid).await?;
+            // a shard no new holder took stays with the one it was on, which
+            // may still keep it: dropped, nothing would be left in its place
+            for h in &entry.holders {
+                if !holders.iter().any(|n| n.shard == h.shard) {
+                    holders.push(h.clone());
+                }
+            }
+            holders.sort_by_key(|h| h.shard);
             return self.replace_holders(entry, holders).await;
         }
         if good.len() >= self.copies && good.len() == entry.holders.len() {
@@ -422,7 +437,17 @@ impl Bucket {
             Err(e) => return Err(e),
         };
         let avoid: BTreeSet<NodeId> = gone.union(avoid).copied().collect();
-        let holders = self.place(&entry.key, &data, good, &avoid).await?;
+        let mut holders = self.place(&entry.key, &data, good, &avoid).await?;
+        // a copy no new holder took stays where it was, which may still keep
+        // it: dropped, there'd be fewer copies than before
+        for h in &entry.holders {
+            if holders.len() >= self.copies {
+                break;
+            }
+            if !holders.iter().any(|n| n.node == h.node) {
+                holders.push(h.clone());
+            }
+        }
         self.replace_holders(entry, holders).await
     }
 

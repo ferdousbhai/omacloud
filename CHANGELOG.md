@@ -26,10 +26,16 @@
   a copy a repair placed back on it; a holder refuses a copy stored again
   that it's about to let go; renewal dates are kept per bucket, so a key
   rotation starts them afresh; a month end between asking and paying is
-  topped up rather than taken for cheating.
-- Tidying is done by the lowest-key computer among those that synced in
-  the last 30 days, so one no longer used but never removed doesn't stop
-  it; coordination logs are read in pages, and an answer cut short is an
+  topped up rather than taken for cheating, and tokens a holder didn't
+  take go back to the wallet. A repair that finds no new holder keeps the
+  old one named instead of dropping a copy; a round in which no holder
+  answers is this computer offline, not every holder failing; a copy
+  records when it was stored, so an upload landing after another
+  computer's renewal isn't taken for overcharging.
+- Tidying is done by the lowest-key computer among those standing on a
+  version from the last 30 days, so one no longer used but never removed
+  doesn't stop it, and it keeps the versions the history names (not one a
+  lost push left behind); coordination logs are read in pages, and an answer cut short is an
   error rather than an empty one.
 - Turning settings sync on or off, or changing the space given, restarts
   a running daemon into it (it kept the old choice until the next login);

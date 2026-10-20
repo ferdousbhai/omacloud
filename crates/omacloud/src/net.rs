@@ -130,12 +130,14 @@ impl Contribution {
             until: now() + LEASE,
             last: last.clone(),
         });
-        let wallet = self.data.join("wallet.json");
         let network = session.network();
-        let mut pay = |n: u64| take(&wallet, n, || network.starter(STARTER));
+        let mut wallet = FileWallet {
+            path: self.data.join("wallet.json"),
+            network: &network,
+        };
         let mut suspects = read_suspects(&self.data);
         session.set_avoid(suspects.keys().copied().collect());
-        let report = session.upkeep(key, AUDITS, renew, &mut pay)?;
+        let report = session.upkeep(key, AUDITS, renew, &mut wallet)?;
         if !report.failed_nodes.is_empty() {
             for n in &report.failed_nodes {
                 suspects.insert(*n, now() + SUSPECT_FOR);
@@ -186,20 +188,22 @@ impl Contribution {
                 }
             }
         });
-        let wallet = self.data.join("wallet.json");
         let network = session.network();
+        let mut wallet = FileWallet {
+            path: self.data.join("wallet.json"),
+            network: &network,
+        };
         let mut changed = shares.len() != before;
         for s in &mut shares {
             let started = now();
             let Some(until) = s.renewal(started) else { continue };
             let key = omacloud_net::share::bucket_key(&s.secret);
-            let mut pay = |n: u64| take(&wallet, n, || network.starter(STARTER));
             let last: BTreeMap<omacloud_net::blob::NodeId, u64> = s
                 .holders
                 .iter()
                 .filter_map(|(id, t)| Some((hex::decode(id).ok()?.try_into().ok()?, *t)))
                 .collect();
-            match session.upkeep(&key, 0, Some(Renew { until, last }), &mut pay) {
+            match session.upkeep(&key, 0, Some(Renew { until, last }), &mut wallet) {
                 Ok(r) => {
                     s.holders.extend(r.renewed.iter().map(|n| (hex::encode(n), started)));
                     // a holder that didn't renew is replaced this round; the
@@ -315,6 +319,29 @@ pub fn space(data: &Path) -> serde_json::Value {
         "months": monthly.filter(|m| *m > 0).map(|m| tokens / m),
         "checked_at": last["at"],
     })
+}
+
+/// The wallet file renewals are paid from, with the starter grant when it
+/// runs short.
+struct FileWallet<'a> {
+    path: PathBuf,
+    network: &'a omacloud_net::session::Network,
+}
+
+impl omacloud_net::upkeep::Wallet for FileWallet<'_> {
+    fn pay(&mut self, n: u64) -> Result<Vec<Token>> {
+        take(&self.path, n, || self.network.starter(STARTER))
+    }
+    fn refund(&mut self, tokens: Vec<Token>) {
+        let mut held = read_wallet(&self.path);
+        held.extend(tokens);
+        if let Err(e) = serde_json::to_vec(&held)
+            .map_err(anyhow::Error::from)
+            .and_then(|b| write_private(&self.path, &b))
+        {
+            warn!("putting unspent tokens back in the wallet: {e:#}");
+        }
+    }
 }
 
 /// Take `n` tokens from the wallet, asking for the starter grant once when

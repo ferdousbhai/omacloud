@@ -28,6 +28,29 @@ const SLACK: u64 = 3600;
 /// Blobs renewed a request: well inside a request's size limit.
 const RENEW_BATCH: usize = 10_000;
 
+/// Where renewals are paid from.
+pub trait Wallet: Send {
+    /// `n` tokens, taken out.
+    ///
+    /// # Errors
+    ///
+    /// If it holds too few, and can't get more.
+    fn pay(&mut self, n: u64) -> Result<Vec<Token>>;
+    /// Tokens taken out but never spent, put back.
+    fn refund(&mut self, tokens: Vec<Token>);
+}
+
+/// A wallet for storage that costs nothing (no token key: tests, `dir:`
+/// networks).
+pub struct Free;
+
+impl Wallet for Free {
+    fn pay(&mut self, _: u64) -> Result<Vec<Token>> {
+        Ok(Vec::new())
+    }
+    fn refund(&mut self, _: Vec<Token>) {}
+}
+
 /// A renewal: keep every good copy until `until`, paying each holder for
 /// the month ends since it was last renewed, as `last` says (a holder not
 /// in it: none known). Per holder, as what each is owed is: one left
@@ -87,12 +110,7 @@ fn most_earned(bytes: u64, last: u64, now: u64) -> u64 {
 /// # Errors
 ///
 /// If the index can't be read or written.
-pub async fn round(
-    bucket: &Bucket,
-    audits: usize,
-    renew: Option<Renew>,
-    pay: &mut (dyn FnMut(u64) -> Result<Vec<Token>> + Send),
-) -> Result<Report> {
+pub async fn round(bucket: &Bucket, audits: usize, renew: Option<Renew>, wallet: &mut dyn Wallet) -> Result<Report> {
     let mut report = Report::default();
     let entries = bucket.list("").await?;
     let nodes = bucket.nodes().await?;
@@ -131,8 +149,14 @@ pub async fn round(
             })
         })
         .collect();
+    // whether any holder answered at all: none did, and it's this computer
+    // that's out of reach, not every holder at once
+    let mut answered = false;
+    let mut asked = false;
     while let Some((e, h, read)) = checks.next().await {
         report.audited += 1;
+        asked = true;
+        answered |= read.is_ok();
         if let Err(err) = read {
             log::info!("{} failed an audit of {}: {err:#}", hex::encode(&h.node[..4]), e.key);
             bad.entry(e.key.clone()).or_default().insert(h.node);
@@ -140,11 +164,11 @@ pub async fn round(
     }
 
     if let Some(Renew { until, last }) = renew {
-        let mut per_holder: BTreeMap<NodeId, Vec<(&Entry, BlobId, u64)>> = BTreeMap::new();
+        let mut per_holder: BTreeMap<NodeId, Vec<(&Entry, &Held)>> = BTreeMap::new();
         for e in &entries {
             for h in &e.holders {
                 if !bad.get(&e.key).is_some_and(|b| b.contains(&h.node)) {
-                    per_holder.entry(h.node).or_default().push((e, h.blob, h.placed));
+                    per_holder.entry(h.node).or_default().push((e, h));
                 }
             }
         }
@@ -156,22 +180,42 @@ pub async fn round(
             let mut renewed = true;
             // in batches a request can carry
             for held in held.chunks(RENEW_BATCH) {
-                // copies a repair placed since it was last renewed may be
-                // owed from when it held them before: up to a longest lease
-                let placed = |p: u64| p + SLACK > last;
-                let fresh: u64 = held.iter().filter(|h| placed(h.2)).map(|(e, ..)| e.blob_size()).sum();
-                let rest: u64 = held.iter().filter(|h| !placed(h.2)).map(|(e, ..)| e.blob_size()).sum();
+                // what each copy may be owed since: since it was last renewed;
+                // one a repair placed since may be owed from when the holder
+                // held it before (up to a longest lease, from 0); one stored
+                // within a first lease before that renewal may have reached
+                // the index after it, so is owed since it was stored
+                let since = |(placed, stored): (u64, u64)| {
+                    if placed + SLACK > last {
+                        0
+                    } else if stored > 0 && stored + crate::node::FIRST_LEASE + SLACK > last {
+                        stored.min(last)
+                    } else {
+                        last
+                    }
+                };
+                let mut by_since: BTreeMap<u64, u64> = BTreeMap::new();
+                for (e, h) in held {
+                    *by_since.entry(since((h.placed, h.stored))).or_default() += e.blob_size();
+                }
                 // as of now, holder by holder: a round can run long
-                let allowed = |now| most_earned(fresh, 0, now) + most_earned(rest, last, now);
-                let blobs: Vec<BlobId> = held.iter().map(|(_, b, _)| *b).collect();
+                let allowed = |now| -> u64 {
+                    by_since
+                        .iter()
+                        .map(|(since, bytes)| most_earned(*bytes, *since, now))
+                        .sum()
+                };
+                let blobs: Vec<BlobId> = held.iter().map(|(_, h)| h.blob).collect();
                 // asked first without paying: the holder says what it's owed
                 let mut answer = client::renew(bucket.endpoint(), &addr, blobs.clone(), until, Vec::new()).await;
+                asked = true;
+                answered |= answer.is_ok();
                 if let Ok(Renewal::Owed(owed)) = answer {
                     if owed > allowed(crate::node::now()) {
                         log::info!("{} asked {owed} tokens, more than it served", hex::encode(&node[..4]));
                         answer = Err(anyhow::anyhow!("asked too much"));
                     } else {
-                        match pay(owed) {
+                        match wallet.pay(owed) {
                             Ok(mut tokens) => {
                                 answer =
                                     client::renew(bucket.endpoint(), &addr, blobs.clone(), until, tokens.clone()).await;
@@ -182,13 +226,26 @@ pub async fn round(
                                     && more > owed
                                     && more <= allowed(crate::node::now())
                                 {
-                                    answer = match pay(more - owed) {
+                                    match wallet.pay(more - owed) {
                                         Ok(extra) => {
                                             tokens.extend(extra);
-                                            client::renew(bucket.endpoint(), &addr, blobs, until, tokens).await
+                                            answer =
+                                                client::renew(bucket.endpoint(), &addr, blobs, until, tokens.clone())
+                                                    .await;
                                         }
-                                        Err(e) => Err(e),
-                                    };
+                                        // as when the first payment fails: not
+                                        // the holder's doing
+                                        Err(e) => {
+                                            log::warn!("paying {}: {e:#}", hex::encode(&node[..4]));
+                                            wallet.refund(tokens);
+                                            renewed = false;
+                                            continue;
+                                        }
+                                    }
+                                }
+                                // still owed: the holder kept none of them
+                                if let Ok(Renewal::Owed(_)) = answer {
+                                    wallet.refund(tokens);
                                 }
                             }
                             // not the holder's doing: it isn't counted bad, and
@@ -203,7 +260,7 @@ pub async fn round(
                 }
                 match answer {
                     Ok(Renewal::Kept(kept)) => {
-                        for ((e, ..), k) in held.iter().zip(kept) {
+                        for ((e, _), k) in held.iter().zip(kept) {
                             if !k {
                                 bad.entry(e.key.clone()).or_default().insert(node);
                             }
@@ -214,7 +271,7 @@ pub async fn round(
                             log::info!("renewing with {}: {err:#}", hex::encode(&node[..4]));
                         }
                         renewed = false;
-                        for (e, ..) in held {
+                        for (e, _) in held {
                             bad.entry(e.key.clone()).or_default().insert(node);
                         }
                     }
@@ -228,6 +285,9 @@ pub async fn round(
         }
     }
 
+    if asked && !answered {
+        anyhow::bail!("no holder answered: this computer seems to be offline");
+    }
     report.failed = bad.values().map(BTreeSet::len).sum();
     report.failed_nodes = bad.values().flatten().copied().collect();
     report.stored = entries.iter().map(|e| e.size).sum();

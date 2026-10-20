@@ -1601,8 +1601,9 @@ impl Engine {
     /// for deletion, and deleted by a later tidy if nothing took it up
     /// again: rustic's lock-free prune, safe beside other computers
     /// syncing. Only one computer of an account tidies, so two never prune
-    /// at once: the member with the lowest device key among those that
-    /// synced within the window (the lowest of all when none did). Returns how many
+    /// at once: the member with the lowest device key among those standing
+    /// on a version made within the window (the lowest of all when none
+    /// is: then nobody pushed, and nothing new waits to go). Returns how many
     /// versions went, or `None` when another computer is the one to tidy.
     ///
     /// # Errors
@@ -1660,14 +1661,20 @@ impl Engine {
         // months picks up where it left off
         let mut standing: BTreeSet<String> = standing_on.into_values().collect();
         standing.extend(self.state.base.as_ref().map(|b| b.snapshot.clone()));
-        let opens = snaps.iter().rposition(|s| s.time.timestamp() < cutoff);
+        // the versions the history names: a snapshot a push left behind (it
+        // lost the race for its head) is none of them, and goes once it's old
+        let named: BTreeSet<String> = heads.iter().filter_map(|h| self.snapshot_now(h)).collect();
+        let is_named = |s: &SnapshotFile| named.contains(&snapshot_hex(&s.id));
+        // kept: the latest version, and the one the window opens on
+        let latest = snaps.iter().rposition(&is_named);
+        let opens = snaps.iter().rposition(|s| s.time.timestamp() < cutoff && is_named(s));
         let gone: Vec<_> = snaps
             .iter()
             .enumerate()
             .filter(|(i, s)| {
                 s.time.timestamp() < cutoff
                     && Some(*i) != opens
-                    && *i + 1 != snaps.len()
+                    && Some(*i) != latest
                     && !standing.contains(&snapshot_hex(&s.id))
             })
             .map(|(_, s)| s.id)

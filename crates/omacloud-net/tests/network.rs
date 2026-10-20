@@ -141,10 +141,9 @@ async fn upkeep_replaces_a_holder_that_left_and_one_that_dropped_its_copy() -> R
     for i in 0..4 {
         b.put(&format!("data/aa/{i}"), format!("object {i}").as_bytes()).await?;
     }
-    let mut free = |_| Ok(Vec::new());
 
     // nothing wrong: nothing done
-    let r = upkeep::round(&b, 100, None, &mut free).await?;
+    let r = upkeep::round(&b, 100, None, &mut upkeep::Free).await?;
     assert_eq!((r.failed, r.repaired), (0, 0), "{r:?}");
     assert_eq!(r.audited, 8);
     // 32 bytes, and a token a month for each holder, however little it keeps
@@ -178,7 +177,7 @@ async fn upkeep_replaces_a_holder_that_left_and_one_that_dropped_its_copy() -> R
             until: omacloud_net::node::now() + 3600,
             ..Default::default()
         }),
-        &mut free,
+        &mut upkeep::Free,
     )
     .await?;
     assert!(r.repaired >= 2, "{r:?}");
@@ -259,8 +258,7 @@ async fn a_large_object_is_coded_and_survives_two_holders_going() -> Result<()> 
     assert_eq!(b.get("data/bb/big", Some(r.clone())).await?, Some(at(&r)));
 
     // upkeep finds them gone and gives their shards new holders
-    let mut free = |_| Ok(Vec::new());
-    let report = upkeep::round(&b, 6, None, &mut free).await?;
+    let report = upkeep::round(&b, 6, None, &mut upkeep::Free).await?;
     assert_eq!(report.repaired, 1, "{report:?}");
     let after = b.entry("data/bb/big").await?.expect("indexed");
     assert_eq!(after.holders.len(), 6);
@@ -312,12 +310,11 @@ async fn a_copy_placed_between_renewals_outlives_its_free_week() -> Result<()> {
     for n in &net.nodes {
         n.backdate(6 * 24 * 3600)?;
     }
-    let mut free = |_| Ok(Vec::new());
     let renew = upkeep::Renew {
         until: now() + 2 * MONTH,
         last: net.nodes.iter().map(|n| (n.id(), now() - 24 * 3600)).collect(),
     };
-    let r = upkeep::round(&b, 0, Some(renew), &mut free).await?;
+    let r = upkeep::round(&b, 0, Some(renew), &mut upkeep::Free).await?;
     assert_eq!(r.failed, 0, "{r:?}");
     // past its free week, the holders still have it
     for n in &net.nodes {
@@ -330,5 +327,43 @@ async fn a_copy_placed_between_renewals_outlives_its_free_week() -> Result<()> {
     for n in net.nodes {
         n.shutdown().await;
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repair_with_nowhere_to_go_keeps_the_copy_it_had() -> Result<()> {
+    let net = network(3).await?;
+    let b = bucket(&net, "pw").await?;
+    b.put("data/ee/1", b"kept twice").await?;
+    let e = b.entry("data/ee/1").await?.expect("indexed");
+    let (gone, kept) = (e.holders[0].node, e.holders[1].node);
+    // the only other node can't take it: the copy on `gone` stays named,
+    // as it may still be there, rather than leave one copy
+    let other = net
+        .nodes
+        .iter()
+        .map(|n| n.id())
+        .find(|n| *n != gone && *n != kept)
+        .expect("a third");
+    let changed = b.repair(&e, &[gone].into(), &[other].into()).await?;
+    assert!(!changed);
+    assert_eq!(b.entry("data/ee/1").await?.expect("indexed").holders.len(), 2);
+    for n in net.nodes {
+        n.shutdown().await;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_round_no_holder_answers_is_this_computer_offline() -> Result<()> {
+    use omacloud_net::upkeep;
+    let mut net = network(3).await?;
+    let b = bucket(&net, "pw").await?;
+    b.put("data/ff/1", b"somewhere").await?;
+    for n in std::mem::take(&mut net.nodes) {
+        n.shutdown().await;
+    }
+    let e = upkeep::round(&b, 10, None, &mut upkeep::Free).await.unwrap_err();
+    assert!(format!("{e:#}").contains("offline"), "{e:#}");
     Ok(())
 }

@@ -1971,7 +1971,9 @@ fn run(cli: Cli) -> Out {
             // not taken down for want of the Worker: ended, so this
             // computer's daemon takes it down when it can (ours or not), if
             // it runs one
-            let daemon = load(&paths).ok().is_some_and(|c| c.net().is_some());
+            let daemon = load(&paths)
+                .ok()
+                .is_some_and(|c| c.net().is_some_and(|n| n.url == net.url));
             let pending = removed.is_err() && daemon;
             if pending {
                 let now = omacloud_net::node::now();
