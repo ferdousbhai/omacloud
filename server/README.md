@@ -25,7 +25,8 @@ node publishes it, so computers can reach it.
   `STARTER_TOKENS` is the free tokens a prefix gets each 30 days.
 - `deploy.sh` (`npm run deploy`): type checks, applies new migrations (the
   code expects them), then deploys with `cf`. `deploy.sh --first` also makes the secret
-  `CREDIT_KEY`.
+  `CREDIT_KEY`; it checks the Worker has none first and stops if it can't
+  tell, so on a new Cloudflare account deploy once without it.
 - `backup.sh [dir]`: copies every table off Cloudflare as JSON, into
   `<dir>/<date>/` (default `~/omacloud-backups`), readable by you alone.
 - `npm run check`: types and unit tests (`test/d1.ts` stands in for D1).

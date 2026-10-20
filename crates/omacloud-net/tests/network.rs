@@ -215,9 +215,9 @@ async fn a_shared_file_opens_with_its_secret_only() -> Result<()> {
     let mine = bucket(&net, &share::bucket_key(&again)).await?;
     share::put(&mine, &again, "notes.txt", b"notes").await?;
     let theirs = bucket(&net, &share::bucket_key(&again)).await?;
-    share::remove(&theirs).await?;
+    assert!(share::remove(&theirs).await?);
     assert!(share::get(&theirs, &again).await.is_err());
-    assert!(share::remove(&theirs).await.is_err());
+    assert!(!share::remove(&theirs).await?, "nothing there now");
     // another secret finds nothing
     let wrong = share::secret();
     let stranger = bucket(&net, &share::bucket_key(&wrong)).await?;

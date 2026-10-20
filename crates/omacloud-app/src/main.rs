@@ -829,7 +829,7 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         storage.add(&r);
     }
     if let Some(give) = s["network"]["give"].as_u64() {
-        storage.add(&give_row(ui, give, daemon));
+        storage.add(&give_row(ui, give));
     }
     page.add(&storage);
 
@@ -1000,9 +1000,9 @@ fn gib(bytes: u64) -> String {
 }
 
 /// The space this computer gives the network, chosen from a few sizes (and
-/// whatever it gives now, if that's none of them). A change restarts a
-/// running daemon, which reads the size when it starts.
-fn give_row(ui: &Rc<Ui>, give: u64, daemon: bool) -> adw::ComboRow {
+/// whatever it gives now, if that's none of them). A running daemon
+/// restarts into a change by itself.
+fn give_row(ui: &Rc<Ui>, give: u64) -> adw::ComboRow {
     let mut sizes: Vec<u64> = [0, 5, 20, 50, 100, 250].iter().map(|g| g * GIB).collect();
     if !sizes.contains(&give) {
         sizes.push(give);
@@ -1035,10 +1035,6 @@ fn give_row(ui: &Rc<Ui>, give: u64, daemon: bool) -> adw::ComboRow {
                 ui.toast(&e.shown());
                 ui.refresh();
             }
-            Ok(_) if daemon => ui.act(
-                &["systemctl", "--user", "restart", "omacloud"],
-                &format!("Giving {}", gib(bytes)),
-            ),
             Ok(_) => {
                 ui.toast(&format!("Giving {}", gib(bytes)));
                 ui.refresh();

@@ -99,8 +99,8 @@ development.
 While the daemon (`omacloud watch`) runs, your computer gives 20 GiB to
 the network: it keeps other accounts' encrypted objects, never knowing
 whose, and earns the credits that pay for keeping yours. `omacloud node
-give 50G` changes the amount (`0` gives none) and takes effect when the
-daemon restarts; `omacloud node status` shows it. Every few hours the
+give 50G` changes the amount (`0` gives none), and a running daemon
+restarts into it; `omacloud node status` shows it. Every few hours the
 daemon also checks that your copies are still held, pays to keep them, and
 makes new ones where a holder failed or left. `omacloud node status` (and
 Storage in the app) then shows how much your account stores, what keeping
@@ -300,8 +300,8 @@ that gives a command a whole terminal (see docs/design.md).
 `omacloud watch`, which the systemd unit runs, keeps its own exit codes: 2
 when this computer was removed, the account can't be verified, or the
 computer was set up on storage Omacloud no longer uses (the unit doesn't
-restart into that), 75 after an upgrade (it restarts into the new
-binary), 1 for anything else.
+restart into that), 75 after an upgrade or a change to settings sync or
+the space given (it restarts into that), 1 for anything else.
 
 ## Configuration
 

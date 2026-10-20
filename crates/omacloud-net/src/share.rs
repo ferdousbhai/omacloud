@@ -72,17 +72,18 @@ pub async fn get(bucket: &Bucket, secret: &str) -> Result<(String, Vec<u8>)> {
 }
 
 /// Take a share back: its index entry goes, so nobody finds its holders,
-/// who drop it when its lease ends.
+/// who drop it when its lease ends. False when nothing was shared there
+/// (expired, or taken back already).
 ///
 /// # Errors
 ///
-/// If it's gone already, or the Worker can't be reached.
-pub async fn remove(bucket: &Bucket) -> Result<()> {
-    anyhow::ensure!(
-        bucket.entry(OBJECT).await?.is_some(),
-        "nothing is shared under this link: it may have expired or been taken back"
-    );
-    bucket.delete(OBJECT).await
+/// If the Worker can't be reached.
+pub async fn remove(bucket: &Bucket) -> Result<bool> {
+    if bucket.entry(OBJECT).await?.is_none() {
+        return Ok(false);
+    }
+    bucket.delete(OBJECT).await?;
+    Ok(true)
 }
 
 /// Take down a share, whether or not it's still there: its index entry

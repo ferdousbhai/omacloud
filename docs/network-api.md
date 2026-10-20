@@ -63,8 +63,8 @@ need the account's capability, except join requests.
 - `PUT /api/net/coord/{account}/cap` with the current `x-cap` and body
   `{"cap": "<new>"}`: replaces the capability (a new epoch). 204.
 - `GET /api/net/coord/{account}/{log}?after={n}`, `log` one of `heads`,
-  `devices`, `epochs`: `{"records": [{"seq", "body"}]}` with `seq > n`,
-  in order.
+  `devices`, `epochs`: `{"records": [{"seq", "body"}], "next"}` with `seq >
+  n`, in order, at most 1000; `next` (the last seq) when there may be more.
 - `PUT /api/net/coord/{account}/{log}/{seq}` with `x-cap` and `{"body"}`:
   create-only. 201, or 409 when that position is taken.
 - `GET /api/net/coord/{account}/anchor`: `{"body"}` or 404.

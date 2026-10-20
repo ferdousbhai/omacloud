@@ -77,7 +77,8 @@ command without --yes where nobody can be asked, a secret asked for where no
 terminal shows it, ambiguous, already set up); 3 not set up, not approved, or a
 key or code refused; 4 not found; 5 storage or network out of reach. `watch` (the daemon) exits 2 when this computer was
 removed, the account can't be verified or its storage is gone (sync stops until
-someone looks), and 75 after an upgrade.";
+someone looks), and 75 after an upgrade or a change to settings sync or the
+space given (the unit restarts it into that).";
 
 #[derive(Parser)]
 #[command(
@@ -284,8 +285,8 @@ enum Cmd {
 enum NodeCmd {
     /// Show what this computer gives and keeps for others
     Status,
-    /// Give this much space (200G, 512M; 0 for none); the daemon picks it
-    /// up when restarted
+    /// Give this much space (200G, 512M; 0 for none); a running daemon
+    /// restarts into it
     Give { size: String },
     /// Run only a node, no account: a computer that gives space and syncs
     /// nothing of its own (a seed)
@@ -1081,12 +1082,14 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<String>, new_code: O
 enum Ended {
     /// Removed from the account, or the account can't be verified.
     Stopped,
-    /// The package replaced the binary: restart into the new one.
+    /// The package replaced the binary, or settings sync or the space
+    /// given changed: restart into the new one.
     Upgraded,
 }
 
-/// Exit status after an upgrade: a failure to the unit, so `Restart=` starts
-/// the new binary (2 is the status it doesn't restart).
+/// Exit status to be restarted (an upgrade, a changed config): a failure to
+/// the unit, so `Restart=` starts it again (2 is the status it doesn't
+/// restart).
 const UPGRADED: i32 = 75;
 
 /// Keep the folders in sync, until sync must stop or an upgrade replaced
@@ -1965,11 +1968,11 @@ fn run(cli: Cli) -> Out {
             let removed = session(&paths, &net)?.unshare(&secret);
             let mut shares = net::read_shares(&paths.data);
             shares.retain(|s| s.secret != secret);
-            // not taken down for want of the Worker: ended, so the daemon
-            // takes it down when it can (ours or not)
-            let pending = removed
-                .as_ref()
-                .is_err_and(|e| !format!("{e:#}").contains("nothing is shared under this link"));
+            // not taken down for want of the Worker: ended, so this
+            // computer's daemon takes it down when it can (ours or not), if
+            // it runs one
+            let daemon = load(&paths).ok().is_some_and(|c| c.net().is_some());
+            let pending = removed.is_err() && daemon;
             if pending {
                 let now = omacloud_net::node::now();
                 shares.push(net::Shared {
@@ -1982,7 +1985,7 @@ fn run(cli: Cli) -> Out {
                 });
             }
             net::write_shares(&paths.data, &shares)?;
-            removed.map_err(|e| {
+            let removed = removed.map_err(|e| {
                 let e = fail::unavailable(format!("{e:#}"));
                 if pending {
                     e.hint("the daemon takes it down when it can")
@@ -1990,6 +1993,12 @@ fn run(cli: Cli) -> Out {
                     e
                 }
             })?;
+            if !removed {
+                return Err(fail::not_found(
+                    "nothing is shared under this link: it may have expired or been taken back",
+                )
+                .into());
+            }
             Ok(Response::new(
                 Value::Null,
                 "the link opens nothing now; holders drop the file when its lease ends",

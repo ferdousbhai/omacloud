@@ -1625,25 +1625,40 @@ impl Engine {
     fn tidy_as(&mut self, keep: Duration, at_once: bool) -> Result<Option<usize>> {
         self.state.devices.advance(self.coord.as_ref())?;
         let me = self.device_key();
-        if self.state.devices.members().valid.keys().next() != Some(&me) {
-            return Ok(None);
-        }
-        // the versions the members stand on stay, so a computer away for
-        // months picks up where it left off; an error here keeps them all
         let members = self.state.devices.members().valid;
         let heads = self.verified_history()?;
-        let mut standing: BTreeSet<String> = self
+        // the version each member stands on: an error here keeps them all
+        let standing_on: BTreeMap<String, String> = self
             .coord
             .synced()?
             .into_iter()
             .filter(|(device, _)| members.contains_key(device))
-            .filter_map(|(_, seq)| self.snapshot_now(heads.iter().find(|h| h.seq == seq)?))
+            .filter_map(|(device, seq)| Some((device, self.snapshot_now(heads.iter().find(|h| h.seq == seq)?)?)))
             .collect();
-        standing.extend(self.state.base.as_ref().map(|b| b.snapshot.clone()));
         let repo = self.open_repo()?;
         let mut snaps = repo.get_all_snapshots()?;
         snaps.sort_by_key(|s| s.time.timestamp());
         let cutoff = Timestamp::now() - jiff::SignedDuration::try_from(keep)?;
+        // the member with the lowest key among those that synced within the
+        // window tidies: one no longer used, but never removed, doesn't stop
+        // it for good
+        let synced_lately = |device: &String| {
+            standing_on
+                .get(device)
+                .and_then(|id| snaps.iter().find(|s| snapshot_hex(&s.id) == *id))
+                .is_some_and(|s| s.time.timestamp() >= cutoff)
+        };
+        let tidier = members
+            .keys()
+            .find(|d| synced_lately(d))
+            .or_else(|| members.keys().next());
+        if tidier != Some(&me) {
+            return Ok(None);
+        }
+        // the versions the members stand on stay, so a computer away for
+        // months picks up where it left off
+        let mut standing: BTreeSet<String> = standing_on.into_values().collect();
+        standing.extend(self.state.base.as_ref().map(|b| b.snapshot.clone()));
         let opens = snaps.iter().rposition(|s| s.time.timestamp() < cutoff);
         let gone: Vec<_> = snaps
             .iter()

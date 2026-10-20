@@ -436,7 +436,7 @@ impl Session {
     /// # Errors
     ///
     /// If it's gone already, or the Worker can't be reached.
-    pub fn unshare(&self, secret: &str) -> Result<()> {
+    pub fn unshare(&self, secret: &str) -> Result<bool> {
         let bucket = self.gateway.bucket(&crate::share::bucket_key(secret));
         self.rt.block_on(crate::share::remove(&bucket))
     }

@@ -80,7 +80,14 @@ impl Worker {
             .run(req.body(bytes)?)
             .with_context(|| format!("reaching the network at {}", self.base))?;
         let status = res.status().as_u16();
-        let text = res.body_mut().read_to_string().unwrap_or_default();
+        // well past what a page of the index or a log holds; an answer cut
+        // short is an error, never an empty one
+        let text = res
+            .body_mut()
+            .with_config()
+            .limit(64 << 20)
+            .read_to_string()
+            .with_context(|| format!("reading the network's answer to {method} {path}"))?;
         let body = if text.is_empty() {
             Value::Null
         } else {
@@ -298,16 +305,25 @@ impl Records for Worker {
         Ok(())
     }
     fn log(&self, account: &str, log: &str, after: u64) -> Result<Vec<(u64, String)>> {
-        let v = self.ok(
-            "GET",
-            &format!("/api/net/coord/{account}/{log}?after={after}"),
-            &[],
-            None,
-        )?;
-        Ok(from::<Vec<Logged>>(v["records"].clone())?
-            .into_iter()
-            .map(|r| (r.seq, r.body))
-            .collect())
+        // in pages, as the Worker answers: a long-lived account's history
+        // outgrows one answer
+        let mut out: Vec<(u64, String)> = Vec::new();
+        let mut from_seq = after;
+        loop {
+            let v = self.ok(
+                "GET",
+                &format!("/api/net/coord/{account}/{log}?after={from_seq}"),
+                &[],
+                None,
+            )?;
+            let page = from::<Vec<Logged>>(v["records"].clone())?;
+            let more = v["next"].as_u64();
+            out.extend(page.into_iter().map(|r| (r.seq, r.body)));
+            match more {
+                Some(next) if next > from_seq => from_seq = next,
+                _ => return Ok(out),
+            }
+        }
     }
     fn append(&self, account: &str, cap: &str, log: &str, seq: u64, body: &str) -> Result<bool> {
         let a = self.call(

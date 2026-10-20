@@ -3,7 +3,7 @@
 //! account's copies, and keep the tokens that pay for them.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -166,7 +166,8 @@ impl Contribution {
     /// Keep this computer's shares until they're due to end, paying from
     /// the wallet; forget those that ended.
     fn renew_shares(&self, session: &Session) {
-        let mut shares = read_shares(&self.data);
+        let original = read_shares(&self.data);
+        let mut shares = original.clone();
         let before = shares.len();
         // an ended share is taken down, or its holders' grace would keep it
         // opening for months; kept to try again if that fails
@@ -208,7 +209,25 @@ impl Contribution {
                 Err(e) => warn!("keeping the shared {}: {e:#}", s.name),
             }
         }
-        if changed && let Err(e) = write_shares(&self.data, &shares) {
+        if !changed {
+            return;
+        }
+        // into the list as it is now: a share made or taken back while these
+        // renewals ran (`omacloud share`, `unshare`) isn't lost
+        let taken_down: BTreeSet<String> = original
+            .iter()
+            .filter(|s| !shares.iter().any(|t| t.secret == s.secret))
+            .map(|s| s.secret.clone())
+            .collect();
+        let mut now_listed = read_shares(&self.data);
+        now_listed.retain(|s| !taken_down.contains(&s.secret));
+        for s in &mut now_listed {
+            if let Some(ours) = shares.iter().find(|t| t.secret == s.secret) {
+                s.renewed_at = s.renewed_at.max(ours.renewed_at);
+                s.holders.extend(ours.holders.iter().map(|(k, v)| (k.clone(), *v)));
+            }
+        }
+        if let Err(e) = write_shares(&self.data, &now_listed) {
             warn!("saving shares: {e:#}");
         }
     }

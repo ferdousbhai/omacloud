@@ -60,8 +60,8 @@ objects. Agree on device name, folders, and whether to sync settings first.
 
 While `omacloud watch` runs, the computer gives disk space to the network
 (20G by default). `omacloud node status` shows it; `omacloud node give
-<size>` changes it (0 gives none) after a daemon restart, only with the
-owner's say. `omacloud node run` runs a node with no account; don't start it
+<size>` changes it (0 gives none; a running daemon restarts into it), only
+with the owner's say. `omacloud node run` runs a node with no account; don't start it
 unasked.
 
 The owner must retain the recovery code privately. Commands that print a

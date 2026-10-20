@@ -164,6 +164,27 @@ test("the index is scoped: another scope sees nothing, and rows hold only the sc
 	assert.equal((await call(env, `/api/net/index/${id}`, { method: "PUT", headers: h, body: { sealed: max } })).status, 204);
 });
 
+test("a long log is read in pages", async () => {
+	const { env, sqlite } = setup();
+	const id = "0123456789abcdef0123456789abcdef";
+	assert.equal((await call(env, `/api/net/coord/${id}`, { method: "PUT", headers: { "x-cap": "c" } })).status, 201);
+	const insert = sqlite.prepare("INSERT INTO net_logs (account, log, seq, body) VALUES (?, 'heads', ?, 'h')");
+	for (let i = 0; i < 2500; i++) insert.run(id, i);
+	const seqs: number[] = [];
+	let after = "";
+	for (let pages = 0; ; pages++) {
+		assert.ok(pages < 3);
+		const page = (await (await call(env, `/api/net/coord/${id}/heads${after ? `?after=${after}` : ""}`)).json()) as {
+			records: { seq: number }[];
+			next?: number;
+		};
+		seqs.push(...page.records.map((r) => r.seq));
+		if (page.next === undefined) break;
+		after = String(page.next);
+	}
+	assert.deepEqual(seqs, Array.from({ length: 2500 }, (_, i) => i));
+});
+
 test("a big index is read in pages", async () => {
 	const { env, sqlite } = setup();
 	const scope = "0123456789abcdef0123456789abcdef";

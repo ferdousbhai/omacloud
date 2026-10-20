@@ -140,11 +140,11 @@ pub async fn round(
     }
 
     if let Some(Renew { until, last }) = renew {
-        let mut per_holder: BTreeMap<NodeId, Vec<(&Entry, BlobId)>> = BTreeMap::new();
+        let mut per_holder: BTreeMap<NodeId, Vec<(&Entry, BlobId, u64)>> = BTreeMap::new();
         for e in &entries {
             for h in &e.holders {
                 if !bad.get(&e.key).is_some_and(|b| b.contains(&h.node)) {
-                    per_holder.entry(h.node).or_default().push((e, h.blob));
+                    per_holder.entry(h.node).or_default().push((e, h.blob, h.placed));
                 }
             }
         }
@@ -157,12 +157,17 @@ pub async fn round(
             let mut renewed = true;
             // in batches a request can carry
             for held in held.chunks(RENEW_BATCH) {
-                let bytes: u64 = held.iter().map(|(e, _)| e.blob_size()).sum();
-                let blobs: Vec<BlobId> = held.iter().map(|(_, b)| *b).collect();
+                // copies a repair placed since it was last renewed may be
+                // owed from when it held them before: up to a longest lease
+                let placed = |p: u64| p + SLACK > last;
+                let fresh: u64 = held.iter().filter(|h| placed(h.2)).map(|(e, ..)| e.blob_size()).sum();
+                let rest: u64 = held.iter().filter(|h| !placed(h.2)).map(|(e, ..)| e.blob_size()).sum();
+                let allowed = most_earned(fresh, 0, now) + most_earned(rest, last, now);
+                let blobs: Vec<BlobId> = held.iter().map(|(_, b, _)| *b).collect();
                 // asked first without paying: the holder says what it's owed
                 let mut answer = client::renew(bucket.endpoint(), &addr, blobs.clone(), until, Vec::new()).await;
                 if let Ok(Renewal::Owed(owed)) = answer {
-                    if owed > most_earned(bytes, last, now) {
+                    if owed > allowed {
                         log::info!("{} asked {owed} tokens, more than it served", hex::encode(&node[..4]));
                         answer = Err(anyhow::anyhow!("asked too much"));
                     } else {
@@ -182,7 +187,7 @@ pub async fn round(
                 }
                 match answer {
                     Ok(Renewal::Kept(kept)) => {
-                        for ((e, _), k) in held.iter().zip(kept) {
+                        for ((e, ..), k) in held.iter().zip(kept) {
                             if !k {
                                 bad.entry(e.key.clone()).or_default().insert(node);
                             }
@@ -193,7 +198,7 @@ pub async fn round(
                             log::info!("renewing with {}: {err:#}", hex::encode(&node[..4]));
                         }
                         renewed = false;
-                        for (e, _) in held {
+                        for (e, ..) in held {
                             bad.entry(e.key.clone()).or_default().insert(node);
                         }
                     }

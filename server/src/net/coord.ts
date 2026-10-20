@@ -67,14 +67,18 @@ export async function marker(env: Env, id: string): Promise<Response> {
 	return json({ version: (await account(env, id)).version });
 }
 
+/** Records of a log an answer holds at most; `next` asks for more. */
+const LOG_PAGE = 1000;
+
 /** GET /coord/{account}/{log}?after=n */
 export async function readLog(env: Env, id: string, log: string, after: string | null): Promise<Response> {
 	if (after !== null && !/^-?\d{1,15}$/.test(after)) throw new HttpError(400, "after must be a number");
 	await account(env, id);
-	const { results } = await env.DB.prepare("SELECT seq, body FROM net_logs WHERE account = ? AND log = ? AND seq > ? ORDER BY seq")
-		.bind(id, log, after === null ? -1 : Number(after))
+	const { results } = await env.DB.prepare("SELECT seq, body FROM net_logs WHERE account = ? AND log = ? AND seq > ? ORDER BY seq LIMIT ?")
+		.bind(id, log, after === null ? -1 : Number(after), LOG_PAGE)
 		.all<{ seq: number; body: string }>();
-	return json({ records: results.map((r) => ({ seq: r.seq, body: r.body })) });
+	const records = results.map((r) => ({ seq: r.seq, body: r.body }));
+	return json(records.length === LOG_PAGE ? { records, next: records[records.length - 1].seq } : { records });
 }
 
 /** PUT /coord/{account}/{log}/{seq}: create-only. */

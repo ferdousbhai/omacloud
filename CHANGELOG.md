@@ -19,8 +19,15 @@
   own key (they were looked for with the current one, and never found).
 - A holder counts a token given twice once; renewals go 10,000 copies a
   request; a renewal after a lease ran out pays for the lease and not the
-  grace since, and the grace is for blobs paid for; a holder's credits are banked a batch at a time; a repair
-  that can't place enough new holders keeps the entry that still reads.
+  grace since, so a computer back after months renews normally, and the
+  grace is for blobs paid for; a holder's credits are banked a batch at a
+  time; a repair that can't place enough new holders keeps the entry that
+  still reads, and an owner allows for what a holder may still be owed on
+  a copy a repair placed back on it.
+- Tidying is done by the lowest-key computer among those that synced in
+  the last 30 days, so one no longer used but never removed doesn't stop
+  it; coordination logs are read in pages, and an answer cut short is an
+  error rather than an empty one.
 - Turning settings sync on or off, or changing the space given, restarts
   a running daemon into it (it kept the old choice until the next login);
   a starter grant that falls short of a payment is kept, not lost;
@@ -28,10 +35,6 @@
   merged bookmarks note no longer shows a literal `{ME}`.
 - A read-only file whose content matched no longer fails every sync;
   `receive` won't write through a file or link already at its destination.
-
-- A holder charges only for the lease it kept a blob for, not the grace
-  after it, so a computer back after months renews normally instead of
-  finding every holder over its limit.
 - A holder's credits no longer get stuck: a token spent before buys
   nothing but no longer sinks the rest of its batch at the Worker, and
   deposits go 100 at a time.

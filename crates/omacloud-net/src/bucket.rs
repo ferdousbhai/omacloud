@@ -64,6 +64,16 @@ pub struct Held {
     /// Which shard, for a coded object.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shard: Option<u8>,
+    /// When a repair placed it (0: placed with the object). A holder that
+    /// held this copy before may still be owed for it from then, so an
+    /// owner allows it more than the month ends since it last renewed it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub placed: u64,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// What a holder's blob is scrambled under: each shard its own name, so
@@ -263,6 +273,7 @@ impl Bucket {
                 node: to.node.id,
                 blob: id,
                 shard,
+                placed: 0,
             }),
             Err(e) => {
                 log::debug!("{e:#}");
@@ -337,6 +348,16 @@ impl Bucket {
         if holders == entry.holders || holders.len() < entry.needed() {
             return Ok(false);
         }
+        let now = crate::node::now();
+        let holders = holders
+            .into_iter()
+            .map(|mut h| {
+                if !entry.holders.iter().any(|o| o.node == h.node) {
+                    h.placed = now;
+                }
+                h
+            })
+            .collect();
         self.put_entry(&Entry {
             holders,
             ..entry.clone()

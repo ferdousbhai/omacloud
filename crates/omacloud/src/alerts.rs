@@ -1,7 +1,8 @@
 //! Desktop notifications from the daemon, through `notify-send` (libnotify;
 //! mako on Omarchy): a device asking to join, a setting that needs a choice,
 //! this device being removed. "Open" starts the Omacloud app on the page the
-//! notification is about. Each thing is announced once per run.
+//! notification is about. Each thing is announced once per run, so once
+//! more after the daemon restarts (an upgrade, a changed config).
 
 use std::{
     collections::BTreeSet,
