@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.20 (2026-10-20)
 
 - Holders before this version charge by other rules (ahead, or for every
   month begun), so a computer on this version takes them for cheats and
