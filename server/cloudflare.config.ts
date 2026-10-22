@@ -2,6 +2,8 @@ import { bindings, defineConfig } from "cf/config";
 
 export default defineConfig({
 	worker: {
+		workersDev: false,
+		previewUrls: false,
 		name: "omacloud",
 		compatibilityDate: "2026-10-05",
 		entrypoint: "src/index.ts",
