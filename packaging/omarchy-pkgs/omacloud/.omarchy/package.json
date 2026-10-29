@@ -1,7 +1,6 @@
 {
   "source": "local",
   "release_ring": "fast",
-  "min_release_age": "24h",
   "upstream": {
     "watch": {
       "github": "ferdousbhai/omacloud",
