@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.21 (2026-10-29)
+
+- Releases publish the signing key with its user ID, and refuse to publish
+  one without: 0.0.20's first key had none, so pacman-key couldn't sign it
+  and fresh installs failed.
+- omacloud.computer's pages forbid framing, sniffing and referrers and ask
+  for HTTPS only, and the Worker answers only at omacloud.computer, with no
+  workers.dev address or preview URLs.
+- The Omarchy recipe no longer holds a release back for a day, as in
+  omacom/omarchy-pkgs#778.
+
 ## 0.0.20 (2026-10-20)
 
 - Holders before this version charge by other rules (ahead, or for every
