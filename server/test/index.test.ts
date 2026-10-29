@@ -13,6 +13,16 @@ test("the pages are served, and nothing else", async () => {
 	assert.equal((await get("/", "POST")).status, 404);
 });
 
+test("the HTML pages, and only they, carry the security headers", async () => {
+	for (const path of ["/", "/privacy", "/terms", "/s"]) {
+		const r = await get(path);
+		assert.equal(r.headers.get("x-frame-options"), "DENY", path);
+		assert.equal(r.headers.get("referrer-policy"), "no-referrer", path);
+		assert.match(r.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/, path);
+	}
+	for (const path of ["/llms.txt", "/health"]) assert.equal((await get(path)).headers.get("x-frame-options"), null, path);
+});
+
 test("/install.sh sends to the latest release's installer", async () => {
 	const r = await get("/install.sh");
 	assert.equal(r.status, 302);

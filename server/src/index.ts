@@ -1,9 +1,9 @@
-import { secureDocument } from "./security-headers.ts";
 // omacloud.computer: the public pages, and the storage network's API under
 // /api/net/ (src/net/).
 
 import { handle as net } from "./net/router.ts";
 import * as pages from "./pages.ts";
+import { secureDocument } from "./security-headers.ts";
 
 export default {
 	async fetch(req, env): Promise<Response> {
