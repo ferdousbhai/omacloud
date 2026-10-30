@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.22 (2026-10-30)
+
+- The installer keeps omacloud's pacman repository through Omarchy's ARM
+  updates: the update replaced everything under `[omarchy]`, where the
+  repository's Include had been appended, so computers stopped receiving
+  updates. Rerun the install one-liner once to fix a computer that already
+  has the old hook.
+
 ## 0.0.21 (2026-10-29)
 
 - Releases publish the signing key with its user ID, and refuse to publish
