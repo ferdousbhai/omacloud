@@ -600,7 +600,7 @@ fn mount_shows_every_file_read_only() {
 }
 
 #[test]
-fn a_computer_set_up_before_the_network_is_told_and_set_up_again() {
+fn a_computer_set_up_on_storage_thats_gone_is_told_and_set_up_again() {
     let h = Home::new();
     let config = h.path("a.toml");
     std::fs::write(
@@ -623,8 +623,80 @@ fn a_computer_set_up_before_the_network_is_told_and_set_up_again() {
 
     // init keeps the old setup aside and sets up again
     h.create();
-    assert!(h.path("a.toml.before-network").exists());
+    assert!(h.path("a.toml.before-bucket").exists());
     assert_eq!(json(&h.run("a", &["status"]))["data"]["repo"]["kind"], "path");
+}
+
+#[test]
+fn a_computer_on_the_old_network_is_told_too() {
+    let h = Home::new();
+    std::fs::write(
+        h.path("a.toml"),
+        format!(
+            "device = \"a\"\nfolder = \"{}\"\ncoordinator = \"network\"\nroot = \"{}\"\n\
+             [repo]\nrepository = \"network\"\n[network]\nurl = \"https://omacloud.computer\"\n",
+            h.path("A").display(),
+            "ab".repeat(32)
+        ),
+    )
+    .unwrap();
+    let v = json(&h.run("a", &["status"]));
+    assert_eq!(v["data"]["storage_gone"], "the Omacloud network", "{v}");
+    machine_error(&h.run("a", &["sync"]), "storage_gone", 3);
+    assert_eq!(code(&h.run("a", &["watch"])), 2);
+
+    // what the network left goes when it's set up again, and nothing else
+    let data = h.path("a.d");
+    std::fs::create_dir_all(data.join("node/blobs")).unwrap();
+    std::fs::write(data.join("node/blobs/others"), "ciphertext").unwrap();
+    std::fs::write(data.join("account.seed"), "seed").unwrap();
+    std::fs::write(data.join("keep.me"), "mine").unwrap();
+    h.create();
+    assert!(!data.join("node").exists() && !data.join("account.seed").exists());
+    assert!(data.join("keep.me").exists());
+    assert!(h.path("a.toml.before-bucket").exists());
+}
+
+#[test]
+fn init_says_where_the_files_should_live() {
+    let h = Home::new();
+    let e = machine_error(&h.run("a", &["init"]), "usage", 2);
+    assert!(e["hint"].as_str().unwrap().contains("--provider"), "{e}");
+    // a provider's shorthand needs what it's made from
+    machine_error(&h.run("a", &["init", "--provider", "r2", "--bucket", "b"]), "usage", 2);
+    assert!(!h.path("a.toml").exists());
+}
+
+#[test]
+fn a_damaged_join_code_is_refused_and_an_invite_needs_a_terminal() {
+    let h = Home::new();
+    let e = machine_error(
+        &h.cmd("a", &["init"])
+            .env("OMACLOUD_JOIN_CODE", "omacloud-join-00")
+            .output()
+            .unwrap(),
+        "join_code_rejected",
+        3,
+    );
+    assert!(e["hint"].as_str().unwrap().contains("join-code"), "{e}");
+    machine_error(
+        &h.run(
+            "a",
+            &[
+                "invite",
+                "--provider",
+                "s3",
+                "--endpoint",
+                "http://localhost:1",
+                "--bucket",
+                "b",
+                "--access-key-id",
+                "k",
+            ],
+        ),
+        "terminal_required",
+        2,
+    );
 }
 
 #[test]

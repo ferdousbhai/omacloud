@@ -620,18 +620,50 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
     });
 }
 
+/// The storage a new account can be on: its name here, what the field that
+/// says where is called, and its `init` flags.
+const PROVIDERS: [(&str, &str, &str, &str); 3] = [
+    ("Cloudflare R2", "Cloudflare account ID", "r2", "--account"),
+    ("Hetzner", "Location (fsn1, nbg1 or hel1)", "hetzner", "--location"),
+    ("Other S3", "Endpoint (https://...)", "s3", "--endpoint"),
+];
+
+fn provider_at(i: u32) -> (&'static str, &'static str, &'static str, &'static str) {
+    PROVIDERS[usize::try_from(i).unwrap_or(0).min(PROVIDERS.len() - 1)]
+}
+
 /// First run: start an account, or add this computer to one.
 fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
     let (what, sync_args) = choose_what_syncs();
     page.add(&what);
 
-    // create: nothing to rent or paste
+    // create: in a bucket of the user's own
     let create = group(
         "Create an account",
-        "Start using Omacloud on this computer. Everything is encrypted on this computer \
-         before it leaves, so nobody else can read it.",
+        "Make a private bucket and a key that reaches it at your provider, then give them here. \
+         Everything is encrypted on this computer before it leaves, so your provider can't read it.",
     );
+    let provider = adw::ComboRow::builder()
+        .title("Provider")
+        .model(&gtk::StringList::new(&PROVIDERS.map(|p| p.0)))
+        .build();
+    create.add(&provider);
+    let place = adw::EntryRow::builder().title(PROVIDERS[0].1).build();
+    {
+        let place = place.clone();
+        provider.connect_selected_notify(move |p| {
+            place.set_title(provider_at(p.selected()).1);
+            place.set_text("");
+        });
+    }
+    create.add(&place);
+    let bucket = adw::EntryRow::builder().title("Bucket name").build();
+    create.add(&bucket);
+    let key_id = adw::EntryRow::builder().title("Access key ID").build();
+    create.add(&key_id);
+    let secret = adw::PasswordEntryRow::builder().title("Secret access key").build();
+    create.add(&secret);
     // no computer left to approve this one: the recovery code lets it in
     let rescue = adw::PasswordEntryRow::builder()
         .title("Lost every computer? Recovery code (optional)")
@@ -643,7 +675,30 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     {
         let (ui, sync_args) = (ui.clone(), sync_args.clone());
         create_button.connect_clicked(move |_| {
-            let mut env = Vec::new();
+            let (place, bucket, key_id) = (
+                place.text().trim().to_string(),
+                bucket.text().trim().to_string(),
+                key_id.text().trim().to_string(),
+            );
+            if place.is_empty() || bucket.is_empty() || key_id.is_empty() || secret.text().is_empty() {
+                ui.toast("Fill in where your bucket is, and its key");
+                return;
+            }
+            let (_, _, name, flag) = provider_at(provider.selected());
+            let mut args: Vec<String> = [
+                "--provider",
+                name,
+                flag,
+                &place,
+                "--bucket",
+                &bucket,
+                "--access-key-id",
+                &key_id,
+            ]
+            .map(str::to_string)
+            .to_vec();
+            args.extend(sync_args());
+            let mut env = vec![("OMACLOUD_SECRET_ACCESS_KEY".to_string(), secret.text().to_string())];
             let typed = rescue.text().to_string();
             match typed.chars().filter(char::is_ascii_alphanumeric).count() {
                 0 => {}
@@ -653,7 +708,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
                     return;
                 }
             }
-            run_init(&ui, sync_args(), env);
+            run_init(&ui, args, env);
         });
     }
     create.add(&create_button);
@@ -661,10 +716,11 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
 
     // join
     let join = group(
-        "Or add this computer to your account",
+        "Or use a code",
         "Already use Omacloud on another computer? On that computer, open Omacloud, go to \
          Devices and click Show Join Code, then paste the code here. That computer approves \
-         this one, or your recovery code lets it in right away.",
+         this one, or your recovery code lets it in right away. Someone who made you a bucket \
+         gave you an invite instead: paste that, and you get an account of your own.",
     );
     let jcode = adw::PasswordEntryRow::builder().title("Join code").build();
     let code = adw::PasswordEntryRow::builder()
@@ -687,7 +743,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
                 env.push(("OMACLOUD_RECOVERY_CODE".to_string(), c));
             }
             if env.first().is_none_or(|(k, _)| k != "OMACLOUD_JOIN_CODE") {
-                ui.toast("Paste the join code from one of your computers");
+                ui.toast("Paste the join code or invite");
                 return;
             }
             run_init(&ui, sync_args(), env);
@@ -782,12 +838,6 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     browse.connect_clicked(move |_| browse_online(&ui2));
     online.add_suffix(&browse);
     sync.add(&online);
-    let share = row("Share a File", "Copies a link that opens it for 7 days");
-    let choose = button("Choose…", None);
-    let ui2 = ui.clone();
-    choose.connect_clicked(move |_| share_file(&ui2));
-    share.add_suffix(&choose);
-    sync.add(&share);
     let deleted = row("Recently Deleted", "Files deleted in the last 30 days, to put back");
     let show = button("Show…", None);
     let ui2 = ui.clone();
@@ -802,35 +852,11 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     let storage = group("Storage", "");
     let repo = &s["repo"];
     let place = match repo["kind"].as_str() {
-        Some("network") => "Omacloud network".to_string(),
+        Some("bucket") => format!("{} at {}", text(&repo["bucket"]), text(&repo["endpoint"])),
         Some("path") => short_path(&text(&repo["repository"])),
         _ => text(&repo["repository"]),
     };
     storage.add(&row("Where", place.trim()));
-    let space = &s["network"]["space"];
-    if let Some(tokens) = space["tokens"].as_u64() {
-        let (title, subtitle) = match space["stored"].as_u64() {
-            Some(stored) => (
-                format!("Storing {}", human(stored)),
-                match space["months"].as_u64() {
-                    Some(m) => format!("Credit for about {m} more months at this size"),
-                    None => "Kept on other Omarchy computers".to_string(),
-                },
-            ),
-            None => (
-                "Storage credit".to_string(),
-                "Counted after the first check of your copies".to_string(),
-            ),
-        };
-        let r = row(&title, &subtitle);
-        r.set_tooltip_text(Some(&format!(
-            "{tokens} credits held. A credit keeps 1 GiB for a month; giving space earns them."
-        )));
-        storage.add(&r);
-    }
-    if let Some(give) = s["network"]["give"].as_u64() {
-        storage.add(&give_row(ui, give));
-    }
     page.add(&storage);
 
     // for support and the curious
@@ -859,25 +885,6 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     more.add(&details);
     page.add(&more);
     page
-}
-
-/// Pick a file and copy a link to it (`omacloud share --copy`: the link
-/// goes to the clipboard, never through this app).
-fn share_file(ui: &Rc<Ui>) {
-    let dialog = gtk::FileDialog::builder().title("Share a file").modal(true).build();
-    let ui2 = ui.clone();
-    dialog.open(Some(&ui.window), None::<&gio::Cancellable>, move |r| {
-        let Some(path) = r.ok().and_then(|f| f.path()) else {
-            return;
-        };
-        let path = path.to_string_lossy().into_owned();
-        let ui = ui2.clone();
-        ui.toast("Sharing…");
-        cli_then(&["omacloud", "share", "--copy", &path], Vec::new(), move |r| match r {
-            Ok(_) => ui.toast("Link copied: anyone with it can download the file for 7 days"),
-            Err(e) => ui.toast(&e.shown()),
-        });
-    });
 }
 
 /// Mount every file at ~/Omacloud (`omacloud mount`, kept running as a
@@ -990,58 +997,6 @@ fn show_deleted(ui: &Rc<Ui>) {
             list.add(&rw);
         }
     });
-}
-
-const GIB: u64 = 1 << 30;
-
-/// "20.0 GiB", for a size in bytes.
-fn gib(bytes: u64) -> String {
-    format!("{:.1} GiB", bytes as f64 / GIB as f64)
-}
-
-/// The space this computer gives the network, chosen from a few sizes (and
-/// whatever it gives now, if that's none of them). A running daemon
-/// restarts into a change by itself.
-fn give_row(ui: &Rc<Ui>, give: u64) -> adw::ComboRow {
-    let mut sizes: Vec<u64> = [0, 5, 20, 50, 100, 250].iter().map(|g| g * GIB).collect();
-    if !sizes.contains(&give) {
-        sizes.push(give);
-        sizes.sort_unstable();
-    }
-    let labels: Vec<String> = sizes.iter().map(|&b| gib(b)).collect();
-    let model = gtk::StringList::new(&labels.iter().map(String::as_str).collect::<Vec<_>>());
-    let combo = adw::ComboRow::builder()
-        .title("Space you give")
-        .subtitle("Computers on the network keep each other's encrypted copies; what you give earns what you can store")
-        .model(&model)
-        .build();
-    combo.set_subtitle_lines(0);
-    if let Some(i) = sizes.iter().position(|&b| b == give) {
-        combo.set_selected(i as u32);
-    }
-    // connected after the current size is shown, so only a choice runs it
-    let ui = ui.clone();
-    combo.connect_selected_notify(move |c| {
-        let Some(&bytes) = sizes.get(c.selected() as usize) else {
-            return;
-        };
-        if bytes == give {
-            return;
-        }
-        let size = format!("{}G", bytes / GIB);
-        let ui = ui.clone();
-        cli_then(&["omacloud", "node", "give", &size], Vec::new(), move |r| match r {
-            Err(e) => {
-                ui.toast(&e.shown());
-                ui.refresh();
-            }
-            Ok(_) => {
-                ui.toast(&format!("Giving {}", gib(bytes)));
-                ui.refresh();
-            }
-        });
-    });
-    combo
 }
 
 /// "2 minutes ago", for a time in seconds since the epoch.

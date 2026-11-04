@@ -116,8 +116,8 @@ pub enum HeadError {
 }
 
 /// Orders and relays heads, device entries and join requests. Implementations:
-/// the network's (omacloud-net's `NetworkCoordinator`), and a directory
-/// (tests, development). It is trusted for availability only.
+/// the account's bucket ([`crate::BucketCoordinator`]) and a directory (tests,
+/// development). It is trusted for availability only.
 pub trait Coordinator: Send + Sync {
     /// The latest head, if any.
     fn head(&self) -> Result<Option<Head>>;
@@ -179,21 +179,31 @@ pub trait Coordinator: Send + Sync {
         Ok(BTreeMap::new())
     }
 
-    /// A new epoch began with `secret` (`previous` is the one before, none
-    /// for the account's first): a coordinator whose writes depend on the
-    /// epoch moves them over. Called by whoever started it.
-    fn epoch_started(
-        &self,
-        _previous: Option<&crate::epoch::EpochSecret>,
-        _secret: &crate::epoch::EpochSecret,
-    ) -> Result<()> {
+    /// Whether the storage can hold an account: asked before one depends on
+    /// it. A coordinator with nothing to find out has no objection.
+    fn check(&self) -> Result<()> {
         Ok(())
     }
 
-    /// This device holds the current epoch's `secret`.
-    fn epoch_known(&self, _secret: &crate::epoch::EpochSecret) {}
+    /// The latest bucket key change of an account in a bucket (see
+    /// [`crate::bucket_key`]). Coordinators without own buckets have none.
+    fn latest_key_record(&self) -> Result<Option<crate::bucket_key::KeyRecord>> {
+        Ok(None)
+    }
+    /// Append a bucket key change if it is exactly the next one.
+    fn append_key_record(&self, _record: &crate::bucket_key::KeyRecord) -> Result<bool> {
+        anyhow::bail!("this account doesn't keep its own bucket key")
+    }
+    /// Note that `device` switched to key change `seq`.
+    fn ack_key(&self, _seq: u64, _device: &str) -> Result<()> {
+        Ok(())
+    }
+    /// The devices that switched to key change `seq`.
+    fn key_acks(&self, _seq: u64) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
 
-    /// A token that changes whenever anything here is written, for
+    /// A token that changes whenever anything others need is written, for
     /// coordinators that keep one: an idle device checks it, one cheap
     /// request, instead of syncing. None: there's no such token, sync to
     /// find out.

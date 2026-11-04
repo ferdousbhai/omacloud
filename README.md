@@ -11,11 +11,11 @@ only ever holds what it can't read. Underneath it's plain restic, so you can
 always restore without Omacloud. [docs/design.md](docs/design.md) explains
 how it protects your data.
 
-Storage is the Omacloud network: other Omarchy computers hold your
-encrypted objects, and yours holds some of theirs. There are no accounts
-and no sign-in, only keys your computers make. The network is new, with
-one Omacloud seed and relay so far: [docs/design.md](docs/design.md) says
-what isn't done yet.
+Storage is an S3 bucket of your own: Cloudflare R2, Hetzner or any other
+provider with create-only writes ([docs/providers.md](docs/providers.md)).
+You pay your provider, if anything; Omacloud runs no storage and charges
+nothing. Your family and friends each get a bucket and an account of their
+own, which you can set up for them ([below](#family-and-friends)).
 
 ## Install
 
@@ -59,19 +59,26 @@ new versions until you install the signed repository.
 
 ## Set up
 
-On the first computer, in a terminal (or in the Omacloud app):
+First make a private bucket and a key that reaches it at your provider
+([docs/providers.md](docs/providers.md) has the steps). Then, on the first
+computer, in a terminal (or in the Omacloud app):
 
 ```sh
-omacloud init                          # creates the account on the network; shows the recovery code
+omacloud init --provider r2 --account <cloudflare account id> \
+  --bucket <name> --access-key-id <id>
+omacloud init --provider hetzner --location fsn1 --bucket <name> --access-key-id <id>
+omacloud init --provider s3 --endpoint <url> --bucket <name> --access-key-id <id>
 ```
 
-It shows your **recovery code** once: write it down and keep it offline.
-With it you can add a computer when no other is at hand and recover
-everything; without it and without a computer, nobody can.
+It asks for the key's secret (or takes it from `OMACLOUD_SECRET_ACCESS_KEY`),
+checks that the bucket can hold an account, and shows your **recovery code**
+once: write it down and keep it offline. With it you can add a computer when
+no other is at hand and recover everything; without it and without a
+computer, nobody can.
 
 To add another computer, run `omacloud join-code` on one that's set up (or
-the app) and give the code to the new one privately: it
-opens your account's records, though not your files. On the new computer,
+the app) and give the code to the new one privately: it holds your
+bucket's key, though it can't open your files. On the new computer,
 with the code in `OMACLOUD_JOIN_CODE` (or in the app):
 
 ```sh
@@ -80,35 +87,39 @@ omacloud init                          # asks to join, and shows this computer's
 omacloud devices approve <fingerprint> # on a computer already in, after comparing fingerprints
 ```
 
-With no other computer at hand, the recovery code alone gets a computer in,
-without approval: `omacloud init` with it in `OMACLOUD_RECOVERY_CODE`.
+With no other computer at hand, the recovery code gets a computer in without
+approval: `omacloud init` with your bucket's details as above and the code in
+`OMACLOUD_RECOVERY_CODE`.
 
-Secrets never go on the command line: the recovery code and the join code
-come from `OMACLOUD_RECOVERY_CODE` and `OMACLOUD_JOIN_CODE`, which `read -rs`
-fills without echo or shell history.
+Secrets never go on the command line: the recovery code, the join code and
+the key's secret come from `OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE` and
+`OMACLOUD_SECRET_ACCESS_KEY`, which `read -rs` fills without echo or shell
+history.
 
-`OMACLOUD_NETWORK` picks another network than omacloud.computer's;
-`OMACLOUD_NETWORK=dir:<path>` keeps the Worker's part in a directory, for
-development. Without the network, `omacloud init --repo <path>
---coordinator <directory>` keeps the repository and the records that keep
-computers in step in two directories you share yourself, also for
-development.
+Without a bucket, `omacloud init --repo <path> --coordinator <directory>`
+keeps the repository and the records that keep computers in step in two
+directories you share yourself, for development.
 
-## Giving space
+## Family and friends
 
-While the daemon (`omacloud watch`) runs, your computer gives 20 GiB to
-the network: it keeps other accounts' encrypted objects, never knowing
-whose, and earns the credits that pay for keeping yours. `omacloud node
-give 50G` changes the amount (`0` gives none), and a running daemon
-restarts into it; `omacloud node status` shows it. Every few hours the
-daemon also checks that your copies are still held, pays to keep them, and
-makes new ones where a holder failed or left. `omacloud node status` (and
-Storage in the app) then shows how much your account stores, what keeping
-it costs a month in credits, the credits you hold, and about how many
-months they pay for at that size.
+Each person gets an account of their own, in a bucket of their own, and
+you can do the setting up. Sharing one account wouldn't do: every computer
+of an account reads all its files and Wi-Fi keys. Separate buckets and keys
+also mean a computer that's lost or infected can't reach anyone else's backups.
 
-`omacloud node run` runs a node with no account of its own, as Omacloud's
-seed nodes do; `contrib/seed-setup.sh` sets up such a server, with a relay.
+1. At your provider, make a bucket for them and a key limited to it.
+2. Run `omacloud invite` with that bucket, as for `init` above. It checks the
+   bucket and prints a code; pass it privately.
+3. They run `omacloud init` with the code in `OMACLOUD_JOIN_CODE`, or paste it
+   into the app. They get a recovery code only they hold.
+
+You pay for their storage, and neither of you can read the other's files. A
+recovery code you keep for them is the one thing that would change that, so
+let them keep it, or split it (below). Using the same invite again on another
+of their computers asks to join their account, as a join code does.
+
+On Hetzner, a key reaches every bucket of its project, so give each person a
+project of their own ([docs/providers.md](docs/providers.md)).
 
 ## What syncs
 
@@ -188,52 +199,36 @@ omacloud secrets restore --from laptop --yes  # ssh and gpg keys: asks for the r
 
 Earlier versions and deleted files stay for 30 days, the least of what
 iCloud, Dropbox and Google Drive keep, which keeps what your account
-stores (and spends credits on) small: `omacloud versions notes.md` lists
+stores small: `omacloud versions notes.md` lists
 a file's versions, and `omacloud restore notes.md --at 3` writes version 3
 beside you as `notes.md.v3` (`--to` elsewhere, the file itself included). `omacloud deleted`
 lists the files deleted in the last 30 days with the
 version to restore, and the app's Recently Deleted, under Overview, puts
 one back where it was.
 
-Leaving needs nothing from Omacloud but a copy: `omacloud export --to
-<folder>` copies the repository to a folder and prints its password and
-the restic command, so plain restic or rustic restores everything without
-Omacloud. `omacloud gateway` instead serves the repository on the network
-as S3 on this computer, while it runs, and prints the restic command that
-reads it.
-
-## Sharing a file
-
-`omacloud share photo.jpg` prints a link. Whoever has it can download the
-file for 7 days (`--days` up to 365: past the first week, this computer's
-daemon keeps it, paying from its credits, so it needs to run now and
-then), on any Omarchy computer with Omacloud, with no account:
-they run `omacloud receive` and paste the link (or put it in
-`OMACLOUD_LINK`). The file is encrypted with a key that lives only in the
-link, after the `#`, which browsers never send: opened in a browser, the
-link shows how to get the file, and omacloud.computer can't read it. A
-share holds up to 127 MiB. `omacloud share --copy` puts the link on the
-clipboard instead of printing it, and so does Share a File in the app's
-Overview. `omacloud unshare`, given the link the same way, takes it back
-before it expires: it opens nothing from then on. `omacloud shares` lists
-what this computer shared and until when. Anyone holding the link
-can do that, as anyone holding it can download the file.
-
-## If omacloud.computer goes away
-
-Each computer keeps its own sealed copy of the account's records and of
-where its files are, and reads from it while omacloud.computer is out of
-reach. If the site loses them, the daemon puts this copy back as soon as
-it notices; `omacloud republish` does the same by hand, against
-omacloud.computer or another network's Worker.
+Leaving needs nothing from Omacloud: `omacloud export` prints the command that
+has plain restic or rustic restore everything from your bucket, with its key
+and the repository's password, and `omacloud export --to <folder>` copies the
+repository to a folder first.
 
 ## A lost computer
 
 Remove it under Devices (or `omacloud devices revoke <fingerprint>`, which
 asks first; `--yes` where nobody can be asked). It can't sync anymore, but
-it still holds the repository key it had: `omacloud rotate --yes` (or
-`devices revoke --rotate`) moves everything to a new encryption key that
-only the remaining computers get, so it can't read anything written after.
+it still holds your bucket's key and the repository key it had:
+
+1. `omacloud rotate --yes` (or `devices revoke --rotate`) moves everything to a
+   new encryption key that only the remaining computers get, so it can't read
+   anything written after.
+2. Make a new key at your provider, and run `omacloud bucket set-key
+   --access-key-id <id>`. It reaches the other computers sealed to them.
+3. When `omacloud bucket status` says every computer switched, delete the old
+   key at your provider. The removed computer can't reach the bucket from then
+   on.
+
+Until that last step it could still delete objects from the bucket, as any
+computer with the key can: [docs/providers.md](docs/providers.md#delete-protection)
+says how to make that harmless.
 
 ## Keeping the recovery code
 
@@ -263,7 +258,7 @@ Every command prints text on a terminal and a JSON envelope when piped:
 when it fails (text mode: `error:` and `hint:` lines on stderr). `--json`
 forces the envelope, `--styled` text, `--quiet` prints only `data`,
 `--ids-only` one id per line (device fingerprints, version numbers, deleted
-paths, share names, folder, package and secrets device names) and `--count` the number of results; given
+paths, folder, package and secrets device names) and `--count` the number of results; given
 together, ids-only wins over count, count over quiet, quiet over json, json
 over styled.
 
@@ -276,21 +271,20 @@ omacloud devices --ids-only
 |---|---|
 | 0 | done |
 | 1 | anything else failed |
-| 2 | invalid usage or request: a destructive command (`devices revoke`, `rotate`, `restore` over a file) without `--yes` where nobody can be asked, a secret asked for where no terminal shows it, an ambiguous fingerprint, already set up |
-| 3 | not set up (or set up on storage Omacloud no longer uses), not approved, settings sync off, or a key, recovery code, join code or shares refused |
+| 2 | invalid usage or request: a bucket that can't hold an account, a destructive command (`devices revoke`, `rotate`, `restore` over a file) without `--yes` where nobody can be asked, a secret asked for where no terminal shows it, an ambiguous fingerprint, already set up |
+| 3 | not set up (or set up on storage Omacloud no longer uses), not approved, settings sync off, or a bucket key, recovery code, join code or shares refused |
 | 4 | not found: a device, a version, a package list, a secrets bundle |
 | 5 | out of reach: the storage, the network, or (for `restore-machine`, alongside its result) systemd |
 
 Commands only ask (a secret, a confirmation) in text mode with stdin and
 stdout on a terminal; elsewhere secrets come from the `OMACLOUD_*`
-environment variables (`OMACLOUD_LINK` for `receive`) and confirmations
+environment variables and confirmations
 from `--yes`.
 
 What prints a secret prints it only to your terminal, in text mode with
 stdin and stdout on it, and refuses (exit 2) as JSON or into a pipe: `init`
-when it creates an account (the recovery code), `join-code`, `export`,
-`gateway`, `share` (the link), and
-`recovery split` and `combine`
+when it creates an account (the recovery code), `join-code`, `invite`, `export`,
+and `recovery split` and `combine`
 (`combine` reads its shares from stdin, so only its stdout must be a
 terminal). Joining with a join code or the recovery code prints no secret
 and works anywhere. This guards against accidents, such as a secret landing
@@ -300,26 +294,26 @@ that gives a command a whole terminal (see docs/design.md).
 `omacloud watch`, which the systemd unit runs, keeps its own exit codes: 2
 when this computer was removed, the account can't be verified, or the
 computer was set up on storage Omacloud no longer uses (the unit doesn't
-restart into that), 75 after an upgrade or a change to settings sync or
-the space given (it restarts into that), 1 for anything else.
+restart into that), 75 after an upgrade, a change to settings sync or a new bucket key (it
+restarts into that), 1 for anything else.
 
 ## Configuration
 
 ```toml
-# ~/.config/omacloud/config.toml (written by `omacloud init`)
+# ~/.config/omacloud/config.toml (written by `omacloud init`, readable by you
+# alone: it holds your bucket's key)
 [limits]
 # bandwidth = "5MiB"          # per second, if you set one; see below
 # connections = 4             # parallel requests to the storage, if set
 pause_on_battery_below = 20   # percent while discharging; 0 never pauses
 
-[network]
-url = "https://omacloud.computer"  # the network's Worker
-give = 21474836480            # bytes given to others (`omacloud node give`)
-relays = ["https://relay1.omacloud.computer"]  # for computers behind routers; other networks start with none
+[repo]                        # where the files are, with the bucket's key
+repository = "opendal:s3"
 ```
 
 `notifications = false` turns off the desktop notifications (a computer
-asking to join, a setting that needs a choice, this computer removed).
+asking to join, a setting that needs a choice, this computer removed, your
+storage refusing its key).
 
 Ignore rules use gitignore syntax, from three places: built-in defaults
 (editor swap files, desktop junk), `~/.config/omacloud/ignore` for this
@@ -337,14 +331,13 @@ everyday edits.
 
 | path | what |
 |---|---|
-| `crates/omacloud-core` | sync engine (`sync.rs`), settings (`settings.rs`; Chromium and Wi-Fi as merged documents: `merged.rs`, `chromium/`, `wifi.rs`), signed heads (`head.rs`), device chain (`devices.rs`, `account.rs`), repository keys and rotation (`epoch.rs`), secrets bundle (`secrets.rs`), Shamir split (`shamir.rs`) |
-| `crates/omacloud-net` | the Omacloud network: storage nodes, the bucket over them as S3 on loopback, sealed index and coordination, credits, upkeep |
+| `crates/omacloud-core` | sync engine (`sync.rs`), coordination in the bucket and its key (`bucket.rs`, `bucket_key.rs`), settings (`settings.rs`; Chromium and Wi-Fi as merged documents: `merged.rs`, `chromium/`, `wifi.rs`), signed heads (`head.rs`), device chain (`devices.rs`, `account.rs`), repository keys and rotation (`epoch.rs`), secrets bundle (`secrets.rs`), Shamir split (`shamir.rs`) |
 | `crates/omacloud` | CLI and `watch` daemon |
 | `crates/omacloud-app` | the Omacloud app (GTK4, libadwaita), driving the CLI |
 | `vendor/rustic_core` | rustic_core 0.13 plus pack padding and `splice_tree` (upstream PRs in `vendor/upstream-patches`) |
-| `scripts/` | end to end checks (the network on one machine, upstream restic; see CONTRIBUTING.md) and the release scripts |
-| `server/` | the Cloudflare Worker behind omacloud.computer: the public pages and the network's API (see its README and [docs/network-api.md](docs/network-api.md)) |
-| `contrib/` | the systemd user unit, the desktop entry, and `seed-setup.sh` for a seed server |
+| `scripts/` | end to end checks (an account in a bucket, upstream restic; see CONTRIBUTING.md) and the release scripts |
+| `server/` | the Cloudflare Worker behind omacloud.computer: the public pages (see its README) |
+| `contrib/` | the systemd user unit and the desktop entry |
 | `pkgbuild/PKGBUILD` | Arch package, built from the committed checkout |
 | `install.sh` | the installer each release ships |
 

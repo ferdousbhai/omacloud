@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- **Storage is a bucket of your own again; the Omacloud network is gone.** The
+  network had too few computers to keep a backup safely, and a household on one
+  connection counted as one place. `omacloud init` now takes `--provider r2`,
+  `hetzner` or `s3`, and checks that the bucket can hold an account.
+- `omacloud invite` starts someone else's own account in a bucket you made for
+  them: family and friends, each with a recovery code only they hold.
+- `omacloud bucket set-key` and `bucket status`, to cut off a lost computer.
+- `omacloud export` prints the restic command that restores from the bucket.
+- Removed with the network: `node`, `gateway`, `republish`, credits, and share links
+  (`share`, `shares`, `unshare`, `receive`).
+- A computer on the network says so and asks to be set up again: `omacloud init`
+  with a bucket keeps the old config aside, deletes what the network left on the
+  computer (others' encrypted blobs, up to the space it gave, and its keys for the
+  network), and uploads the files that are on the computer. Version history isn't carried over. To keep it, run `omacloud export
+  --to <folder>` with 0.0.22 before upgrading.
+
 ## 0.0.22 (2026-10-30)
 
 - The installer keeps omacloud's pacman repository through Omarchy's ARM

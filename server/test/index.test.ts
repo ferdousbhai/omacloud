@@ -8,13 +8,13 @@ const get = (path: string, method = "GET") =>
 	worker.fetch(new Request(`https://omacloud.computer${path}`, { method }) as never, env);
 
 test("the pages are served, and nothing else", async () => {
-	for (const path of ["/", "/privacy", "/terms", "/llms.txt", "/s", "/health"]) assert.equal((await get(path)).status, 200, path);
-	assert.equal((await get("/signin")).status, 404);
+	for (const path of ["/", "/privacy", "/terms", "/llms.txt", "/health"]) assert.equal((await get(path)).status, 200, path);
+	for (const gone of ["/signin", "/s", "/api/net/nodes"]) assert.equal((await get(gone)).status, 404, gone);
 	assert.equal((await get("/", "POST")).status, 404);
 });
 
 test("the HTML pages, and only they, carry the security headers", async () => {
-	for (const path of ["/", "/privacy", "/terms", "/s"]) {
+	for (const path of ["/", "/privacy", "/terms"]) {
 		const r = await get(path);
 		assert.equal(r.headers.get("x-frame-options"), "DENY", path);
 		assert.equal(r.headers.get("referrer-policy"), "no-referrer", path);
@@ -30,8 +30,8 @@ test("/install.sh sends to the latest release's installer", async () => {
 });
 
 test("no page mentions what was dropped", async () => {
-	for (const path of ["/", "/privacy", "/terms", "/llms.txt", "/s"]) {
+	for (const path of ["/", "/privacy", "/terms", "/llms.txt"]) {
 		const text = await (await get(path)).text();
-		assert.doesNotMatch(text, /google|waitlist|invit|dropbox|hetzner|\bR2\b|bucket|quota|turnstile/i, path);
+		assert.doesNotMatch(text, /google|waitlist|dropbox|quota|turnstile|credit|holder|storage network|omacloud share|gateway/i, path);
 	}
 });

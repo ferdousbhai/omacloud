@@ -21,36 +21,34 @@ libadwaita-1-dev`). After changing `server/`, run `npm run check` there
 
 ## Storage backend features
 
-Builds include one OpenDAL service, S3: it is how the sync engine reaches
-the Omacloud network, through the gateway each run serves on loopback.
-Local repository paths (development and tests) need none. Other OpenDAL
+Builds include one OpenDAL service, S3, for buckets; the coordinator's tests add
+its filesystem service as a dev-dependency. Local repository paths (development and tests) need none. Other OpenDAL
 providers, REST and rclone are left out, to keep their protocol stacks out
 of the build; the manifest-only patch that allows it is documented in
 `vendor/rustic_backend/OMACLOUD.md`.
 
-## The network in development
+## Buckets in development
 
-`crates/omacloud-net` is the network: storage nodes, the bucket over them
-and its S3 gateway, the sealed index and coordination, credits and upkeep.
-`OMACLOUD_NETWORK=dir:<path>` keeps the Worker's part (node directory,
-index, coordination records) in a directory instead of at omacloud.computer,
-with the same rules, so a whole network runs on one machine with no
-server; storage isn't paid for there. Run seeds with `omacloud node run
---give 1G` and computers with `omacloud init`, each with its own
-`--config`. `scripts/network.sh`, which `bin/check` runs, does exactly
-that: three seed nodes and three computers, from `init` through a join
-code and approval, recovery with the recovery code, a key rotation,
-`export --to`, shares (copied, kept longer, listed, taken back) and the
-Worker losing the account's records and getting them back, then checks
-the Worker's part holds nothing readable.
-`crates/omacloud-net/tests/` cover nodes, the bucket through an S3 client,
-upkeep's repairs, and restic syncing through the network across a
-rotation. `docs/network-api.md` is the Worker's API.
+`scripts/s3-sync.sh [path/to/omacloud]`, which `bin/check` runs, takes accounts
+through everything in a bucket: two computers converging, a rotation, an invite,
+a second bucket for records, and a lost computer cut off by a key change. It runs
+on `scripts/fake-s3.py`, a stand-in that needs nothing installed and enforces
+create-only writes and retired keys, but checks no signatures: it proves how
+Omacloud uses S3, not that a provider accepts it. To prove a provider, give it one:
+
+```sh
+S3_ENDPOINT=... S3_KEY=... S3_SECRET=... S3_KEY2=... S3_SECRET2=... \
+S3_BUCKET=... S3_BUCKET2=... S3_BUCKET3=... S3_BUCKET4=... scripts/s3-sync.sh
+```
+
+The buckets must be empty. `crates/omacloud-core/tests/bucket.rs` runs the
+coordinator on OpenDAL's filesystem service.
 
 ## End to end scripts
 
-- `scripts/network.sh [path/to/omacloud]` (above) needs only a built CLI;
-  with restic on PATH it also restores the exported copy.
+- `scripts/s3-sync.sh [path/to/omacloud]` (above) needs only a built CLI and
+  python3; with restic on PATH it also restores from the bucket with plain
+  restic, using what `export` prints.
 - `scripts/restic-compat.sh` needs restic on PATH; a wrapper around the
   `restic/restic` image with paths mounted 1:1 works.
 - Where `/tmp` is small, put `CARGO_TARGET_DIR` under `~/.cache`.
@@ -67,7 +65,7 @@ a test account and a local build.
 ## Secrets
 
 Secrets never go on a command line, where other processes can read them:
-`OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE` and `OMACLOUD_LINK` come
+`OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE` and `OMACLOUD_SECRET_ACCESS_KEY` come
 from the environment, or a prompt that doesn't echo.
 
 ## Shell hygiene

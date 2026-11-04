@@ -42,35 +42,38 @@ current. Consult `omacloud <command> --help`.
 
 ## Setup (only when requested)
 
-Storage is the Omacloud network: other Omarchy computers hold the encrypted
-objects. Agree on device name, folders, and whether to sync settings first.
+Storage is an S3 bucket of the owner's: Cloudflare R2, Hetzner or any other with
+create-only writes (https://github.com/ferdousbhai/omacloud/blob/master/docs/providers.md). Agree on device name, folders, and whether
+to sync settings first.
 
-- New account: the owner runs `omacloud init` in their own terminal; it shows
-  the recovery code once.
+- New account: the owner makes a private bucket and a key at their provider, then
+  runs `omacloud init --provider r2 --account <id> --bucket <name> --access-key-id
+  <id>` (or `hetzner --location fsn1`, or `s3 --endpoint <url>`) in their own
+  terminal; it asks for the secret and shows the recovery code once.
 - Another computer: the owner runs `omacloud join-code` on a computer already
   in; the new one runs `omacloud init` with the code in `OMACLOUD_JOIN_CODE`
   and asks to join; the owner approves with `omacloud devices approve
-  <fingerprint>` after comparing fingerprints. With `OMACLOUD_RECOVERY_CODE`
-  instead, `init` gets in without approval.
-- `OMACLOUD_NETWORK` picks the network (default omacloud.computer);
-  `OMACLOUD_NETWORK=dir:<path>` keeps a whole network in a directory, and
-  `init --repo <path> --coordinator <directory>` uses plain directories:
-  both for development and tests only. Point test accounts at
-  `OMACLOUD_CONFIG`, never the owner's real `~/.config/omacloud`.
+  <fingerprint>` after comparing fingerprints. With the bucket's details and
+  `OMACLOUD_RECOVERY_CODE` instead, `init` gets in without approval.
+- Someone else (family, a friend): the owner makes them a bucket and key, and
+  runs `omacloud invite` with those details; the person runs `omacloud init` with
+  the code in `OMACLOUD_JOIN_CODE`, and gets an account and recovery code of their
+  own. Never put two people on one account: its computers read all of it.
+- `init --repo <path> --coordinator <directory>` uses plain directories, for
+  development and tests only. Point test accounts at `OMACLOUD_CONFIG`, never
+  the owner's real `~/.config/omacloud`.
 
-While `omacloud watch` runs, the computer gives disk space to the network
-(20G by default). `omacloud node status` shows it; `omacloud node give
-<size>` changes it (0 gives none; a running daemon restarts into it), only
-with the owner's say. `omacloud node run` runs a node with no account; don't start it
-unasked.
+Removing a lost computer also takes changing the bucket's key: `devices revoke
+--rotate`, a new key at the provider, `bucket set-key`, then deleting the old key
+once `bucket status` says every computer switched. Each step needs the owner.
 
 The owner must retain the recovery code privately. Commands that print a
-secret (`init` creating an account, `join-code`, `export`, `gateway`,
-`share` printing its link, `recovery split|combine`) refuse with `terminal_required`
+secret (`init` creating an account, `join-code`, `invite`, `export`,
+`recovery split|combine`) refuse with `terminal_required`
 off a terminal: have the owner run them in their own terminal. Never work
 around that refusal (no pseudo-terminals, no `script`), and never run them
 yourself, even where your shell has a terminal and nothing refuses. Joining with a join code or recovery code prints none.
-Never put recovery codes, join codes, or passwords in chat or shell
+Never put recovery codes, join codes, bucket keys, or passwords in chat or shell
 arguments. The CLI accepts no-echo prompts or documented `OMACLOUD_*` environment
 variables; prefer the owner's terminal for those flows.
 
@@ -84,7 +87,6 @@ omacloud sync
 omacloud versions 'notes.md'
 omacloud deleted                # deleted lately, with the version to restore
 omacloud mount                  # every file read-only in ~/Omacloud, fetched on open; runs until Ctrl-C
-omacloud share --copy 'photo.jpg'  # a link on the clipboard that opens the file for 7 days (--days up to 365; `unshare` takes it back)
 omacloud restore 'notes.md' --at 3 --to './notes-restored.md'
 ```
 
@@ -104,10 +106,9 @@ or settle conflicts without the owner's requested scope; never blindly prefer
 remote settings. Follow the applicable desktop configuration skill when editing
 Omarchy config directly.
 
-Leaving: `omacloud export --to <folder>` copies the repository to a folder
-plain restic reads and prints its password; `omacloud gateway` serves the
-network as S3 on loopback until stopped. Both print a secret: the owner runs
-them.
+Leaving: `omacloud export` prints the plain restic command that restores from the
+bucket, with its key and the repository password; `--to <folder>` copies the
+repository to a folder first. It prints secrets: the owner runs it.
 
 Machine migration: `packages restore --from NAME` previews package installation;
 `--yes` runs pacman. `restore-machine --from NAME` is broader: settings, files,

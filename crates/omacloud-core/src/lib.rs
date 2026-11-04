@@ -8,6 +8,8 @@
 pub mod account;
 pub mod agents;
 pub mod browse;
+pub mod bucket;
+pub mod bucket_key;
 pub mod chromium;
 pub mod devices;
 pub mod epoch;
@@ -22,6 +24,7 @@ pub mod sync;
 pub mod throttle;
 pub mod wifi;
 
+pub use bucket::BucketCoordinator;
 pub use devices::{Anchor, DeviceChain, DeviceError, JoinRequest, fingerprint};
 pub use head::{Coordinator, DirCoordinator, Head, HeadError, HeadTracker};
 pub use ignore::Ignores;
@@ -32,6 +35,6 @@ pub const VERSIONS_KEPT: std::time::Duration = std::time::Duration::from_secs(30
 pub use repo::RepoSpec;
 pub use rustic_core::{jiff, repofile::MasterKey};
 pub use sync::{
-    Deleted, Engine, Folders, Membership, PACKAGES, Rotated, SECRETS, SettingsSetup, SettingsStatus, Setup, State,
-    Stats, Version,
+    Deleted, Engine, Folders, KeyChange, Membership, PACKAGES, Rotated, SECRETS, SettingsSetup, SettingsStatus, Setup,
+    State, Stats, Version,
 };

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/omacloud-core", "crates/omacloud-net", "crates/omacloud", "crates/omacloud-app"]
+members = ["crates/omacloud-core", "crates/omacloud", "crates/omacloud-app"]
 
 [workspace.package]
 version = "0.0.22"
@@ -10,10 +10,9 @@ repository = "https://github.com/ferdousbhai/omacloud"
 
 [workspace.dependencies]
 omacloud-core = { path = "crates/omacloud-core" }
-omacloud-net = { path = "crates/omacloud-net" }
 rustic_core = "0.13"
 rustic_backend = { version = "0.7", default-features = false, features = ["opendal"] }
-opendal = { version = "0.58", default-features = false, features = ["blocking", "services-s3"] }
+opendal = { version = "0.58", default-features = false, features = ["blocking", "services-s3", "layers-retry"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread"] }
 anyhow = "1"
 thiserror = "2"
@@ -25,11 +24,9 @@ rand = "0.8"
 sha2 = "0.10"
 crypto_box = { version = "0.9", features = ["seal"] }
 hex = "0.4"
-base64 = "0.23"
 notify = "8"
 ignore = "0.4"
 libc = "0.2"
-rayon = "1"
 clap = { version = "4", features = ["derive", "env"] }
 log = "0.4"
 env_logger = "0.11"

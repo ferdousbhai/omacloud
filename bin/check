@@ -25,8 +25,8 @@ else
   echo "note: skipping the plain-restic restore (install restic to run it)" >&2
 fi
 
-step "the network, on this machine"
-scripts/network.sh target/debug/omacloud
+step "an account in a bucket"
+scripts/s3-sync.sh target/debug/omacloud
 
 step "server"
 (cd server && { [[ -d node_modules ]] || npm ci; } && npm run check)
@@ -34,7 +34,7 @@ step "server"
 step "packaging"
 # bash -n reads one script (the rest are its arguments), so one at a time
 for f in install.sh pkgbuild/PKGBUILD packaging/omarchy-pkgs/omacloud/PKGBUILD scripts/*.sh .githooks/pre-push \
-  contrib/seed-setup.sh server/deploy.sh server/backup.sh; do
+  server/deploy.sh; do
   bash -n "$f"
 done
 for t in scripts/tests/*.py; do python3 "$t"; done

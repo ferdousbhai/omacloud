@@ -187,9 +187,9 @@ fi
 
 cat <<EOT
 
-Done. Set up this computer on the Omacloud network with "Omacloud" in the
-app launcher (Super + Space), or in a terminal:
-omacloud init
+Done. Set up this computer with "Omacloud" in the app launcher (Super +
+Space), or in a terminal (you'll need a storage bucket of your own):
+omacloud init --help
 Updates arrive with the rest of the system through:
 omarchy update
 EOT

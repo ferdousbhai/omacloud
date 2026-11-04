@@ -15,8 +15,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail, ensure};
-use crypto_box::{PublicKey, SecretKey, aead::OsRng};
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use ed25519_dalek::SigningKey;
+
+use crate::devices::{open_with, seal_to};
 
 /// What a bundle holds unless `~/.config/omacloud/secrets` lists otherwise.
 pub const DEFAULT_PATHS: &[&str] = &[
@@ -160,13 +161,7 @@ fn decode(bytes: &[u8]) -> Result<Vec<Entry>> {
 ///
 /// If `root` isn't a valid public key.
 pub fn seal(root: &str, entries: &[Entry]) -> Result<Vec<u8>> {
-    let bytes: [u8; 32] = hex::decode(root)?
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("not a 32 byte key"))?;
-    let x25519 = VerifyingKey::from_bytes(&bytes)?.to_montgomery().to_bytes();
-    PublicKey::from(x25519)
-        .seal(&mut OsRng, &encode(entries))
-        .map_err(|_| anyhow::anyhow!("sealing failed"))
+    seal_to(root, &encode(entries))
 }
 
 /// Open a bundle with the root key (from the recovery code).
@@ -175,9 +170,8 @@ pub fn seal(root: &str, entries: &[Entry]) -> Result<Vec<u8>> {
 ///
 /// If the bundle wasn't sealed to this root, or was tampered with.
 pub fn open(root_key: &SigningKey, sealed: &[u8]) -> Result<Vec<Entry>> {
-    let plain = SecretKey::from(root_key.to_scalar_bytes())
-        .unseal(sealed)
-        .map_err(|_| anyhow::anyhow!("that recovery code doesn't open this bundle"))?;
+    let plain =
+        open_with(root_key, sealed).ok_or_else(|| anyhow::anyhow!("that recovery code doesn't open this bundle"))?;
     decode(&plain)
 }
 

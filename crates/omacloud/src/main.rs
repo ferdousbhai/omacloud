@@ -17,7 +17,6 @@ mod agent_skill;
 mod alerts;
 mod fail;
 mod mount;
-mod net;
 mod output;
 mod power;
 
@@ -26,9 +25,11 @@ use clap::{Parser, Subcommand};
 use log::{info, warn};
 use notify::{RecursiveMode, Watcher};
 use omacloud_core::{
-    Coordinator, DirCoordinator, Engine, Membership, RepoSpec, SettingsSetup, Setup, account,
+    BucketCoordinator, Coordinator, DirCoordinator, Engine, KeyChange, Membership, RepoSpec, SettingsSetup, Setup,
+    account,
+    bucket::key_refused,
     devices::{fingerprint, public_hex},
-    head::load_or_create_key,
+    head::{load_or_create_key, write_private},
     settings::Manifest,
 };
 use serde::{Deserialize, Serialize};
@@ -62,13 +63,13 @@ const AFTER_HELP: &str = "\
 Output: text on a terminal, a JSON envelope {\"ok\":true,\"data\",\"summary\"} when
 piped. --json forces the envelope, --styled text, --quiet prints only the data,
 --ids-only one id per line (devices, versions, deleted, folders, packages,
-secrets, shares),
+secrets),
 --count the number of results; ids-only > count > quiet > json > styled. A
 failure is {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, or
 error:/hint: lines on stderr in text mode.
 
 Commands that print a secret (init when it creates an account, join-code,
-export, gateway, share, recovery split and combine) print only to a
+invite, export, recovery split and combine) print only to a
 terminal, in text mode, with stdin a terminal too (combine excepted: its shares
 may come on stdin).
 
@@ -77,8 +78,8 @@ command without --yes where nobody can be asked, a secret asked for where no
 terminal shows it, ambiguous, already set up); 3 not set up, not approved, or a
 key or code refused; 4 not found; 5 storage or network out of reach. `watch` (the daemon) exits 2 when this computer was
 removed, the account can't be verified or its storage is gone (sync stops until
-someone looks), and 75 after an upgrade or a change to settings sync or the
-space given (the unit restarts it into that).";
+someone looks), and 75 after an upgrade, a change to settings sync or a new bucket key (the unit
+restarts it into that).";
 
 #[derive(Parser)]
 #[command(
@@ -99,21 +100,24 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Set up this device: create the repository and account, or join them
-    /// with the code from `omacloud join-code` in OMACLOUD_JOIN_CODE (then
-    /// approved on a computer already in), or with the recovery code in
-    /// OMACLOUD_RECOVERY_CODE
+    /// Set up this device: create the account in your bucket (`--provider
+    /// ...`), or join one with the code from `omacloud join-code` or `omacloud
+    /// invite` in OMACLOUD_JOIN_CODE (joining is then approved on a computer
+    /// already in), or with the recovery code in OMACLOUD_RECOVERY_CODE and
+    /// the bucket's details
     Init {
         /// Sync this one folder, whole [default: Desktop, Documents and
         /// Pictures in home, as iCloud does; `omacloud folders` changes them]
         #[arg(long)]
         folder: Option<PathBuf>,
-        /// For development, without the network: where the files live, a
-        /// path (with --coordinator)
+        #[command(flatten)]
+        bucket: BucketArgs,
+        /// For development, without a bucket: where the files live, a path
+        /// (with --coordinator)
         #[arg(long)]
         repo: Option<String>,
-        /// For development, without the network: where computers keep in
-        /// step, a shared directory (with --repo)
+        /// For development, without a bucket: where computers keep in step,
+        /// a shared directory (with --repo)
         #[arg(long)]
         coordinator: Option<String>,
         /// Folders of home to sync on this computer, comma separated [default:
@@ -132,6 +136,19 @@ enum Cmd {
     /// Print a code another computer joins this account with (`omacloud
     /// init` with it in OMACLOUD_JOIN_CODE)
     JoinCode,
+    /// Print a code that starts someone else's own account, in a bucket you
+    /// made for them; they run `omacloud init` with it in OMACLOUD_JOIN_CODE,
+    /// and get a recovery code only they hold. Their key's secret comes from
+    /// OMACLOUD_SECRET_ACCESS_KEY, or is asked for
+    Invite {
+        #[command(flatten)]
+        bucket: BucketArgs,
+    },
+    /// Your bucket's key: change it, to cut off a lost or removed computer
+    Bucket {
+        #[command(subcommand)]
+        action: Option<BucketCmd>,
+    },
     /// Sync once and exit
     Sync,
     /// Keep the folder in sync until stopped
@@ -167,34 +184,6 @@ enum Cmd {
         /// An empty folder outside the synced ones [default: ~/Omacloud]
         dir: Option<PathBuf>,
     },
-    /// Share a file by link: whoever has the link can download it, for 7
-    /// days. It needs no account to open
-    Share {
-        /// The file to share (up to 127 MiB)
-        file: PathBuf,
-        /// Put the link on the clipboard (wl-copy) instead of printing it
-        #[arg(long)]
-        copy: bool,
-        /// Days the link works, up to 365; past 7, this computer's daemon
-        /// keeps the file, paying from its credits
-        #[arg(long, default_value_t = 7, value_parser = clap::value_parser!(u64).range(1..=365))]
-        days: u64,
-    },
-    /// List the files this computer shared, and until when
-    Shares,
-    /// Take back a share link before it expires; the link comes from
-    /// OMACLOUD_LINK, or is asked for
-    Unshare,
-    /// Download a file shared by link; the link comes from OMACLOUD_LINK, or
-    /// is asked for
-    Receive {
-        /// Folder to write it in [default: the current one]
-        #[arg(long)]
-        to: Option<PathBuf>,
-    },
-    /// Put this computer's copy of the account's records and index back on
-    /// the network's Worker, where it lost them (or on a new one)
-    Republish,
     /// Write a file as it was at a given version
     Restore {
         /// Path inside the synced folder
@@ -260,14 +249,6 @@ enum Cmd {
         #[arg(long)]
         to: Option<String>,
     },
-    /// The space this computer gives the Omacloud network
-    Node {
-        #[command(subcommand)]
-        action: Option<NodeCmd>,
-    },
-    /// Serve the account's repository on the network as S3 on this computer,
-    /// for plain restic, until stopped; prints how to reach it
-    Gateway,
     /// Print the agent skill (SKILL.md) built into omacloud, or install it
     /// for your coding agents
     Skill {
@@ -276,25 +257,143 @@ enum Cmd {
     },
 }
 
+/// Where a bucket is: a provider's shorthand, or any S3 endpoint.
+#[derive(clap::Args, Clone, Debug, Default)]
+struct BucketArgs {
+    /// Who keeps the bucket: `r2` (with --account), `hetzner` (with
+    /// --location) or `s3` (with --endpoint)
+    #[arg(long, value_enum)]
+    provider: Option<Provider>,
+    /// Cloudflare account id, from the R2 overview page
+    #[arg(long)]
+    account: Option<String>,
+    /// The R2 bucket is in the EU jurisdiction
+    #[arg(long)]
+    eu: bool,
+    /// Hetzner location: fsn1, nbg1 or hel1
+    #[arg(long)]
+    location: Option<String>,
+    /// S3 endpoint, such as https://s3.example.com
+    #[arg(long)]
+    endpoint: Option<String>,
+    /// S3 region [default: auto]
+    #[arg(long)]
+    region: Option<String>,
+    /// The bucket's name; make it private, at your provider, first
+    #[arg(long)]
+    bucket: Option<String>,
+    /// The key's id; its secret comes from OMACLOUD_SECRET_ACCESS_KEY, or is
+    /// asked for
+    #[arg(long)]
+    access_key_id: Option<String>,
+    /// A folder in the bucket, if not all of it
+    #[arg(long)]
+    root: Option<String>,
+    /// Keep the records that keep computers in step in this second bucket
+    /// (same endpoint and key). A bucket under a lock or object lock needs one:
+    /// the records change in place
+    #[arg(long)]
+    coordination_bucket: Option<String>,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum Provider {
+    R2,
+    Hetzner,
+    S3,
+}
+
+impl BucketArgs {
+    fn given(&self) -> bool {
+        self.provider.is_some() || self.bucket.is_some() || self.endpoint.is_some()
+    }
+
+    /// The repository these name, with all of its key but the secret: what's
+    /// missing is refused before anything is asked for.
+    fn repo(&self) -> Result<RepoSpec, CliError> {
+        let missing = |what: &str, flag: &str| fail::usage(format!("this provider needs {what}: {flag}"));
+        let provider = self.provider.ok_or_else(|| {
+            fail::usage("say where the files live").hint(
+                "give your bucket: `--provider r2 --account <id> --bucket <name> --access-key-id <id>` (or \
+                 `hetzner --location fsn1`, or `s3 --endpoint <url>`); to set up with a code, put it in \
+                 OMACLOUD_JOIN_CODE. The Omacloud app walks through the same.",
+            )
+        })?;
+        let (endpoint, region) = match provider {
+            Provider::R2 => {
+                let account = self
+                    .account
+                    .as_ref()
+                    .ok_or_else(|| missing("your account id", "--account"))?;
+                let eu = if self.eu { ".eu" } else { "" };
+                (
+                    format!("https://{account}{eu}.r2.cloudflarestorage.com"),
+                    "auto".to_string(),
+                )
+            }
+            Provider::Hetzner => {
+                let location = self
+                    .location
+                    .as_ref()
+                    .ok_or_else(|| missing("a location", "--location"))?;
+                (format!("https://{location}.your-objectstorage.com"), location.clone())
+            }
+            Provider::S3 => {
+                let endpoint = self
+                    .endpoint
+                    .as_ref()
+                    .ok_or_else(|| missing("an endpoint", "--endpoint"))?;
+                let region = self.region.clone().unwrap_or_else(|| "auto".to_string());
+                (endpoint.trim_end_matches('/').to_string(), region)
+            }
+        };
+        let bucket = self
+            .bucket
+            .clone()
+            .ok_or_else(|| fail::usage("give the bucket's name: --bucket").hint("make it private, at your provider"))?;
+        let key_id = self
+            .access_key_id
+            .clone()
+            .ok_or_else(|| fail::usage("give the key's id: --access-key-id"))?;
+        let mut options: BTreeMap<String, String> = [
+            ("endpoint", endpoint),
+            ("region", region),
+            ("bucket", bucket),
+            ("access_key_id", key_id),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        if let Some(root) = &self.root {
+            _ = options.insert("root".into(), root.clone());
+        }
+        Ok(RepoSpec {
+            repository: "opendal:s3".into(),
+            options,
+        })
+    }
+}
+
+/// A key's secret half, from the environment or a prompt.
+fn read_key_secret() -> Result<String> {
+    read_secret("OMACLOUD_SECRET_ACCESS_KEY", "secret access key")
+}
+
 #[derive(Subcommand)]
-enum NodeCmd {
-    /// Show what this computer gives and keeps for others
+enum BucketCmd {
+    /// Show the latest key change and which computers switched to it
     Status,
-    /// Give this much space (200G, 512M; 0 for none); a running daemon
-    /// restarts into it
-    Give { size: String },
-    /// Run only a node, no account: a computer that gives space and syncs
-    /// nothing of its own (a seed)
-    Run {
-        /// Space to give [default: as set with `node give`, or 20G]
+    /// Switch every computer to a new key. Make it at your provider first,
+    /// and keep the old one until `bucket status` says every computer
+    /// switched. The secret comes from OMACLOUD_SECRET_ACCESS_KEY, or is
+    /// asked for
+    SetKey {
+        /// The new key's id
         #[arg(long)]
-        give: Option<String>,
-        /// The network's Worker [default: OMACLOUD_NETWORK, or omacloud.computer]
+        access_key_id: String,
+        /// This computer only, when the old key no longer works here
         #[arg(long)]
-        network: Option<String>,
-        /// Relay server, repeatable
-        #[arg(long = "relay")]
-        relays: Vec<String>,
+        here_only: bool,
     },
 }
 
@@ -432,9 +531,11 @@ enum DevicesCmd {
 struct Config {
     device: String,
     folder: PathBuf,
-    /// `network` (the Omacloud network, see `network`), or the shared
-    /// directory computers keep in step through, for development
+    /// `bucket` (coordination beside the files, in `repo`'s bucket), or the
+    /// shared directory computers keep in step through, for development
     coordinator: String,
+    /// Where the files live; a bucket's key among its options, so this file
+    /// is readable by its owner only
     repo: RepoSpec,
     /// The account root public key (hex), pinned at setup
     root: String,
@@ -451,135 +552,21 @@ struct Config {
     /// of `folder`
     #[serde(default, skip_serializing_if = "Option::is_none")]
     folders: Option<FolderChoice>,
-    /// On the Omacloud network: how this computer reaches it, and what it
-    /// gives
+    /// With `coordinator = "bucket"`: a second bucket for the coordination,
+    /// at the same endpoint and with the same key
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    network: Option<NetConfig>,
+    coordination_bucket: Option<String>,
+    /// The last bucket key change this device switched to
+    #[serde(default)]
+    bucket_key_seq: u64,
 }
 
-impl Config {
-    /// How this computer reaches the network, if the account is on it.
-    fn net(&self) -> Option<&NetConfig> {
-        self.network.as_ref().filter(|_| self.coordinator == NETWORK)
-    }
+/// `coordinator = "bucket"`: coordination lives in the account's bucket,
+/// beside the files.
+const BUCKET: &str = "bucket";
 
-    fn require_net(&self) -> Result<&NetConfig, CliError> {
-        self.net()
-            .ok_or_else(|| fail::unsupported("this account isn't on the Omacloud network"))
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-struct NetConfig {
-    /// The network's Worker, or `dir:<path>` for a network on one machine
-    url: String,
-    /// Relay servers for reaching computers behind routers
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    relays: Vec<String>,
-    /// Bytes of this computer's disk kept for others; 0 gives none
-    #[serde(default = "default_give")]
-    give: u64,
-}
-
-/// What a computer gives unless told otherwise: 20 GiB.
-fn default_give() -> u64 {
-    20 << 30
-}
-
-/// `coordinator = "network"`: the account keeps in step on the Omacloud
-/// network.
-const NETWORK: &str = "network";
-
-/// The relays computers on Omacloud's own network use: Omacloud runs them
-/// on its seeds. A network elsewhere starts with none.
-fn default_relays(url: &str) -> Vec<String> {
-    if url == omacloud_net::worker::URL {
-        vec!["https://relay1.omacloud.computer".to_string()]
-    } else {
-        Vec::new()
-    }
-}
-
-/// Put `text` on the Wayland clipboard, through wl-copy's stdin.
-fn copy_to_clipboard(text: &str) -> Result<()> {
-    use std::io::Write as _;
-    let mut child = std::process::Command::new("wl-copy")
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            fail::unsupported(format!("wl-copy: {e}")).hint("install wl-clipboard, or share without --copy")
-        })?;
-    child
-        .stdin
-        .take()
-        .context("wl-copy's stdin")?
-        .write_all(text.as_bytes())?;
-    anyhow::ensure!(child.wait()?.success(), "wl-copy failed");
-    Ok(())
-}
-
-/// The network to share on (this account's, or the default) or to receive
-/// from (`url`, the link's).
-fn share_network(paths: &Paths, url: Option<String>) -> NetConfig {
-    let mine = load(paths).ok().and_then(|c| c.net().cloned());
-    match (url, mine) {
-        (None, Some(n)) => n,
-        (Some(url), Some(n)) if url == n.url => n,
-        (url, _) => {
-            let url = url.unwrap_or_else(network_url);
-            NetConfig {
-                relays: default_relays(&url),
-                url,
-                give: 0,
-            }
-        }
-    }
-}
-
-/// A share link, asked for: the network it's on, and its secret.
-fn share_link(paths: &Paths) -> Result<(NetConfig, String)> {
-    let link = read_secret("OMACLOUD_LINK", "share link")?;
-    let (url, secret) = omacloud_net::share::parse(&link).map_err(|e| fail::usage(format!("{e:#}")))?;
-    Ok((share_network(paths, Some(url)), secret))
-}
-
-/// The network's Worker, unless OMACLOUD_NETWORK says otherwise.
-fn network_url() -> String {
-    std::env::var("OMACLOUD_NETWORK").unwrap_or_else(|_| omacloud_net::worker::URL.to_string())
-}
-
-/// The network for this run, started the first time it's needed.
-static SESSION: OnceLock<omacloud_net::session::Session> = OnceLock::new();
-
-fn session(paths: &Paths, net: &NetConfig) -> Result<&'static omacloud_net::session::Session> {
-    if let Some(s) = SESSION.get() {
-        return Ok(s);
-    }
-    let own = omacloud_net::session::node_key(&paths.node_key())?.public();
-    let s = omacloud_net::session::Session::start(omacloud_net::session::Options {
-        url: net.url.clone(),
-        relays: net.relays.clone(),
-        copies: 2,
-        own: Some(*own.as_bytes()),
-        // what this computer reads and writes at the Worker, kept here too
-        mirror: Some(paths.data.join("mirror.db")),
-    })?;
-    Ok(SESSION.get_or_init(|| s))
-}
-
-/// The account's key for its records on the network: what the recovery
-/// code gives, and a join code carries.
-fn read_seed(paths: &Paths) -> Result<[u8; 32]> {
-    let text = fs::read_to_string(paths.seed()).with_context(|| format!("reading {}", paths.seed().display()))?;
-    hex::decode(text.trim())?
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("{} isn't an account key", paths.seed().display()))
-}
-
-fn write_seed(paths: &Paths, seed: &[u8; 32]) -> Result<()> {
-    fs::create_dir_all(&paths.data)?;
-    net::write_private(&paths.seed(), hex::encode(seed).as_bytes())
-}
+/// `coordinator` of a computer set up on the Omacloud network, which is gone.
+const OLD_NETWORK: &str = "network";
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 struct FolderChoice {
@@ -702,7 +689,7 @@ impl Default for Limits {
 
 impl Limits {
     /// Backend options that enforce these limits: `bandwidth` on any
-    /// backend, `connections` on bucket ones (the network's gateway).
+    /// backend, `connections` on bucket ones.
     fn apply(&self, repo: &mut RepoSpec) {
         if let Some(bw) = &self.bandwidth {
             // a token bucket around the backend (throttle.rs), which also
@@ -755,13 +742,6 @@ impl Paths {
     fn device_key(&self) -> PathBuf {
         self.data.join("device.key")
     }
-    /// This computer's node key: its identity as a holder.
-    fn node_key(&self) -> PathBuf {
-        self.data.join("node.key")
-    }
-    fn seed(&self) -> PathBuf {
-        self.data.join("account.seed")
-    }
     fn state(&self) -> PathBuf {
         self.data.join("state.json")
     }
@@ -791,37 +771,71 @@ fn read_config(paths: &Paths) -> Result<Config> {
     Ok(toml::from_str(&text)?)
 }
 
-/// What a config from before the network kept its files on, if it's one:
-/// own buckets, Dropbox and Omacloud storage are gone, so the computer
-/// needs setting up again.
+/// What a config kept its files on, if that's storage Omacloud dropped: the
+/// network, Dropbox and Omacloud storage. The computer needs setting up again.
 fn storage_gone(config: &Config) -> Option<&'static str> {
-    if config.coordinator == NETWORK || !config.repo.repository.starts_with("opendal:") {
-        return None;
+    if config.coordinator == OLD_NETWORK {
+        return Some("the Omacloud network");
     }
-    Some(if config.repo.repository == "opendal:dropbox" {
-        "Dropbox"
-    } else if config
+    if config.repo.repository == "opendal:dropbox" {
+        return Some("Dropbox");
+    }
+    if config
         .repo
         .options
         .get("endpoint")
         .is_some_and(|e| e.contains("omacloud.computer"))
     {
-        "Omacloud storage"
-    } else {
-        "its own S3 bucket"
-    })
+        return Some("Omacloud storage");
+    }
+    // before 0.0.18 a bucket's key was kept elsewhere
+    (config.coordinator == BUCKET && !config.repo.options.contains_key("access_key_id"))
+        .then_some("a bucket set up by an older version")
 }
 
-/// Before setting up again over a config from before the network: keep it
-/// and its sync state aside, under `.before-network`. True if there was one.
+/// What a computer on the network kept in its data directory: others' blobs
+/// and its own keys and records for a network that's gone.
+const OLD_NETWORK_FILES: &[&str] = &[
+    "node",
+    "node.key",
+    "account.seed",
+    "wallet.json",
+    "mirror.db",
+    "mirror.db-wal",
+    "mirror.db-shm",
+    "shares.json",
+    "holders.json",
+    "suspects.json",
+    "space.json",
+    "renewed",
+];
+
+/// Before setting up again over a config on storage that's gone: keep it and
+/// its sync state aside, under `.before-bucket`, and drop what the network left
+/// here. True if there was one.
 fn set_aside_old_setup(paths: &Paths) -> Result<bool> {
-    if !read_config(paths).is_ok_and(|c| storage_gone(&c).is_some()) {
+    let Some(old) = read_config(paths).ok().filter(|c| storage_gone(c).is_some()) else {
         return Ok(false);
+    };
+    if old.coordinator == OLD_NETWORK {
+        for name in OLD_NETWORK_FILES {
+            let path = paths.data.join(name);
+            let gone = if path.is_dir() {
+                fs::remove_dir_all(&path)
+            } else {
+                fs::remove_file(&path)
+            };
+            if let Err(e) = gone
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(e).with_context(|| format!("removing {}", path.display()));
+            }
+        }
     }
     for path in [&paths.config, &paths.state()] {
         if path.exists() {
             let mut aside = path.clone().into_os_string();
-            aside.push(".before-network");
+            aside.push(".before-bucket");
             fs::rename(path, aside)?;
         }
     }
@@ -832,84 +846,89 @@ fn save(paths: &Paths, config: &Config) -> Result<()> {
     if let Some(dir) = paths.config.parent() {
         fs::create_dir_all(dir)?;
     }
-    net::write_private(&paths.config, toml::to_string_pretty(config)?.as_bytes())
+    write_private(&paths.config, toml::to_string_pretty(config)?.as_bytes())
 }
 
-/// Where `config`'s computers keep in step.
-fn coordinator(paths: &Paths, config: &Config) -> Result<Arc<dyn Coordinator>> {
-    Ok(match network_coordinator(paths, config)? {
-        Some(c) => c,
-        None => Arc::new(DirCoordinator::new(&config.coordinator)?),
+/// Where `config`'s computers keep in step: its bucket, or a shared
+/// directory.
+fn coordinator(config: &Config) -> Result<Arc<dyn Coordinator>> {
+    Ok(if config.coordinator == BUCKET {
+        Arc::new(BucketCoordinator::beside(
+            &config.repo,
+            config.coordination_bucket.as_deref(),
+        )?)
+    } else {
+        Arc::new(DirCoordinator::new(&config.coordinator)?)
     })
 }
 
-fn network_coordinator(paths: &Paths, config: &Config) -> Result<Option<Arc<omacloud_net::coord::NetworkCoordinator>>> {
-    let Some(net) = config.net() else {
-        return Ok(None);
+/// Whether a key just given reaches the storage, and it can hold an account.
+fn check_bucket(coord: &dyn Coordinator) -> Result<()> {
+    coord.check().map_err(given_key_refused)
+}
+
+/// The account at a key just given.
+fn anchor_of(coord: &dyn Coordinator) -> Result<Option<omacloud_core::Anchor>> {
+    coord.anchor().map_err(given_key_refused)
+}
+
+/// The storage's refusal said in terms of the key just given; anything else
+/// as it is.
+fn given_key_refused(e: anyhow::Error) -> anyhow::Error {
+    if key_refused(&e) {
+        fail::key_refused(format!("the storage refused this key: {e:#}")).into()
+    } else {
+        e
+    }
+}
+
+/// What a join code carries: where the account is, and the key to reach it.
+/// With no `account` it's an invite: the first to use it creates the account.
+#[derive(Serialize, Deserialize)]
+struct JoinCode {
+    repo: RepoSpec,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    coordination_bucket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    account: Option<String>,
+}
+
+impl JoinCode {
+    const PREFIX: &str = "omacloud-join-";
+
+    fn encode(&self) -> Result<String> {
+        Ok(format!("{}{}", Self::PREFIX, hex::encode(serde_json::to_vec(self)?)))
+    }
+
+    fn parse(code: &str) -> Option<Self> {
+        let bytes = hex::decode(code.trim().strip_prefix(Self::PREFIX)?).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+}
+
+/// Switch this device to a newer bucket key, if one was published. A daemon
+/// sees the saved config and restarts into it.
+fn follow_bucket_key(paths: &Paths, e: &mut Engine) -> Result<()> {
+    let mut config = load(paths)?;
+    let seq = match e.key_change_since(config.bucket_key_seq)? {
+        KeyChange::None => return Ok(()),
+        KeyChange::CaughtUp(seq) => seq,
+        KeyChange::Switch(seq, key) => {
+            config.repo.set_key(&key);
+            info!("switched to bucket key {seq}");
+            seq
+        }
     };
-    let account = omacloud_net::coord::Account::from_seed(read_seed(paths)?);
-    let s = session(paths, net)?;
-    let coord = s.coordinator(account);
-    // the account's other computers' nodes hold none of its copies either
-    let mut own = coord.account_nodes().unwrap_or_default();
-    own.insert(*omacloud_net::session::node_key(&paths.node_key())?.public().as_bytes());
-    s.set_own(own);
-    Ok(Some(Arc::new(coord)))
-}
-
-/// Put this computer's copy of the account's records, and of the index of
-/// its current bucket and live shares, back on the Worker where it lacks
-/// them. The write capability comes from the key this computer holds, not
-/// from the Worker, which may have nothing.
-fn republish(paths: &Paths, config: &Config, e: &Engine) -> Result<(u64, u64)> {
-    let net = config.require_net()?;
-    let password = &e
-        .state()
-        .secret
-        .as_ref()
-        .ok_or_else(|| fail::not_set_up().hint("this computer has no key yet: it needs to sync once first"))?
-        .1
-        .password;
-    let account = omacloud_net::coord::Account::from_seed(read_seed(paths)?);
-    let scope = |key: &str| omacloud_net::seal::Keys::from_secret(key).scope;
-    let mut scopes = vec![scope(&omacloud_core::repo::network_key(password))];
-    let now = omacloud_net::node::now();
-    scopes.extend(
-        net::read_shares(&paths.data)
-            .iter()
-            .filter(|s| s.until > now)
-            .map(|s| scope(&omacloud_net::share::bucket_key(&s.secret))),
-    );
-    session(paths, net)?
-        .network()
-        .republish(&account.id, &omacloud_net::coord::capability(password), &scopes)
-        .map_err(|e| fail::unavailable(format!("{e:#}")).into())
-}
-
-/// Record this computer's node among the account's, sealed.
-fn publish_node(paths: &Paths, config: &Config, engine: &Engine, c: &net::Contribution) -> Result<()> {
-    let Some(node) = c.node_id() else { return Ok(()) };
-    let Some(coord) = network_coordinator(paths, config)? else {
-        return Ok(());
-    };
-    let (_, secret, _) = engine.repository()?;
-    coord.set_cap(omacloud_net::coord::capability(&secret.password));
-    coord.publish_node(&engine.device_key(), &node)
-}
-
-/// Where the files live: the network's bucket through this run's gateway,
-/// or the path set up with.
-fn repo_spec(paths: &Paths, config: &Config) -> Result<RepoSpec> {
-    Ok(match config.net() {
-        Some(net) => session(paths, net)?.repo("/omacloud"),
-        None => config.repo.clone(),
-    })
+    // said first: said and not saved, it's only said again
+    e.ack_bucket_key(seq)?;
+    config.bucket_key_seq = seq;
+    save(paths, &config)
 }
 
 fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
     let signing = load_or_create_key(&paths.device_key())?;
-    let coord = coordinator(paths, config)?;
-    let mut repo = repo_spec(paths, config)?;
+    let coord = coordinator(config)?;
+    let mut repo = config.repo.clone();
     config.limits.apply(&mut repo);
     let setup = Setup {
         device: config.device.clone(),
@@ -968,88 +987,136 @@ fn already_set_up(paths: &Paths) -> CliError {
     .hint("give another --config to set up a second account here")
 }
 
-/// `new_code`: on the network, the recovery code an account created here
-/// gets (the account is found by what it gives).
-fn init(paths: &Paths, mut config: Config, recovery: Option<String>, new_code: Option<String>) -> Out {
-    if paths.config.exists() {
-        return Err(already_set_up(paths).into());
-    }
-    let network = config.coordinator == NETWORK;
-    // the refusals that need no account come before anything is made here:
-    // no folder, device key or coordination skeleton is left behind (one
-    // for a code the network has no account for comes later, and leaves the
-    // device key, which a retry reuses). A
-    // shared directory is only looked at, as opening it makes its skeleton
-    let creating = if network {
-        new_code.is_some()
+/// Refuse where a new account's recovery code wouldn't be shown to anyone.
+fn need_terminal_for_recovery_code() -> Result<(), CliError> {
+    if output::to_terminal(mode()) {
+        Ok(())
     } else {
-        !Path::new(&config.coordinator).join("account.json").exists()
-    };
-    if creating && !output::to_terminal(mode()) {
+        Err(fail::terminal_required("the new account's recovery code"))
+    }
+}
+
+/// Where `init` was told to set up.
+struct InitTarget {
+    coordinator: String,
+    repo: RepoSpec,
+    coordination_bucket: Option<String>,
+    /// The account a join code named, which the bucket must hold.
+    account: Option<String>,
+}
+
+/// A bucket, unless a shared directory is given (development).
+fn init_target(
+    coordinator: Option<String>,
+    repo: Option<String>,
+    bucket: &BucketArgs,
+    join_code: Option<&str>,
+    recovering: bool,
+) -> Result<InitTarget> {
+    if let Some(dir) = coordinator {
+        if join_code.is_some() {
+            return Err(fail::usage("a join code is for a bucket, not a shared directory").into());
+        }
+        if bucket.given() {
+            return Err(fail::usage("a bucket needs no --coordinator").into());
+        }
+        return Ok(InitTarget {
+            coordinator: absolute(Path::new(&dir))?.to_string_lossy().into_owned(),
+            repo: RepoSpec {
+                repository: repo.unwrap_or_default(),
+                options: BTreeMap::new(),
+            },
+            coordination_bucket: None,
+            account: None,
+        });
+    }
+    if repo.is_some() {
+        return Err(fail::usage("--repo goes with --coordinator; a bucket needs neither").into());
+    }
+    if let Some(code) = join_code {
+        if bucket.given() {
+            return Err(fail::usage("a join code says where the bucket is already").into());
+        }
+        let joined = JoinCode::parse(code).ok_or_else(|| {
+            fail::setup("join_code_rejected", "that join code is damaged")
+                .hint("copy the whole code again from `omacloud join-code` (or Show Join Code in the app)")
+        })?;
+        return Ok(InitTarget {
+            coordinator: BUCKET.to_string(),
+            repo: joined.repo,
+            coordination_bucket: joined.coordination_bucket,
+            account: joined.account,
+        });
+    }
+    let mut repo = bucket.repo()?;
+    if !recovering {
+        need_terminal_for_recovery_code()?;
+    }
+    _ = repo.options.insert("secret_access_key".into(), read_key_secret()?);
+    Ok(InitTarget {
+        coordinator: BUCKET.to_string(),
+        repo,
+        coordination_bucket: bucket.coordination_bucket.clone(),
+        account: None,
+    })
+}
+
+/// `account`: the account a join code named, which the bucket must hold.
+fn init(paths: &Paths, mut config: Config, recovery: Option<String>, account: Option<String>) -> Out {
+    // the refusals that need no account come before anything is made here:
+    // no folder, device key or coordination skeleton is left behind. A
+    // shared directory is only looked at, as opening it makes its skeleton
+    if config.coordinator != BUCKET && !Path::new(&config.coordinator).join("account.json").exists() {
         if config.repo.repository.is_empty() {
             return Err(fail::usage("creating an account needs --repo")
                 .hint("run `omacloud init --help`")
                 .into());
         }
-        return Err(fail::terminal_required("the new account's recovery code").into());
+        need_terminal_for_recovery_code()?;
     }
-    fs::create_dir_all(&paths.data)?;
-    let signing = load_or_create_key(&paths.device_key())?;
-    let me = fingerprint(&public_hex(&signing));
-    let network_coord = network_coordinator(paths, &config)?;
-    let coord: Arc<dyn Coordinator> = match &network_coord {
-        Some(c) => c.clone(),
-        None => Arc::new(DirCoordinator::new(&config.coordinator)?),
-    };
-    let anchor = coord.anchor()?;
-    if network && new_code.is_none() && anchor.is_none() {
-        // the seed came from the code: it's no account's
-        _ = fs::remove_file(paths.seed());
-        return Err(fail::setup("no_account", "the network has no account for that code")
-            .hint("check the code, and that OMACLOUD_NETWORK is the network it came from")
+    let coord = coordinator(&config)?;
+    let anchor = anchor_of(coord.as_ref())?;
+    let creating = anchor.is_none();
+    if creating && (recovery.is_some() || account.is_some()) {
+        return Err(fail::setup("no_account", "this bucket has no account in it")
+            .hint("check that it's the bucket the code is for")
             .into());
     }
-    let creating = anchor.is_none();
-    fs::create_dir_all(&config.folder)?;
     if let (Some(anchor), Some(code)) = (&anchor, &recovery) {
         let root = omacloud_core::devices::root_key(code).ok().map(|k| public_hex(&k));
         if root.as_deref() != Some(anchor.root.as_str()) {
             return Err(fail::recovery_code_rejected("that recovery code doesn't belong to this account").into());
         }
     }
+    if let (Some(anchor), Some(account)) = (&anchor, &account)
+        && anchor.root != *account
+    {
+        return Err(fail::setup(
+            "join_code_rejected",
+            "this bucket holds another account than the join code's",
+        )
+        .into());
+    }
     // creating an account shows its recovery code and password once: only
-    // to a terminal. Checked again here, as the account may have appeared
-    // meanwhile
-    if creating && config.repo.repository.is_empty() {
-        return Err(fail::usage("creating an account needs --repo")
-            .hint("run `omacloud init --help`")
-            .into());
+    // to a terminal
+    if creating {
+        need_terminal_for_recovery_code()?;
+        check_bucket(coord.as_ref())?;
     }
-    if creating && !output::to_terminal(mode()) {
-        return Err(fail::terminal_required("the new account's recovery code").into());
-    }
+    fs::create_dir_all(&paths.data)?;
+    let signing = load_or_create_key(&paths.device_key())?;
+    let me = fingerprint(&public_hex(&signing));
+    fs::create_dir_all(&config.folder)?;
 
     let mut out = String::new();
     let how = if creating {
-        let created = match (&network_coord, new_code) {
-            (Some(nc), Some(code)) => {
-                // writes need a capability before the epoch's exists: a
-                // first one, replaced as the account's first epoch begins
-                let first = hex::encode(rand::random::<[u8; 32]>());
-                if !nc.create(&first)? {
-                    return Err(fail::usage("an account with this recovery code exists already").into());
-                }
-                nc.set_cap(first);
-                account::create_with_code(nc.as_ref(), &repo_spec(paths, &config)?, &signing, &config.device, code)?
-            }
-            _ => account::create(coord.as_ref(), &config.repo, &signing, &config.device)?,
-        };
+        let created = account::create(coord.as_ref(), &config.repo, &signing, &config.device)?;
         config.root = created.root;
-        let place = if network {
-            "on the Omacloud network".to_string()
-        } else {
-            config.repo.repository.clone()
-        };
+        let place = config
+            .repo
+            .options
+            .get("bucket")
+            .map_or_else(|| config.repo.repository.clone(), |b| format!("in bucket {b}"));
         say!(
             out,
             "created repository and account {}\n\n\
@@ -1104,12 +1171,16 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<String>, new_code: O
     Ok(Response::new(data, summary).human(out.trim_end()))
 }
 
+/// How long a computer whose key is refused waits before asking again: it may
+/// come back, but it isn't worth a request every poll.
+const REFUSED_WAIT: Duration = Duration::from_secs(300);
+
 /// Why the daemon stopped.
 enum Ended {
     /// Removed from the account, or the account can't be verified.
     Stopped,
-    /// The package replaced the binary, or settings sync or the space
-    /// given changed: restart into the new one.
+    /// The package replaced the binary, or settings sync or the bucket's key
+    /// changed: restart into the new one.
     Upgraded,
 }
 
@@ -1123,27 +1194,8 @@ const UPGRADED: i32 = 75;
 fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     power::be_nice();
     let mut engine = engine(paths, config)?;
-    // on the network: the space given others, and this account's copies
-    let mut contribution = match config.net() {
-        Some(n) => {
-            let s = session(paths, n)?;
-            match net::Contribution::start(s, &paths.data, n.give) {
-                Ok(c) => {
-                    // so the account's other computers don't choose this one
-                    if let Err(e) = publish_node(paths, config, &engine, &c) {
-                        warn!("telling the account's computers about this node: {e:#}");
-                    }
-                    Some((s, c))
-                }
-                Err(e) => {
-                    warn!("not giving space to the network this run: {e:#}");
-                    None
-                }
-            }
-        }
-        None => None,
-    };
     let exe = Exe::running();
+    let mut refused_at: Option<Instant> = None;
     // a path changed, or `None`: events were lost, look at everything
     let (files, rx) = mpsc::channel();
     let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
@@ -1178,14 +1230,14 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     let mut rescan_at: Option<Instant> = None;
     loop {
         // the config was edited: folders are followed as they are; settings
-        // sync turned on or off, or the space given, restart into it (exit
+        // sync turned on or off, or a new bucket key, restarts into it (exit
         // 75, as for an upgrade, which the unit restarts)
         let now = config_mtime();
         if now != config_seen {
             config_seen = now;
             if let Ok(c) = load(paths) {
-                if c.settings != config.settings || c.net().map(|n| n.give) != config.net().map(|n| n.give) {
-                    info!("settings sync or the space given changed; restarting into it");
+                if c.settings != config.settings || c.repo != config.repo {
+                    info!("settings sync or the bucket's key changed; restarting into it");
                     return Ok(Ended::Upgraded);
                 }
                 if let Some(choice) = c.folders {
@@ -1238,7 +1290,8 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
         }
         // idle: one look at the change marker instead of a sync, with a full
         // sync now and then in case a write didn't mark itself
-        let marker = if paused {
+        let refused = refused_at.is_some_and(|t: Instant| t.elapsed() < REFUSED_WAIT);
+        let marker = if paused || refused {
             None
         } else if marker_at.is_some_and(|t| t.elapsed() < poll) {
             last_marker.clone()
@@ -1254,15 +1307,14 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             && marker.is_some()
             && marker == seen_marker
             && full_at.is_some_and(|t: Instant| t.elapsed() < FULL_SYNC);
-        if !paused && !idle {
+        if !paused && !refused && !idle {
             folders_changed = false;
             // now and then, look at everything: a watcher can miss changes
             if rescan_at.is_none_or(|t| t.elapsed() >= FULL_SYNC) {
                 engine.request_rescan();
                 rescan_at = Some(Instant::now());
             }
-            let put_back = |e: &Engine| republish(paths, config, e);
-            match run_sync(&mut engine, &mut waiting, alerts.as_ref(), &put_back) {
+            match run_sync(&mut engine, &mut waiting, alerts.as_mut()) {
                 Synced::Stop => return Ok(Ended::Stopped),
                 Synced::Ok => {
                     // the marker read before syncing: anything written
@@ -1279,13 +1331,21 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
                     }
                 }
                 Synced::Failed => seen_marker = None,
+                Synced::Refused => {
+                    seen_marker = None;
+                    refused_at = Some(Instant::now());
+                }
+            }
+            // the account's new bucket key: saved, it restarts this into it. A
+            // key just refused can't read one
+            if refused_at.is_none_or(|t: Instant| t.elapsed() >= REFUSED_WAIT)
+                && let Err(e) = follow_bucket_key(paths, &mut engine)
+            {
+                warn!("checking for a new bucket key: {e:#}");
             }
             if let Some(a) = alerts.as_mut() {
                 a.check(&mut engine);
             }
-        }
-        if let Some((s, c)) = contribution.as_mut() {
-            c.tick(s, Some(&engine));
         }
         let mut notice = |changed: Option<Vec<PathBuf>>| match changed {
             // what matters is pending now; the rest needs nothing
@@ -1409,17 +1469,15 @@ enum Synced {
     Ok,
     /// Try again at the next check.
     Failed,
+    /// The storage refuses this computer's key: only a new one helps, and
+    /// saving it restarts the daemon.
+    Refused,
     /// Sync must stop until a human looks.
     Stop,
 }
 
 /// One sync.
-fn run_sync(
-    engine: &mut Engine,
-    waiting: &mut bool,
-    alerts: Option<&alerts::Alerts>,
-    republish: &dyn Fn(&Engine) -> Result<(u64, u64)>,
-) -> Synced {
+fn run_sync(engine: &mut Engine, waiting: &mut bool, alerts: Option<&mut alerts::Alerts>) -> Synced {
     match engine.sync() {
         Ok(st) => {
             *waiting = false;
@@ -1437,22 +1495,18 @@ fn run_sync(
                 *waiting = true;
             }
         }
+        // a key change this computer missed: it may yet come back, but only
+        // a person can give it the new key
+        Err(e) if key_refused(&e) => {
+            warn!("the storage refused this computer's key, will retry: {e:#}");
+            if let Some(a) = alerts {
+                a.key_refused();
+            }
+            return Synced::Refused;
+        }
         // a rotation in progress, or a grant not written yet: wait
         Err(e) if fail::is_waiting(&e) => {
             info!("waiting: {e}");
-        }
-        // older records than this computer saw: if the Worker lost them,
-        // this computer's copy puts them back, and the next sync goes on
-        Err(e) if fail::is_rollback(&e) => {
-            match republish(engine) {
-                Ok((records, entries)) if records + entries > 0 => {
-                    warn!("the Worker had lost records ({e}): put back {records} records and {entries} index entries");
-                    return Synced::Failed;
-                }
-                Ok(_) => log::error!("refusing to sync: {e}, and nothing here to put back"),
-                Err(r) => log::error!("refusing to sync: {e}; putting this computer's copy back failed: {r:#}"),
-            }
-            return Synced::Stop;
         }
         // removed from the account, or a coordinator we can't verify: stop
         // until a human looks
@@ -1500,9 +1554,9 @@ fn main() -> std::process::ExitCode {
     // daemon's journal gets both. OpenDAL's retries are left out: one that
     // finally fails is an error
     let filter = if mode.is_machine() && !daemon {
-        "warn,opendal::layers::retry=error,iroh=error,iroh_blobs=error,noq=error,tracing=warn"
+        "warn,opendal::layers::retry=error,tracing=warn"
     } else {
-        "info,rustic_core=warn,opendal::layers::retry=error,iroh=warn,iroh_blobs=warn,noq=warn,tracing=warn"
+        "info,rustic_core=warn,opendal::layers::retry=error,tracing=warn"
     };
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(filter)).init();
     if let Some(home) = agent_skill::home() {
@@ -1587,6 +1641,7 @@ fn run(cli: Cli) -> Out {
     match cli.cmd {
         Cmd::Init {
             folder,
+            bucket,
             repo,
             coordinator,
             folders: chosen,
@@ -1598,7 +1653,7 @@ fn run(cli: Cli) -> Out {
             let (recovery_code, join_code) = (code("OMACLOUD_RECOVERY_CODE"), code("OMACLOUD_JOIN_CODE"));
             if set_aside_old_setup(&paths)? {
                 eprintln!(
-                    "The old setup ({}) is kept aside as .before-network; setting up on the network.",
+                    "The old setup ({}) is kept aside as .before-bucket; setting up in your bucket.",
                     paths.config.display()
                 );
             }
@@ -1606,7 +1661,7 @@ fn run(cli: Cli) -> Out {
                 return Err(already_set_up(&paths).into());
             }
             if repo.as_deref().is_some_and(|r| r.starts_with("opendal:")) {
-                return Err(fail::usage("--repo takes a path").into());
+                return Err(fail::usage("--repo takes a path; a bucket is --provider and --bucket").into());
             }
             // folder names are checked before anything is made here
             let chosen = chosen
@@ -1619,68 +1674,13 @@ fn run(cli: Cli) -> Out {
                         .collect()
                 })
                 .transpose()?;
-            // the network, unless a shared directory is given (development)
-            let (coordinator, repo, network, new_code) = match coordinator {
-                Some(c) => {
-                    if join_code.is_some() {
-                        return Err(
-                            fail::usage("a join code is for the Omacloud network, not a shared directory").into(),
-                        );
-                    }
-                    let dir = absolute(Path::new(&c))?.to_string_lossy().into_owned();
-                    let repo = RepoSpec {
-                        repository: repo.unwrap_or_default(),
-                        options: BTreeMap::new(),
-                    };
-                    (dir, repo, None, None)
-                }
-                None => {
-                    if repo.is_some() {
-                        return Err(fail::usage("--repo goes with --coordinator; the network needs neither").into());
-                    }
-                    // the account's key: from the join code, the recovery
-                    // code, or a new account's code
-                    let (seed, url, new_code) = match (&join_code, &recovery_code) {
-                        (Some(code), _) => {
-                            let (seed, url) = parse_join_code(code).map_err(|_| {
-                                fail::setup("join_code_rejected", "that join code is damaged").hint(
-                                    "copy the whole code again from `omacloud join-code` (or Show Join Code in the app)",
-                                )
-                            })?;
-                            (seed, url, None)
-                        }
-                        (None, Some(code)) => {
-                            let root = omacloud_core::devices::root_key(code)
-                                .map_err(|e| fail::recovery_code_rejected(format!("{e:#}")))?;
-                            (
-                                omacloud_net::coord::Account::from_root(&root.to_bytes()).seed(),
-                                network_url(),
-                                None,
-                            )
-                        }
-                        (None, None) => {
-                            if !output::to_terminal(mode()) {
-                                return Err(fail::terminal_required("the new account's recovery code").into());
-                            }
-                            let code = omacloud_core::devices::new_recovery_code();
-                            let root = omacloud_core::devices::root_key(&code)?;
-                            let seed = omacloud_net::coord::Account::from_root(&root.to_bytes()).seed();
-                            (seed, network_url(), Some(code))
-                        }
-                    };
-                    write_seed(&paths, &seed)?;
-                    let repo = RepoSpec {
-                        repository: NETWORK.into(),
-                        options: BTreeMap::new(),
-                    };
-                    let net = NetConfig {
-                        relays: default_relays(&url),
-                        url,
-                        give: default_give(),
-                    };
-                    (NETWORK.to_string(), repo, Some(net), new_code)
-                }
-            };
+            let target = init_target(
+                coordinator,
+                repo,
+                &bucket,
+                join_code.as_deref(),
+                recovery_code.is_some(),
+            )?;
             let (folder, folders) = match folder {
                 Some(f) => (absolute(&f)?, None),
                 None => {
@@ -1712,16 +1712,17 @@ fn run(cli: Cli) -> Out {
             let config = Config {
                 device,
                 folder,
-                coordinator,
-                repo,
+                coordinator: target.coordinator,
+                repo: target.repo,
                 root: String::new(),
                 limits: Limits::default(),
                 settings,
                 notifications: true,
                 folders,
-                network,
+                coordination_bucket: target.coordination_bucket,
+                bucket_key_seq: 0,
             };
-            init(&paths, config, recovery_code, new_code)
+            init(&paths, config, recovery_code, target.account)
         }
         Cmd::Sync => {
             let config = load(&paths)?;
@@ -1739,6 +1740,7 @@ fn run(cli: Cli) -> Out {
                 other => other?,
             };
             let summary = format!("pushed {}, pulled {}, conflicts {}", st.pushed, st.pulled, st.conflicts);
+            follow_bucket_key(&paths, &mut e)?;
             let data = json!({
                 "pushed": st.pushed,
                 "pulled": st.pulled,
@@ -1914,187 +1916,6 @@ fn run(cli: Cli) -> Out {
                 format!("unmounted {}", dir.display()),
             ))
         }
-        Cmd::Share { file, copy, days } => {
-            if !copy && !output::to_terminal(mode()) {
-                return Err(fail::terminal_required("a share link (it opens the file)").into());
-            }
-            let meta = fs::metadata(&file).map_err(|e| fail::not_found(format!("{}: {e}", file.display())))?;
-            if !meta.is_file() || meta.len() > omacloud_net::share::MAX {
-                return Err(fail::usage(format!(
-                    "{} isn't a file of {} MiB or less",
-                    file.display(),
-                    omacloud_net::share::MAX >> 20
-                ))
-                .hint("share one file at a time; zip a folder first")
-                .into());
-            }
-            let name = file
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .ok_or_else(|| fail::usage("give a file"))?;
-            let config = load(&paths).ok();
-            if days > 7 && !config.as_ref().is_some_and(|c| c.net().is_some()) {
-                return Err(
-                    fail::usage("a link that works past 7 days needs this computer set up on the network")
-                        .hint("its daemon renews the file; run `omacloud init`, or share for 7 days")
-                        .into(),
-                );
-            }
-            let net = share_network(&paths, None);
-            let secret = session(&paths, &net)?
-                .share(&name, &fs::read(&file)?)
-                .map_err(|e| fail::unavailable(format!("{e:#}")))?;
-            let made = omacloud_net::node::now();
-            let mut shares = net::read_shares(&paths.data);
-            shares.push(net::Shared {
-                secret: secret.clone(),
-                name: name.clone(),
-                made,
-                until: made + days * 86_400,
-                renewed_at: 0,
-                holders: std::collections::BTreeMap::new(),
-            });
-            net::write_shares(&paths.data, &shares)?;
-            let link = omacloud_net::share::link(&net.url, &secret);
-            let span = if days == 1 {
-                "a day".to_string()
-            } else {
-                format!("{days} days")
-            };
-            if copy {
-                copy_to_clipboard(&link)?;
-                return Ok(Response::new(
-                    json!({ "name": name, "copied": true, "days": days }),
-                    format!("copied a link to {name}: anyone with it can download it for {span}"),
-                ));
-            }
-            eprintln!(
-                "Anyone with this link can download {name} for {span}. On Omarchy, they run\n\
-                 `omacloud receive` and paste it; nobody else, Omacloud included, can open it."
-            );
-            if days > 7 {
-                eprintln!("This computer's daemon keeps it past the first week, from its credits.");
-            }
-            Ok(Response::new(Value::Null, format!("shared {name}")).human(link))
-        }
-        Cmd::Shares => {
-            let now = omacloud_net::node::now();
-            let shares: Vec<_> = net::read_shares(&paths.data)
-                .into_iter()
-                .filter(|s| s.until > now)
-                .collect();
-            let mut out = String::new();
-            let mut data = Vec::new();
-            for s in &shares {
-                let until = local_time(
-                    omacloud_core::jiff::Timestamp::from_second(i64::try_from(s.until)?)?,
-                    "%Y-%m-%d %H:%M",
-                );
-                say!(out, "{until}  {}", s.name);
-                data.push(json!({ "name": s.name, "until": s.until, "made": s.made }));
-            }
-            let ids = shares.iter().map(|s| s.name.clone()).collect();
-            Ok(Response::new(data, format!("{} shared", counted(shares.len(), "file")))
-                .human(if shares.is_empty() {
-                    "nothing shared from this computer".to_string()
-                } else {
-                    out.trim_end().to_string()
-                })
-                .ids(ids))
-        }
-        Cmd::Unshare => {
-            let (net, secret) = share_link(&paths)?;
-            let removed = session(&paths, &net)?.unshare(&secret);
-            let mut shares = net::read_shares(&paths.data);
-            shares.retain(|s| s.secret != secret);
-            // not taken down for want of the Worker: ended, so this
-            // computer's daemon takes it down when it can (ours or not), if
-            // it runs one
-            let daemon = load(&paths)
-                .ok()
-                .is_some_and(|c| c.net().is_some_and(|n| n.url == net.url));
-            let pending = removed.is_err() && daemon;
-            if pending {
-                let now = omacloud_net::node::now();
-                shares.push(net::Shared {
-                    secret: secret.clone(),
-                    name: "a link taken back".into(),
-                    made: now,
-                    until: now,
-                    renewed_at: 0,
-                    holders: std::collections::BTreeMap::new(),
-                });
-            }
-            net::write_shares(&paths.data, &shares)?;
-            let removed = removed.map_err(|e| {
-                let e = fail::unavailable(format!("{e:#}"));
-                if pending {
-                    e.hint("the daemon takes it down when it can")
-                } else {
-                    e
-                }
-            })?;
-            if !removed {
-                return Err(fail::not_found(
-                    "nothing is shared under this link: it may have expired or been taken back",
-                )
-                .into());
-            }
-            Ok(Response::new(
-                Value::Null,
-                "the link opens nothing now; holders drop the file when its lease ends",
-            ))
-        }
-        Cmd::Receive { to } => {
-            let (net, secret) = share_link(&paths)?;
-            let (name, data) = session(&paths, &net)?
-                .receive(&secret)
-                .map_err(|e| fail::unavailable(format!("{e:#}")))?;
-            let dest = to.unwrap_or_default().join(&name);
-            if dest.exists() {
-                return Err(CliError::new(
-                    "exists",
-                    output::EXIT_USAGE,
-                    format!("{} already exists", dest.display()),
-                )
-                .hint("pass --to another folder")
-                .into());
-            }
-            if let Some(dir) = dest.parent().filter(|d| !d.as_os_str().is_empty()) {
-                fs::create_dir_all(dir)?;
-            }
-            // made new, so nothing there (a link left dangling, one made
-            // meanwhile) is written through
-            {
-                use std::io::Write as _;
-                fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&dest)?
-                    .write_all(&data)?;
-            }
-            Ok(Response::new(
-                json!({ "name": name, "written": dest, "size": data.len() }),
-                format!("wrote {}", dest.display()),
-            ))
-        }
-        Cmd::Republish => {
-            let config = load(&paths)?;
-            let e = engine(&paths, &config)?;
-            let (records, entries) = republish(&paths, &config, &e)?;
-            Ok(Response::new(
-                json!({ "records": records, "entries": entries }),
-                format!(
-                    "put back {} and {} of the index",
-                    counted(usize::try_from(records)?, "record"),
-                    if entries == 1 {
-                        "1 entry".to_string()
-                    } else {
-                        format!("{entries} entries")
-                    }
-                ),
-            ))
-        }
         Cmd::Restore { path, at, to, yes } => {
             let config = load(&paths)?;
             let mut e = engine(&paths, &config)?;
@@ -2126,26 +1947,61 @@ fn run(cli: Cli) -> Out {
         Cmd::Secrets { action } => secrets(&paths, action.unwrap_or(SecretsCmd::List)),
         Cmd::JoinCode => {
             if !output::to_terminal(mode()) {
-                return Err(fail::terminal_required("a join code (it opens your account's records)").into());
+                return Err(fail::terminal_required("a join code (it holds your bucket's key)").into());
             }
             let config = load(&paths)?;
-            let net = config.net().ok_or_else(|| {
-                fail::unsupported("this account keeps in step through a shared directory, not the network")
-                    .hint("other computers join with `omacloud init --repo <path> --coordinator <directory>`")
-            })?;
-            let blob = serde_json::to_vec(&json!({
-                "seed": hex::encode(read_seed(&paths)?),
-                "url": net.url,
-            }))?;
+            if config.coordinator != BUCKET {
+                return Err(
+                    fail::unsupported("this account keeps in step through a shared directory, not a bucket")
+                        .hint("other computers join with `omacloud init --repo <path> --coordinator <directory>`")
+                        .into(),
+                );
+            }
+            let code = JoinCode {
+                repo: config.repo.clone(),
+                coordination_bucket: config.coordination_bucket.clone(),
+                account: Some(config.root.clone()),
+            }
+            .encode()?;
             eprintln!(
-                "Pass it privately: it opens your account's records (not your files). The new\n\
+                "Pass it privately: it holds your bucket's key (it can't open your files). The new\n\
                  computer runs `omacloud init` with it in OMACLOUD_JOIN_CODE (or Add This Computer\n\
                  in the app), and then needs your approval (or your recovery code)."
             );
-            Ok(Response::new(Value::Null, "join code").human(format!("omacloud-join-{}", hex::encode(blob))))
+            Ok(Response::new(Value::Null, "join code").human(code))
+        }
+        Cmd::Invite { bucket } => {
+            let mut repo = bucket.repo()?;
+            if !output::to_terminal(mode()) {
+                return Err(fail::terminal_required("an invite (it holds the bucket's key)").into());
+            }
+            _ = repo.options.insert("secret_access_key".into(), read_key_secret()?);
+            let coord = BucketCoordinator::beside(&repo, bucket.coordination_bucket.as_deref())?;
+            check_bucket(&coord)?;
+            if anchor_of(&coord)?.is_some() {
+                return Err(CliError::new(
+                    "exists",
+                    output::EXIT_USAGE,
+                    "this bucket already holds an account",
+                )
+                .hint("each person gets a bucket and key of their own; another computer of theirs uses `omacloud join-code`")
+                .into());
+            }
+            let code = JoinCode {
+                repo,
+                coordination_bucket: bucket.coordination_bucket.clone(),
+                account: None,
+            }
+            .encode()?;
+            eprintln!(
+                "Pass it privately: it holds this bucket's key. They run `omacloud init` with it in\n\
+                 OMACLOUD_JOIN_CODE (or paste it under Or Use a Code in the app) and get a recovery code only they hold:\n\
+                 you can't read their files, nor they yours."
+            );
+            Ok(Response::new(Value::Null, "invite").human(code))
         }
         Cmd::Folders { action } => folders(&paths, action.unwrap_or(FoldersCmd::List)),
-        Cmd::Node { action } => node(&paths, action.unwrap_or(NodeCmd::Status)),
+        Cmd::Bucket { action } => bucket(&paths, action.unwrap_or(BucketCmd::Status)),
         Cmd::Recovery { action } => recovery(&paths, action),
         Cmd::Packages { action } => packages(&paths, action.unwrap_or(PackagesCmd::List)),
         Cmd::RestoreMachine { from, yes } => {
@@ -2221,36 +2077,6 @@ fn run(cli: Cli) -> Out {
             let data = json!({ "epoch": r.epoch, "snapshots": r.snapshots, "left": r.left });
             Ok(Response::new(data, summary.clone()).human(format!("{summary}\n{}", leftover_text(&r))))
         }
-        Cmd::Gateway => {
-            if !output::to_terminal(mode()) {
-                return Err(fail::terminal_required("the repository password and network key").into());
-            }
-            let config = load(&paths)?;
-            let mut e = engine(&paths, &config)?;
-            e.sync()?;
-            let (spec, secret, epoch) = e.repository()?;
-            anyhow::ensure!(
-                spec.is_network(),
-                "this account's repository is a folder: restic reads it as it is"
-            );
-            let opt = |k: &str| spec.options.get(k).cloned().unwrap_or_default();
-            let url = format!(
-                "s3:{}/{}{}",
-                opt("endpoint"),
-                opt("bucket"),
-                opt("root").trim_end_matches('/')
-            );
-            println!(
-                "# the network as S3, while this runs (Ctrl-C ends it); repository epoch {epoch}\n\
-                 AWS_ACCESS_KEY_ID={} AWS_SECRET_ACCESS_KEY=network RESTIC_PASSWORD='{}' \\\n  \
-                 restic -r {url} restore latest --target <dir>",
-                opt("access_key_id"),
-                secret.password
-            );
-            loop {
-                std::thread::sleep(Duration::from_secs(3600));
-            }
-        }
         Cmd::Export { to } => {
             if !output::to_terminal(mode()) {
                 return Err(fail::terminal_required("the repository password").into());
@@ -2271,14 +2097,21 @@ fn run(cli: Cli) -> Out {
             }
             let repo = &spec.repository;
             let mut out = String::new();
-            if spec.is_network() {
-                // this run's gateway ends with it: point at what outlasts it
+            if spec.is_bucket() {
+                let opt = |k: &str| spec.options.get(k).cloned().unwrap_or_default();
                 say!(
                     out,
-                    "# restore without omacloud: the repository password, and either a copy of\n\
-                     # the repository in a folder (`omacloud export --to <folder>`, then plain restic),\n\
-                     # or the network served as S3 while `omacloud gateway` runs\n\
-                     # (repository epoch {epoch})\npassword:   {password}"
+                    "# restore without omacloud: restic or rustic, this bucket and password\n\
+                     # (repository epoch {epoch})\n\
+                     AWS_ACCESS_KEY_ID='{}' AWS_SECRET_ACCESS_KEY='{}' AWS_DEFAULT_REGION='{}' \\\n  \
+                     RESTIC_PASSWORD='{password}' \\\n  \
+                     restic -r s3:{}/{}{} restore latest --target <dir>",
+                    opt("access_key_id"),
+                    opt("secret_access_key"),
+                    opt("region"),
+                    opt("endpoint"),
+                    opt("bucket"),
+                    opt("root").trim_end_matches('/')
                 );
                 return Ok(Response::new(Value::Null, "export").human(out.trim_end()));
             }
@@ -3098,8 +2931,8 @@ fn status(paths: &Paths) -> Out {
     _ = e.load_folders();
     let st = e.state();
     let repo = e.repository().map_or_else(|_| config.repo.clone(), |r| r.0);
-    let network = config.net();
-    let kind = if network.is_some() { "network" } else { "path" };
+    let bucket_name = repo.options.get("bucket");
+    let kind = if repo.is_bucket() { "bucket" } else { "path" };
     let role = if members.valid.contains_key(&me) {
         "member"
     } else if members.revoked.contains_key(&me) {
@@ -3129,8 +2962,12 @@ fn status(paths: &Paths) -> Out {
     } else {
         say!(out, "folder   {}", config.folder.display());
     }
-    match network {
-        Some(n) => say!(out, "storage  the Omacloud network, giving {}", net::human(n.give)),
+    match bucket_name {
+        Some(b) => say!(
+            out,
+            "storage  bucket {b} at {}",
+            repo.options.get("endpoint").map_or("", String::as_str)
+        ),
         None => say!(out, "repo     {}", repo.repository),
     }
     match &st.base {
@@ -3198,9 +3035,10 @@ fn status(paths: &Paths) -> Out {
         }),
         "repo": {
             "kind": kind,
-            "repository": if network.is_some() { "Omacloud network".to_string() } else { repo.repository.clone() },
+            "repository": repo.repository,
+            "bucket": bucket_name,
+            "endpoint": repo.options.get("endpoint"),
         },
-        "network": network.map(|n| json!({ "url": n.url, "give": n.give, "space": net::space(&paths.data) })),
         "synced_head": st.base.as_ref().map(|b| b.seq),
         "synced_at": (st.synced_at > 0).then_some(st.synced_at),
         "epoch": st.secret.as_ref().map(|s| s.0),
@@ -3299,98 +3137,92 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
     )
 }
 
-fn node(paths: &Paths, action: NodeCmd) -> Out {
+/// Show or change the bucket's key.
+fn bucket(paths: &Paths, action: BucketCmd) -> Out {
+    let config = load(paths)?;
+    if config.coordinator != BUCKET {
+        return Err(fail::unsupported("only accounts that keep in step through their bucket have a bucket key").into());
+    }
     match action {
-        NodeCmd::Status => {
-            let config = load(paths)?;
-            let net = config.require_net()?;
-            let key = omacloud_net::session::node_key(&paths.node_key())?;
-            let id = hex::encode(key.public().as_bytes());
-            let summary = format!("giving {}", net::human(net.give));
-            let space = net::space(&paths.data);
-            let mut out = format!("{summary}\nnode {}", &id[..16]);
-            match space["stored"].as_u64() {
-                Some(stored) => say!(
-                    out,
-                    "\nstoring {}, {} tokens a month\ntokens held: {}{}",
-                    net::human(stored),
-                    space["monthly"],
-                    space["tokens"],
-                    space["months"]
-                        .as_u64()
-                        .map_or_else(String::new, |m| format!(", about {m} more months at this size")),
-                ),
-                None => say!(
-                    out,
-                    "\ntokens held: {} (storage is counted after the daemon's first upkeep)",
-                    space["tokens"]
-                ),
-            }
-            Ok(Response::new(
-                json!({ "id": id, "give": net.give, "network": net.url, "space": space }),
-                summary.clone(),
-            )
-            .human(out.trim_end()))
-        }
-        NodeCmd::Give { size } => {
-            let give = net::parse_size(&size).map_err(|e| fail::usage(format!("{e:#}")))?;
-            let mut config = load(paths)?;
-            let net = config
-                .network
-                .as_mut()
-                .ok_or_else(|| fail::unsupported("this account isn't on the Omacloud network"))?;
-            net.give = give;
-            save(paths, &config)?;
-            Ok(Response::new(
-                json!({ "give": give }),
-                format!("giving {}", net::human(give)),
-            ))
-        }
-        NodeCmd::Run {
-            give,
-            network,
-            mut relays,
-        } => {
-            let network = network.unwrap_or_else(network_url);
-            if relays.is_empty() {
-                relays = default_relays(&network);
-            }
-            let give = match give {
-                Some(g) => net::parse_size(&g).map_err(|e| fail::usage(format!("{e:#}")))?,
-                None => load(paths)
-                    .ok()
-                    .and_then(|c| c.net().map(|n| n.give))
-                    .unwrap_or_else(default_give),
+        BucketCmd::Status => {
+            let mut e = engine(paths, &config)?;
+            let members = e.refresh_devices()?.members();
+            let Some((seq, acked)) = e.bucket_key_status()? else {
+                return Ok(Response::new(
+                    json!({ "seq": null, "computers": [], "waiting": 0 }),
+                    "the bucket key was never changed through omacloud",
+                ));
             };
-            let s = omacloud_net::session::Session::start(omacloud_net::session::Options {
-                url: network,
-                relays,
-                copies: 2,
-                own: None,
-                mirror: None,
-            })?;
-            fs::create_dir_all(&paths.data)?;
-            let mut c = net::Contribution::start(&s, &paths.data, give)?;
-            loop {
-                c.tick(&s, None);
-                std::thread::sleep(Duration::from_secs(30));
+            let (mut computers, mut lines, mut waiting) = (Vec::new(), String::new(), 0);
+            for (key, name) in &members.valid {
+                let switched = acked.contains(key);
+                let fp = fingerprint(key);
+                say!(lines, "{name}  {fp}  {}", if switched { "switched" } else { "waiting" });
+                computers.push(json!({ "device": name, "fingerprint": fp, "switched": switched }));
+                waiting += usize::from(!switched);
             }
+            let summary = if waiting == 0 {
+                format!("every computer switched to key change {seq}; delete the old key at your provider")
+            } else {
+                format!("key change {seq}: {} still to switch", counted(waiting, "computer"))
+            };
+            let text = format!("{summary}\n{}", lines.trim_end());
+            Ok(Response::new(
+                json!({ "seq": seq, "computers": computers, "waiting": waiting }),
+                summary,
+            )
+            .human(text))
+        }
+        BucketCmd::SetKey {
+            access_key_id,
+            here_only,
+        } => {
+            // the same key again would cut nobody off
+            if !here_only && config.repo.options.get("access_key_id") == Some(&access_key_id) {
+                return Err(CliError::new(
+                    "same_key",
+                    output::EXIT_USAGE,
+                    format!("{access_key_id} is the key in use"),
+                )
+                .hint("make a new key at your provider first")
+                .into());
+            }
+            let secret = read_key_secret()?;
+            let key = omacloud_core::bucket_key::Credentials {
+                access_key_id,
+                secret_access_key: secret,
+            };
+            // does the new key reach the bucket, and may it write there?
+            let mut trial = config.clone();
+            trial.repo.set_key(&key);
+            let coord = coordinator(&trial)?;
+            check_bucket(coord.as_ref())?;
+            if anchor_of(coord.as_ref())?.is_none() {
+                return Err(fail::setup("no_account", "the new key reaches a bucket with no account in it").into());
+            }
+            if here_only {
+                save(paths, &trial)?;
+                return Ok(Response::new(
+                    json!({ "seq": null, "here_only": true }),
+                    "this computer uses the new key; it picks up the account's key change on the next sync",
+                ));
+            }
+            // published with the old key, which still works
+            let mut e = engine(paths, &config)?;
+            let seq = e.change_bucket_key(&key)?;
+            trial.bucket_key_seq = seq;
+            save(paths, &trial)?;
+            Ok(Response::new(
+                json!({ "seq": seq, "here_only": false }),
+                format!("key change {seq} published"),
+            )
+            .human(format!(
+                "key change {seq} published, sealed to this account's computers. Each switches on its \
+                 next sync; `omacloud bucket status` shows which have. Keep the old key until all have, \
+                 then delete it at your provider."
+            )))
         }
     }
-}
-
-/// A code from `omacloud join-code`: the account's key, and its network.
-fn parse_join_code(code: &str) -> Result<([u8; 32], String)> {
-    let bytes = code
-        .trim()
-        .strip_prefix("omacloud-join-")
-        .and_then(|h| hex::decode(h).ok())
-        .context("that isn't a join code from `omacloud join-code`")?;
-    let v: Value = serde_json::from_slice(&bytes)?;
-    let seed: [u8; 32] = hex::decode(v["seed"].as_str().context("no account key")?)?
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("not an account key"))?;
-    Ok((seed, v["url"].as_str().context("no network")?.to_string()))
 }
 
 #[cfg(test)]

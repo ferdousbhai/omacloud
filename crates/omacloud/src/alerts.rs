@@ -1,6 +1,6 @@
 //! Desktop notifications from the daemon, through `notify-send` (libnotify;
 //! mako on Omarchy): a device asking to join, a setting that needs a choice,
-//! this device being removed. "Open" starts the Omacloud app on the page the
+//! this device being removed, the storage refusing this device's key. "Open" starts the Omacloud app on the page the
 //! notification is about. Each thing is announced once per run, so once
 //! more after the daemon restarts (an upgrade, a changed config).
 
@@ -23,6 +23,7 @@ pub struct Alerts {
     requests: BTreeSet<String>,
     held: BTreeSet<PathBuf>,
     requests_at: Option<Instant>,
+    key_refused: bool,
 }
 
 impl Alerts {
@@ -32,6 +33,7 @@ impl Alerts {
             requests: BTreeSet::new(),
             held: BTreeSet::new(),
             requests_at: None,
+            key_refused: false,
         }
     }
 
@@ -83,6 +85,19 @@ impl Alerts {
             ])
             .stderr(Stdio::null())
             .status();
+    }
+
+    /// Say that the storage refuses this device's key: it retries, but only
+    /// a person can give it a new one.
+    pub fn key_refused(&mut self) {
+        if !std::mem::replace(&mut self.key_refused, true) {
+            self.show(
+                "This device can't reach your storage",
+                "Your storage refused its key. If the key changed while it was away, get the new one from your \
+                 provider and run omacloud bucket set-key --access-key-id <id> --here-only.",
+                "overview",
+            );
+        }
     }
 
     fn show(&self, summary: &str, body: &str, page: &str) {

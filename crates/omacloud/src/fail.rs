@@ -1,31 +1,40 @@
 //! Failures as the output contract's error codes and exit codes. A command
 //! raises a [`CliError`] for what it knows (not set up, not found, a refused
 //! code); it travels in the `anyhow::Error` and [`classify`] finds it. The
-//! rest is recognised by type: the sync engine's membership errors, a
-//! network failure. Anything
+//! rest is recognised by type: the sync engine's membership errors, the
+//! storage refusing the key or being out of reach, a network failure. Anything
 //! else is `error`, exit 1.
 //!
 //! | code | exit |
 //! |---|---|
 //! | `error` (anything unrecognised), `verification_failed`, `pending`, `command_failed`, `cancelled` | 1 |
-//! | `usage`, `confirmation_required`, `terminal_required`, `ambiguous`, `already_set_up`, `exists`, `unsupported` | 2 |
-//! | `not_set_up`, `storage_gone`, `not_approved`, `removed`, `recovery_code_rejected`, `join_code_rejected`, `no_account`, `shares_rejected`, `settings_off` | 3 |
+//! | `usage`, `confirmation_required`, `terminal_required`, `ambiguous`, `already_set_up`, `exists`, `unsupported`, `same_key` | 2 |
+//! | `not_set_up`, `storage_gone`, `not_approved`, `removed`, `recovery_code_rejected`, `join_code_rejected`, `no_account`, `key_refused`, `shares_rejected`, `settings_off` | 3 |
 //! | `not_found` | 4 |
 //! | `unavailable` | 5 |
 
-use omacloud_core::{DeviceError, HeadError, Membership, epoch::EpochError};
+use omacloud_core::{
+    DeviceError, HeadError, Membership,
+    bucket::{NoCreateOnly, key_refused as storage_refused_key, unreachable},
+    epoch::EpochError,
+};
 
 pub use crate::output::CliError;
 use crate::output::{EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SETUP, EXIT_UNAVAILABLE, EXIT_USAGE};
 
-/// A computer set up before the network, on storage Omacloud dropped.
+/// A computer set up on storage Omacloud dropped.
 pub fn storage_gone(kind: &str) -> CliError {
     CliError::new(
         "storage_gone",
         EXIT_SETUP,
         format!("this computer was set up on {kind}, which Omacloud no longer uses"),
     )
-    .hint("run `omacloud init` to set it up again on the Omacloud network (the old config is kept aside); the files here stay as they are")
+    .hint("run `omacloud init` with your bucket to set it up again (the old config is kept aside); the files here stay as they are")
+}
+
+/// The storage refusing a key this command was just given.
+pub fn key_refused(message: impl Into<String>) -> CliError {
+    setup("key_refused", message).hint("check the key's id and secret, and that it may read and write this bucket")
 }
 
 pub fn usage(message: impl Into<String>) -> CliError {
@@ -107,15 +116,27 @@ pub fn classify(e: &anyhow::Error) -> CliError {
     }
     if is_rollback(e) {
         return CliError::new("verification_failed", EXIT_ERROR, message).hint(
-            "the network's records are older than this computer has seen; if the Worker lost them, \
-             `omacloud republish` on a computer that synced lately puts them back",
+            "the bucket's records are older than this computer has seen: it was restored from an old \
+             copy, or someone with its key rolled it back; check the account from another computer",
         );
     }
     if is_unverified(e) {
         return CliError::new("verification_failed", EXIT_ERROR, message)
             .hint("the storage served a history this computer refuses; check the account from another computer");
     }
-    if e.chain().any(network_failure) {
+    if e.downcast_ref::<NoCreateOnly>().is_some() {
+        return unsupported(message).hint(
+            "use another bucket or provider; on Hetzner a bucket with object lock keeps its records in a second, \
+             plain bucket (--coordination-bucket)",
+        );
+    }
+    if storage_refused_key(e) {
+        return key_refused(format!("the storage refused this computer's key: {message}")).hint(
+            "if the account changed its key while this computer was away, get the new key from your provider \
+             and run `omacloud bucket set-key --access-key-id <id> --here-only`",
+        );
+    }
+    if unreachable(e) || e.chain().any(network_failure) {
         return unavailable(message).hint("check the network connection and that the storage is up, then try again");
     }
     CliError::new("error", EXIT_ERROR, message)
@@ -129,8 +150,8 @@ pub fn is_waiting(e: &anyhow::Error) -> bool {
     )
 }
 
-/// Records older than what this computer saw: the Worker lost them, or is
-/// hiding them; either way this computer's copy can put them back.
+/// Records older than what this computer saw: the bucket was restored from
+/// an old copy, or someone with its key rolled it back.
 pub fn is_rollback(e: &anyhow::Error) -> bool {
     matches!(e.downcast_ref::<HeadError>(), Some(HeadError::Rollback { .. }))
         || matches!(e.downcast_ref::<DeviceError>(), Some(DeviceError::Rollback { .. }))
@@ -147,12 +168,6 @@ pub fn is_unverified(e: &anyhow::Error) -> bool {
 /// A connection that couldn't be made or was lost.
 fn network_failure(e: &(dyn std::error::Error + 'static)) -> bool {
     use std::io::ErrorKind as K;
-    if let Some(e) = e.downcast_ref::<ureq::Error>() {
-        return matches!(
-            e,
-            ureq::Error::Io(_) | ureq::Error::Timeout(_) | ureq::Error::HostNotFound | ureq::Error::ConnectionFailed
-        );
-    }
     e.downcast_ref::<std::io::Error>().is_some_and(|e| {
         matches!(
             e.kind(),

@@ -1,9 +1,9 @@
-// The public pages of omacloud.computer: home, privacy, terms, llms.txt and
-// /s, where a share link lands. index.ts also serves /install.sh.
+// The public pages of omacloud.computer: home, privacy, terms and llms.txt.
+// index.ts also serves /install.sh.
 
 const PRIVACY = "privacy@omacloud.computer";
 const LEGAL = "legal@omacloud.computer";
-const UPDATED = "19 October 2026";
+const UPDATED = "4 November 2026";
 
 function layout(title: string, body: string): Response {
 	return new Response(
@@ -57,30 +57,16 @@ export const home = () =>
 <li>Your SSH and GPG keys.</li>
 </ul>
 <p>You can get back an earlier version of a file, or a file that you deleted.</p>
-<p>Omacloud encrypts your files on your computer. Other Omarchy computers keep each encrypted
-file, on more than one computer. Your computer keeps files for other persons. No computer can read the files
-that it keeps for other persons.</p>
-<p>You do not need an account, an email address or a password. Keep your recovery code in a
-safe location. If you lose all your computers, you need this code to get your data.</p>
+<p>Omacloud encrypts your files on your computer, then keeps them in a storage bucket that you
+choose, such as Cloudflare R2 or Hetzner. Your storage provider can't read them. Omacloud runs no
+storage and sees nothing of yours.</p>
+<p>You can make a bucket for each person in your family. Each person gets a separate account that
+only they can read.</p>
+<p>Keep your recovery code in a safe location. If you lose all your computers, you need this code
+to get your data.</p>
 <h2>Get it</h2>
 <pre>curl -fsSL https://omacloud.computer/install.sh | sudo bash</pre>
 <p>Then open Omacloud from the app launcher.</p>`,
-	);
-
-/** Where a share link lands. The key is after the #, which browsers never
- * send, so this page can't open the file and doesn't try. */
-export const shared = () =>
-	layout(
-		"A shared file · Omacloud",
-		`<h1>A file shared with you</h1>
-<p class="lead">Someone shared a file through Omacloud. It is encrypted, and only this link opens it.</p>
-<p>To download it on Omarchy, install Omacloud, run this command and paste the link:</p>
-<pre>omacloud receive</pre>
-<p>You don't need an account. The link works until it expires or the person who shared it takes
-it back: 7 days, unless they chose longer.</p>
-<p>This site never receives the part of the link after the #, so it can't read the file.</p>
-<h2>Get Omacloud</h2>
-<pre>curl -fsSL https://omacloud.computer/install.sh | sudo bash</pre>`,
 	);
 
 export const privacy = () =>
@@ -90,13 +76,10 @@ export const privacy = () =>
 <p class="lead">Updated ${UPDATED}.</p>
 <p>Visiting this site collects nothing: it sets no cookies, has no accounts and keeps no logs. Requests
 pass through Cloudflare, which handles your IP address to deliver them.</p>
-<p>Omacloud itself has no accounts or sign-in. Your files, their names, your settings and your
-keys are encrypted on your computer, with keys that never leave your computers and your
-recovery code, before anything is stored. Whoever holds the encrypted data can't read it.</p>
-<p>For Omacloud's storage network, this site keeps only what its limits need: the /24 or /48
-that an address belongs to, never the address itself, and only for a while. For each storage
-node it keeps the node's network and the address that computers reach it at, and forgets the
-node 30 days after it was last seen.</p>
+<p>Omacloud itself has no accounts or sign-in, and runs no storage. Your files, their names, your
+settings and your keys are encrypted on your computer, with keys that never leave your computers
+and your recovery code, before they reach the storage provider you chose. That provider can't read
+them, and has its own terms and privacy policy. Nothing of yours reaches this site.</p>
 <h2>Contact</h2>
 <p><a href="mailto:${PRIVACY}">${PRIVACY}</a></p>`,
 	);
@@ -127,9 +110,9 @@ export const llms = (env: Env) => {
 
 > Your files and settings on every Omarchy computer, end to end encrypted. The folders
 > you choose sync in place; Omarchy settings, AI agent settings, Chromium, Wi-Fi, package lists
-> and ssh and gpg keys follow; earlier versions and deleted files come back. Its storage network is held by Omarchy
-> computers themselves, untrusted, with no accounts or sign-in. Underneath it is plain
-> restic, so restic or rustic restore everything without Omacloud.
+> and ssh and gpg keys follow; earlier versions and deleted files come back. Storage is an S3 bucket
+> of your own (Cloudflare R2, Hetzner or others), one per person, with no sign-in. Underneath it is
+> plain restic, so restic or rustic restore everything without Omacloud.
 
 Everything is encrypted on the computer before it is stored: whoever holds the data can't read
 it. Omacloud runs on Omarchy (Arch Linux, x86_64 and aarch64), as a GTK app and the
@@ -144,7 +127,7 @@ it. Omacloud runs on Omarchy (Arch Linux, x86_64 and aarch64), as a GTK app and 
 
 ## Command line
 
-- [omacloud CLI](${repo}/blob/master/README.md): \`omacloud --help\` lists every command. Piped, every command prints a JSON envelope ({ok, data, summary} or {ok: false, error: {code, message, hint}}; \`--quiet\` for the data alone) and exits 0, 1, 2 usage, 3 not set up, 4 not found or 5 unreachable; \`omacloud status\` reports state. Commands that print a secret (\`join-code\`, \`export\`, \`gateway\`, \`share\`, \`recovery split\` and \`combine\`, a new account's recovery code) print only to a terminal. Secrets come from environment variables (OMACLOUD_RECOVERY_CODE, OMACLOUD_JOIN_CODE, OMACLOUD_LINK) or a prompt, never arguments
+- [omacloud CLI](${repo}/blob/master/README.md): \`omacloud --help\` lists every command. Piped, every command prints a JSON envelope ({ok, data, summary} or {ok: false, error: {code, message, hint}}; \`--quiet\` for the data alone) and exits 0, 1, 2 usage, 3 not set up, 4 not found or 5 unreachable; \`omacloud status\` reports state. Commands that print a secret (\`join-code\`, \`invite\`, \`export\`, \`recovery split\` and \`combine\`, a new account's recovery code) print only to a terminal. Secrets come from environment variables (OMACLOUD_RECOVERY_CODE, OMACLOUD_JOIN_CODE, OMACLOUD_SECRET_ACCESS_KEY) or a prompt, never arguments
 
 ## Site
 

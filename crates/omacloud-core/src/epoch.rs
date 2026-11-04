@@ -20,14 +20,13 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use crypto_box::{PublicKey, SecretKey, aead::OsRng};
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey};
 use rustic_core::repofile::MasterKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    devices::{DeviceChain, public_hex, verify_sig},
+    devices::{DeviceChain, open_with, public_hex, seal_to, verify_sig},
     head::Coordinator,
 };
 
@@ -46,15 +45,20 @@ pub struct EpochSecret {
 /// # Errors
 ///
 /// If `recipient` isn't a valid public key.
-pub fn seal(recipient: &str, secret: &EpochSecret) -> Result<String> {
-    let bytes: [u8; 32] = hex::decode(recipient)?
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("not a 32 byte key"))?;
-    let x25519 = VerifyingKey::from_bytes(&bytes)?.to_montgomery().to_bytes();
-    let sealed = PublicKey::from(x25519)
-        .seal(&mut OsRng, &serde_json::to_vec(secret)?)
-        .map_err(|_| anyhow::anyhow!("sealing failed"))?;
-    Ok(hex::encode(sealed))
+pub fn seal<T: Serialize>(recipient: &str, secret: &T) -> Result<String> {
+    Ok(hex::encode(seal_to(recipient, &serde_json::to_vec(secret)?)?))
+}
+
+/// `secret` sealed to each of `chain`'s holders, by hex public key.
+pub(crate) fn seal_to_holders<T: Serialize>(chain: &DeviceChain, secret: &T) -> Result<BTreeMap<String, String>> {
+    chain
+        .holders()
+        .into_iter()
+        .map(|holder| {
+            let sealed = seal(&holder, secret)?;
+            Ok((holder, sealed))
+        })
+        .collect()
 }
 
 /// Open a secret sealed to `key`.
@@ -62,10 +66,9 @@ pub fn seal(recipient: &str, secret: &EpochSecret) -> Result<String> {
 /// # Errors
 ///
 /// If it wasn't sealed to this key, or was tampered with.
-pub fn open(key: &SigningKey, sealed: &str) -> Result<EpochSecret> {
-    let plain = SecretKey::from(key.to_scalar_bytes())
-        .unseal(&hex::decode(sealed)?)
-        .map_err(|_| anyhow::anyhow!("the repository key is not sealed to this key"))?;
+pub fn open<T: serde::de::DeserializeOwned>(key: &SigningKey, sealed: &str) -> Result<T> {
+    let plain = open_with(key, &hex::decode(sealed)?)
+        .ok_or_else(|| anyhow::anyhow!("this secret is not sealed to this key"))?;
     Ok(serde_json::from_slice(&plain)?)
 }
 
@@ -130,11 +133,7 @@ impl EpochRecord {
         secret: &EpochSecret,
         snapshots: BTreeMap<String, String>,
     ) -> Result<Self> {
-        let mut keys = BTreeMap::new();
-        for holder in chain.members().valid.into_keys().chain([chain.root.clone()]) {
-            let sealed = seal(&holder, secret)?;
-            _ = keys.insert(holder, sealed);
-        }
+        let keys = seal_to_holders(chain, secret)?;
         let mut rec = Self {
             epoch: prev.map_or(0, |p| p.epoch + 1),
             prev: prev.map(Self::hash).unwrap_or_default(),
@@ -330,8 +329,8 @@ mod tests {
             key: MasterKey::new(),
         };
         let sealed = seal(&public_hex(&a), &secret)?;
-        assert_eq!(open(&a, &sealed)?.password, "pw");
-        assert!(open(&b, &sealed).is_err());
+        assert_eq!(open::<EpochSecret>(&a, &sealed)?.password, "pw");
+        assert!(open::<EpochSecret>(&b, &sealed).is_err());
         Ok(())
     }
 
@@ -377,7 +376,10 @@ mod tests {
         assert!(r1.keys.contains_key(&public_hex(&a)));
         assert!(r1.keys.contains_key(&public_hex(&root)));
         assert!(!r1.keys.contains_key(&public_hex(&b)));
-        assert_eq!(open(&root, &r1.keys[&public_hex(&root)])?.password, "one");
+        assert_eq!(
+            open::<EpochSecret>(&root, &r1.keys[&public_hex(&root)])?.password,
+            "one"
+        );
         assert_eq!(chain.map("s1", 0, 1).as_deref(), Some("t1"));
         assert_eq!(chain.map("nope", 0, 1), None);
 

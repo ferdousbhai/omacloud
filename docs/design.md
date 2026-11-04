@@ -9,14 +9,15 @@ can't do. The source files named here hold the details.
 
 ## Where it's stored
 
-Everything lives in two places: a restic repository with the files, and the
-records that keep your computers in step. Both are on the Omacloud network
-(below): the objects on other Omarchy computers, the records at the Worker
-on omacloud.computer, sealed. For development and tests, `omacloud init
---repo <path> --coordinator <dir>` keeps both in directories instead, and
-`OMACLOUD_NETWORK=dir:<path>` keeps the Worker's part of a network in a
-directory. Either way the storage sees only encrypted objects, and nothing
-below depends on trusting it.
+Everything lives in a bucket you choose: a restic repository with the files,
+and beside it, under `omacloud-coordination/`, the records that keep your
+computers in step. Any S3 store with create-only writes works
+([providers.md](providers.md)); `omacloud init` checks for them before an
+account depends on them (`BucketCoordinator::check`). Omacloud runs no storage
+and no service an account depends on. For development and tests, `omacloud init
+--repo <path> --coordinator <dir>` keeps both in directories instead. Either way
+the storage sees only encrypted objects, and nothing below depends on trusting
+it.
 
 ## Storage: plain restic
 
@@ -27,7 +28,7 @@ Poly1305-AES), deduplicates, and keeps each version as a snapshot, for 30
 days: once a day the lowest-key member among those standing on a version
 from the last 30 days (the lowest of all when none is), if its daemon runs,
 forgets older ones (`Engine::tidy`), keeping the one each member last synced (recorded in the
-sealed `bases` records) and the one the window opens on, and prunes with
+`synced` records) and the one the window opens on, and prunes with
 rustic's lock-free two phases (packs younger than a day are left alone,
 packs marked for deletion wait a week, so data a computer takes up again
 in the meantime is kept). Two
@@ -37,9 +38,8 @@ one subtree of a snapshot without walking the whole folder.
 
 Because it's plain restic, you can always leave: `omacloud export --to
 <folder>` copies the repository to a folder and prints its password, and
-restic or rustic restores everything without Omacloud. `omacloud gateway`
-serves the repository on the network as S3 on loopback while it runs, for
-restic to read in place.
+restic or rustic restores everything without Omacloud; without `--to` it prints
+the command that restores from the bucket directly.
 
 ## Keys
 
@@ -59,6 +59,12 @@ restic to read in place.
   a new repository with a new key, sealed only to the remaining members,
   with every kept snapshot copied over so history stays readable. A
   removed computer keeps only what it had already seen.
+- **The bucket's key.** Every computer of an account holds it, in a config
+  file only its owner can read, and a join code carries it. It reaches
+  encrypted objects only. `omacloud bucket set-key` publishes a new one sealed
+  to each member and the root, signed, beside the other records (`bucket_key.rs`).
+  Each switches on its next sync and says so; once all have, the old key is
+  deleted at the provider, which cuts off a removed computer.
 - **Secrets bundle.** ssh and gpg keys never sync as files. `omacloud secrets
   save` seals them to the root (`secrets.rs`), so only the recovery code
   opens them: no computer, not even a member, can read another computer's
@@ -74,145 +80,26 @@ so whoever can write to the storage can't roll history back, withhold it,
 fork it or forge it without the other computers noticing.
 
 The heads, device chain and epoch records are append-only logs
-(`head.rs`'s `Coordinator`). Appending is create-only: the write is refused
-if another computer took that position first. For development they are
-files in a shared directory (`DirCoordinator`), each hard linked into place
-so a taken name fails. A coordinator may keep a change marker that every
-write moves; an idle computer checks it every few seconds and syncs when it
-moves, with a full sync every ten minutes regardless.
+(`head.rs`'s `Coordinator`), objects in the bucket (`bucket.rs`). Appending is
+a create-only write (`If-None-Match: *`): the bucket refuses it if another
+computer took that position first, which makes the bucket a compare and swap.
+For development they are files in a shared directory (`DirCoordinator`), each
+hard linked into place so a taken name fails. Every write the others need also rewrites an
+object named `changed`; an idle computer reads it every ten seconds and syncs
+when it moves, with a full sync every ten minutes regardless. So an idle computer
+costs one read most of the time, and a small sync's worth of requests every ten
+minutes.
 
-On the network, the Worker at omacloud.computer orders these records
-(`omacloud-net`'s `coord.rs` and `records.rs`): a taken position stays
-taken, which is the create-only append. Every body is sealed with a key
-derived from the recovery code's root, under an account id derived from it
-too; join codes carry that key and the network's address, so a join code
-opens the records but not the files. Writes need a bearer capability
-derived from the epoch's repository password (the Worker keeps only its
-hash); a new epoch replaces it, which shuts a removed computer out.
-Joining with the recovery code opens the epoch key as the root first, then
-writes with that epoch's capability. Join requests are the one write that
-needs no capability. Clients still verify every signature and the chain, so
-the Worker is trusted for ordering only. Its API is in
-[network-api.md](network-api.md).
+## Accounts and people
 
-## The Omacloud network
-
-The crate `omacloud-net` makes the network look like an S3 bucket to the
-sync engine. Nothing in it is trusted for anything but availability.
-
-- **Holders.** Objects live on Omarchy computers that run Omacloud, each
-  giving some disk space while its daemon runs (20 GiB unless told
-  otherwise, `omacloud node give`); `omacloud node run` runs one with no
-  account, as seeds do. The owner's computer picks holders from the public
-  node directory (`place.rs`): two copies per object (or six shards, below), on different
-  networks (ASN and /24 or /48 as the Worker saw them), one of them always
-  on (95% uptime or more) when there is one, never a node of the
-  account's own computers (each records its node id, sealed, among the
-  account's records). New nodes are on probation and come last: they hold
-  copies only when established nodes run out, as on a new network. Among
-  the rest the draw favours steady uptime and a long record (it grows over
-  three months), so the holders that stay get more to keep and earn more:
-  a node key is free to make, but a node that walks away to start over
-  gives up its history.
-- **Shards** (`erasure.rs`). An object of 1 MiB or more (restic's data
-  packs) is coded 4+2: its four slices and two parity shards, each on its
-  own holder on its own network, any four of which rebuild it. That keeps
-  1.5 times its size and survives two holders going, where two copies keep
-  twice it and survive one. A range is read from the slices it falls in;
-  a slice that doesn't come is rebuilt from four shards asked at once.
-  While the network has fewer than six independent nodes, large objects
-  are kept as two copies too.
-- **What a holder keeps** (`node.rs`): a blob only if its bytes hash to the
-  id it was stored under. Anyone may read any blob, as it's ciphertext. A
-  first lease is 7 days, unpaid (a blob gone before its first month end
-  costs nothing). A renewal keeps a blob up to three months
-  on credit and pays for the time it was already kept: each month end
-  passed since a blob was last paid for. Month ends are the same for every
-  blob (whole multiples of a month), so a holder's blobs come due together,
-  once a month, however often an owner renews. A holder is paid for what
-  it served, as the owner's audits found it, never ahead, so there's
-  nothing to take and run with. Asked with too little, a holder says
-  what's owed; the owner pays it unless it's more than every byte for
-  every month end since it last renewed that holder, which marks the
-  holder a cheat (asking anything between month ends does). A blob that
-  was paid for, from its first month end on, gets 180 days' grace after
-  its lease before it's dropped, so deletes are slow by design (an
-  account whose computers were all lost keeps its newest few weeks only
-  until their lease ends); a renewal after a lease ran out pays for the lease, not
-  the grace, and counts afresh from then. A holder never learns whose
-  blobs it has.
-- **Scrambling** (`blob.rs`). Each holder gets its own copy, the restic
-  object XORed with ChaCha20 keyed per epoch, its nonce from the object key
-  and the holder's id, so no two holders store the same bytes and a holder
-  that dropped its copy can't answer from another's. It adds uniqueness,
-  not secrecy: the object is already restic ciphertext.
-- **Reads and audits** are BLAKE3-verified ranges (iroh-blobs), checked
-  against the blob's id as they arrive.
-- **The index** (`seal.rs`, `registry.rs`) says which holders keep each
-  object. The Worker keeps it under entry ids that are keyed hashes of the
-  object keys, each entry sealed (XChaCha20 with a keyed BLAKE3 MAC, bound
-  to its entry id), in a scope per epoch, so it can't read entries or move
-  one under another name unnoticed.
-- **Keys per epoch.** The S3 access key the engine uses is the epoch's
-  network key, made from the repository password (`repo.rs`'s
-  `network_key`). The gateway (`gateway.rs`), on 127.0.0.1 only, is
-  stateless: from that key it derives the bucket's scope and the keys that
-  scramble and seal. A rotation (a new epoch) gets a new bucket with keys
-  the removed computer never saw.
-- **Credits** (`credit.rs`). Storage is paid in blind-signed tokens (RFC
-  9474), each a GiB kept for a month. The Worker issues and redeems them
-  and can't link a token to whoever it gave it to. A holder checks tokens
-  against the Worker's public key, trades them for fresh ones of its own
-  before it answers a renewal (so a payer can't spend them again
-  elsewhere; while the Worker is out of reach, later), and spends those on
-  its own account's storage: giving space earns what storing costs. Each
-  fresh token is blinded from a secret of the node's and the token it
-  replaces, so an exchange whose answer was lost is asked again the same,
-  and the Worker signs it again. A computer short of tokens asks for a small starter grant.
-  There's no money in it, by design: credits are only earned by giving
-  space, never bought or sold.
-- **Upkeep** (`upkeep.rs`, run by the daemon). Every 15 minutes a node
-  tells the directory it's up and trades in any tokens still waiting. Every 6
-  hours the account's computer reads back 32 random ranges of its copies,
-  daily renews them, paying each holder at each month end (from a wallet
-  in its data directory; daily, so a copy placed or repaired since never
-  outlives its free week unrenewed; a payment that fails leaves that
-  holder for the next round, and the rest go on), and gives new copies to objects whose holder failed an
-  audit or left, fewest copies first. A holder that failed is remembered
-  for 30 days and given no new copy meanwhile: kept on this computer,
-  reported nowhere, so nobody can get an honest node shunned. Audits are ordinary reads: a holder can't
-  tell one from a restore, and nothing about them goes to the Worker.
-- **Transport.** Computers talk over iroh. A computer reaches holders from
-  a throwaway key made for each run, so a holder can't tie the blobs it's
-  given to the node key that computer serves under. Port mapping and n0's
-  discovery are off. On omacloud.computer's network every computer uses
-  Omacloud's relay (relay1.omacloud.computer, on the first seed), and
-  reaches holders through it only, so a holder never learns its address;
-  nodes take direct connections too. Other networks set their own relays
-  (`[network] relays`).
-- **Shared files** (`share.rs`). `omacloud share` seals the file under a
-  random 256-bit secret and keeps it in a bucket of its own, whose keys
-  come from that secret alone, like an epoch's from its network key. The
-  link is `<network>/s#<secret>`: the Worker's page at `/s` never gets the
-  part after `#`. A share lasts its first lease, 7 days, unless the
-  sharing computer's daemon renews it (`share --days`, up to 365),
-  keeping its secret in a private file beside the wallet, and paying as
-  for its own copies; `unshare` takes it back. Holders and the Worker see
-  a bucket like any other, unlinked to the account that made it.
-- **What stays central.** The Worker keeps the node directory, the sealed
-  index, the sealed coordination records, and issues credits. There are no
-  accounts, emails or sign-ins: only ids and keys the computers make.
-- **Outliving the Worker** (`mirror.rs`). Each of an account's computers
-  keeps, as the Worker keeps them, the sealed records and index entries it
-  reads and writes, and the node directory. Reads fall back to that copy
-  while the Worker is out of reach. A listing that drops most of what's
-  kept reads as loss, not deletes, so a Worker that lost everything doesn't
-  wipe the copy. When a computer finds the records older than it already
-  saw, its daemon puts the copy back (`omacloud republish` by hand): the
-  account's records, made writable with the capability its own key gives,
-  then the index of the current epoch's bucket and of live shares. Only
-  what's missing is written, and logs stay create-only, so it can't
-  overwrite anything.
+One person is one account: a recovery code, a device chain, a repository. Every
+computer of an account can read all of it, so a family isn't one account. Each
+person gets a bucket and a key of their own: `omacloud invite` checks a bucket
+and prints a join code that names no account, and the first computer to use it
+creates that person's account, with a recovery code only they see. The person
+who made the bucket holds its key and can delete what's in it, as a provider
+can, but can't read it. A join code that names an account refuses a bucket
+holding another.
 
 ## Settings
 
@@ -253,34 +140,41 @@ and every computer of the account can, Wi-Fi keys included.
 
 ## What each party can see
 
-With the development setup, whoever can read the shared directories sees
-encrypted objects, their sizes (padded) and when they're written. On the
-network:
+- **Your storage provider, and anyone with the bucket's key,** see encrypted
+  objects, their sizes (padded), when they're written, and the addresses that
+  reach them. They know whose bucket it is from your account with them. The
+  records that keep computers in step are signed, not encrypted, so they also
+  see your computers' names and fingerprints, and when each one pushed or asked
+  to join. They can't read file contents, names, settings or keys, or forge
+  history unnoticed. They can delete everything: see below.
+- **Omacloud** sees nothing: it runs no service your data or your computers
+  talk to.
+- **A removed computer** keeps what it had synced before removal. With a new
+  epoch it can't read what comes after; once the bucket's key changes and the
+  old one is deleted it can't reach the bucket at all.
 
-- **The Worker** sees random account ids, encrypted coordination records,
-  the number of index entries and when they change, node ids with the
-  addresses they publish, their network and uptime, credit tokens it can't link to who spent them, and
-  IP addresses and timing. It never links a node to an account, and can't
-  read object names, placements or heads.
-- **Holders** see scrambled blobs, their sizes and when they're fetched or
-  checked, and a node key that changes every run. With relays set, a
-  computer reaches holders through relays only, so they don't learn its
-  address; on a network with no relays, it connects directly and they do.
-- **Relays and seeds** see who connects to whom and how much, by address;
-  seeds are holders too. Omacloud runs the first seed and its relay.
-- **Cloudflare** sits in front of the Worker and sees what it sees.
-- **A removed computer** keeps what it had synced before removal, and with
-  a new epoch can't read what comes after or write coordination records.
+The remaining leaks are sizes, timing and addresses, at your provider.
 
-The remaining leaks are addresses and timing at the Worker and the relays,
-and at holders when there are no relays.
+## What can go wrong
+
+Signed history means whoever holds the bucket's key can't change what you see
+unnoticed; it doesn't stop them destroying it. A computer that's stolen or
+infected holds the key, and could delete the bucket's objects. Against that,
+the bucket needs delete protection (R2 bucket locks, object lock elsewhere;
+[providers.md](providers.md#delete-protection)), which can't be set up from
+here, because a key that could turn it on could turn it off. It's a step of
+setting up a bucket, and the setup doesn't check for it.
+
+One bucket is one provider. A provider losing the bucket or closing your
+account takes the backup with it, though every computer keeps its synced files.
+Omacloud doesn't keep a second copy elsewhere yet.
 
 Nobody but your computers and your recovery code can read file contents,
 names, settings or keys.
 
 - **Programs you run, AI agents included,** can run `omacloud` as you. The
   commands that print a secret (the recovery code, a join code,
-  shares, a share link, the repository password) print it only in text
+  shares, an invite, the repository password) print it only in text
   mode with stdin and stdout on a terminal, and refuse as JSON or into a
   pipe, so it doesn't land in a script's output, a JSON consumer or an
   agent's captured output by accident. That is a guard against accidents,
@@ -294,25 +188,14 @@ names, settings or keys.
 
 ## Not yet
 
-On the network:
-
-- One seed and one relay, at one provider (Hetzner, Helsinki): while the
-  network is small, most copies have one always-on home, on one network.
-  Seeds at other providers would remove that single point (#33).
-- OHTTP or Tor for requests to the Worker (#39), a transparency log
-  (#40), and a DHT for finding nodes when the Worker is down (#41); each
-  computer already keeps its account's records and index (above).
-
-Elsewhere:
-
+- A second copy in another bucket or at home, kept by Omacloud. Until then
+  `omacloud export --to <folder>` makes one by hand.
 - Key transparency for device keys (#40); until then, approvals compare
   fingerprints out of band.
 - Direct computer-to-computer sync on a local network (#41).
 - Online-only files you can edit in place (#7): `omacloud mount` shows
   every file read-only, fetched on open, but a folder is either kept here
   in full or skipped, not freed file by file.
-- Sharing a folder with other people (#8); a shared link (#15) is one
-  file, read-only, for 7 days by default, up to a year with
-  `share --days`.
+- Sharing with other people (#8, #15).
 - Reaching files from a phone or a browser (#35).
 - An outside review of this design (#18).

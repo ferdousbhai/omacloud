@@ -8,7 +8,6 @@ repository.workspace = true
 
 [dependencies]
 omacloud-core.workspace = true
-omacloud-net.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 toml.workspace = true
@@ -19,9 +18,7 @@ env_logger.workspace = true
 hex.workspace = true
 libc.workspace = true
 serde_json = { workspace = true }
-rand.workspace = true
 fuser.workspace = true
-ureq = { version = "3.4.2", features = ["json"] }
 
 [dev-dependencies]
 tempfile.workspace = true

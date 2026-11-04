@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 opendal.workspace = true
+tokio.workspace = true
 rustic_core.workspace = true
 rustic_backend.workspace = true
 anyhow.workspace = true
@@ -36,5 +37,7 @@ md-5 = "0.11"
 toml_edit = "0.25"
 
 [dev-dependencies]
+# the coordinator on a folder, in tests/bucket.rs
+opendal = { workspace = true, features = ["services-fs"] }
 env_logger.workspace = true
 tempfile.workspace = true

@@ -266,6 +266,14 @@ impl DeviceChain {
         self.members_at(self.len())
     }
 
+    /// Who an account's secrets are sealed to: its valid members and the root.
+    #[must_use]
+    pub(crate) fn holders(&self) -> Vec<String> {
+        let mut holders: Vec<String> = self.members().valid.into_keys().collect();
+        holders.push(self.root.clone());
+        holders
+    }
+
     /// Whether `key` could sign at chain position `seq`.
     #[must_use]
     pub fn is_valid_at(&self, key: &str, seq: u64) -> bool {
@@ -432,6 +440,29 @@ pub fn genesis(root: &SigningKey, device: &SigningKey, name: &str) -> DeviceEntr
             name: name.to_string(),
         },
     )
+}
+
+/// Seal `plain` so only the holder of `recipient`'s signing key (hex public
+/// key) can open it.
+///
+/// # Errors
+///
+/// If `recipient` isn't a valid public key.
+pub(crate) fn seal_to(recipient: &str, plain: &[u8]) -> Result<Vec<u8>> {
+    let bytes: [u8; 32] = hex::decode(recipient)?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("not a 32 byte key"))?;
+    let x25519 = ed25519_dalek::VerifyingKey::from_bytes(&bytes)?
+        .to_montgomery()
+        .to_bytes();
+    crypto_box::PublicKey::from(x25519)
+        .seal(&mut crypto_box::aead::OsRng, plain)
+        .map_err(|_| anyhow::anyhow!("sealing failed"))
+}
+
+/// What [`seal_to`] sealed to `key`; None if it wasn't, or was tampered with.
+pub(crate) fn open_with(key: &SigningKey, sealed: &[u8]) -> Option<Vec<u8>> {
+    crypto_box::SecretKey::from(key.to_scalar_bytes()).unseal(sealed).ok()
 }
 
 #[cfg(test)]

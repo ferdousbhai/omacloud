@@ -31,41 +31,25 @@ pub struct RepoSpec {
 /// not the repository's.
 const LOCAL_OPTIONS: &[&str] = &["bandwidth", "connections"];
 
-/// The option that marks a repository on the Omacloud network: its S3 key
-/// is the epoch's network key, made from the repository password, which
-/// picks the epoch's keys at the gateway.
-pub const NETWORK: &str = "network";
-
-/// An epoch's key on the network, from its repository password.
-#[must_use]
-pub fn network_key(password: &str) -> String {
-    use sha2::{Digest, Sha256};
-    hex::encode(Sha256::digest(format!("omacloud network epoch\n{password}")))
-}
-
 impl RepoSpec {
     /// A bucket (OpenDAL, such as S3), as opposed to a local path.
     #[must_use]
-    fn is_bucket(&self) -> bool {
+    pub fn is_bucket(&self) -> bool {
         self.repository.starts_with("opendal:")
     }
 
-    /// On the network, the same location with the key for the epoch whose
-    /// password this is; elsewhere, the same location.
-    #[must_use]
-    pub fn keyed(&self, password: &str) -> Self {
-        let mut spec = self.clone();
-        if spec.options.contains_key(NETWORK) {
-            _ = spec.options.insert("access_key_id".into(), network_key(password));
-            _ = spec.options.insert("secret_access_key".into(), "network".into());
-        }
-        spec
+    /// The path of `name` directly under this location's root in its bucket.
+    pub(crate) fn under_root(&self, name: &str) -> String {
+        let root = self.options.get("root").map_or("", |r| r.trim_end_matches('/'));
+        format!("{root}/{name}")
     }
 
-    /// Whether this is a repository on the Omacloud network.
-    #[must_use]
-    pub fn is_network(&self) -> bool {
-        self.options.contains_key(NETWORK)
+    /// Use another key for this location.
+    pub fn set_key(&mut self, key: &crate::bucket_key::Credentials) {
+        _ = self.options.insert("access_key_id".into(), key.access_key_id.clone());
+        _ = self
+            .options
+            .insert("secret_access_key".into(), key.secret_access_key.clone());
     }
 
     fn backends(&self) -> Result<RepositoryBackends> {
@@ -84,7 +68,6 @@ impl RepoSpec {
     fn raw_backends(&self) -> Result<RepositoryBackends> {
         let mut options = self.options.clone();
         _ = options.remove("bandwidth");
-        _ = options.remove(NETWORK);
         if !self.is_bucket() {
             options.retain(|k, _| !LOCAL_OPTIONS.contains(&k.as_str()));
         }
@@ -100,9 +83,8 @@ impl RepoSpec {
             &KeyOptions::default(),
             &ConfigOptions::default()
                 .set_pack_padding(true)
-                // packs otherwise grow with the repository, without limit:
-                // kept under the network's largest object, 128 MiB, padding
-                // and one last chunk included
+                // packs otherwise grow with the repository, without limit,
+                // and a retry resends a whole pack
                 .set_datapack_size_limit(bytesize::ByteSize::mib(PACK_SIZE_LIMIT_MIB))
                 .set_treepack_size_limit(bytesize::ByteSize::mib(PACK_SIZE_LIMIT_MIB)),
         )?;
@@ -110,17 +92,17 @@ impl RepoSpec {
     }
 
     /// Where epoch `n` of this repository lives: a local path gets a `.e<n>`
-    /// suffix; the network's gets its own root in the bucket.
+    /// suffix; a bucket's gets its own root in the bucket.
     #[must_use]
     pub fn for_epoch(&self, n: u64) -> Self {
         if n == 0 {
             return self.clone();
         }
         let mut spec = self.clone();
-        if spec.repository.starts_with("opendal:") {
-            let root = spec.options.get("root").map_or("", |r| r.trim_end_matches('/'));
-            let new_root = format!("{root}/omacloud-e{n}");
-            _ = spec.options.insert("root".into(), new_root);
+        if spec.is_bucket() {
+            _ = spec
+                .options
+                .insert("root".into(), self.under_root(&format!("omacloud-e{n}")));
         } else {
             spec.repository = format!("{}.e{n}", self.repository);
         }
@@ -128,14 +110,22 @@ impl RepoSpec {
     }
 
     /// Delete every file of the repository it can, then (for a local path)
-    /// the directory itself. Returns how many files remain: the first
-    /// refused delete ends this try, and the rest wait for a later one.
+    /// the directory itself. Returns how many files remain: a bucket with
+    /// delete protection (object lock, R2 bucket locks) refuses to delete
+    /// files still under retention, and those wait for a later try; the
+    /// first refusal ends this one.
     ///
     /// # Errors
     ///
     /// If listing fails.
     pub fn destroy(&self) -> Result<usize> {
-        let be = self.backends()?.repository();
+        // a protected object stays protected: retrying a refused delete only
+        // waits (OpenDAL takes R2's 409 for a temporary error and backs off)
+        let mut spec = self.clone();
+        if spec.is_bucket() {
+            _ = spec.options.insert("retry".into(), "off".into());
+        }
+        let be = spec.backends()?.repository();
         let mut left = 0;
         for tpe in ALL_FILE_TYPES {
             for id in be.list(tpe)? {

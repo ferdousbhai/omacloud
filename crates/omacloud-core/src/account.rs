@@ -36,32 +36,16 @@ pub struct Created {
 /// If the coordinator already serves an account, or the repository can't be
 /// created (for example because one exists there).
 pub fn create(coord: &dyn Coordinator, repo: &RepoSpec, device: &SigningKey, name: &str) -> Result<Created> {
-    create_with_code(coord, repo, device, name, new_recovery_code())
-}
-
-/// [`create`] with a recovery code made beforehand (from
-/// [`crate::devices::new_recovery_code`]), for coordination that is found
-/// by what the code gives.
-///
-/// # Errors
-///
-/// As [`create`], and if the code isn't one.
-pub fn create_with_code(
-    coord: &dyn Coordinator,
-    repo: &RepoSpec,
-    device: &SigningKey,
-    name: &str,
-    recovery_code: String,
-) -> Result<Created> {
     ensure!(
         coord.anchor()?.is_none(),
         "an account already exists here; join it instead"
     );
+    let recovery_code = new_recovery_code();
     let root_key = root_key(&recovery_code)?;
     let root = public_hex(&root_key);
     // the repository first: if that fails, no account is left half made
     let password = random_secret();
-    let key = repo.keyed(&password).init(&password)?;
+    let key = repo.init(&password)?;
     ensure!(
         coord.set_anchor(&Anchor { root: root.clone() })?,
         "an account was created here at the same moment; join it instead"
@@ -78,7 +62,6 @@ pub fn create_with_code(
     };
     let record = EpochRecord::next(device, None, 0, &chain, &secret, BTreeMap::new())?;
     ensure!(coord.append_epoch(&record)?, "the account already has keys");
-    coord.epoch_started(None, &secret)?;
     Ok(Created {
         recovery_code,
         root,
@@ -114,12 +97,10 @@ pub fn join_with_recovery(coord: &dyn Coordinator, code: &str, device: &SigningK
     }
     let mut chain = DeviceChain::new(&root);
     chain.advance(coord)?;
-    // the key first: the root opens it, and writing the account's records
-    // may need what it gives
+    // the key first: if the root can't open it, no device is added
     let mut epochs = EpochChain::default();
     epochs.advance(coord, &chain)?;
     let (epoch, secret) = epochs.secret(coord, &chain, &root_key)?;
-    coord.epoch_known(&secret);
     let me = public_hex(device);
     if !chain.members().valid.contains_key(&me) {
         let action = Action::Add {

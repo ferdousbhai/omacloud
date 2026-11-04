@@ -265,10 +265,6 @@ pub struct State {
     /// their files couldn't be deleted. Deletion is retried about daily.
     #[serde(default)]
     pub leftover: BTreeSet<u64>,
-    /// Each leftover epoch's password: its repository is reached with its
-    /// own key (on the network, a bucket of its own), not the current one.
-    #[serde(default)]
-    pub leftover_passwords: BTreeMap<u64, String>,
     /// When deleting leftovers was last tried, in seconds since the epoch.
     #[serde(default)]
     pub cleaned_at: u64,
@@ -279,6 +275,17 @@ pub struct State {
     /// The head this device last told the coordinator it synced.
     #[serde(default)]
     pub told_synced: u64,
+}
+
+/// What a bucket key change means for this device.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyChange {
+    /// Nothing past what it has seen.
+    None,
+    /// It joined after change `.0`, with a key at least as new.
+    CaughtUp(u64),
+    /// Change `.0`: switch to this key.
+    Switch(u64, crate::bucket_key::Credentials),
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -395,9 +402,6 @@ impl Engine {
             },
         };
         anyhow::ensure!(state.devices.root == root, "sync state belongs to another account root");
-        if let Some((_, secret)) = &state.secret {
-            coord.epoch_known(secret);
-        }
         Ok(Self {
             device,
             folder,
@@ -424,6 +428,67 @@ impl Engine {
                 .unwrap_or_default(),
             folders,
         })
+    }
+
+    /// Publish a new bucket key for an account in a bucket, sealed to every
+    /// member and the root; returns its number. The old key must still work:
+    /// the record is stored with it.
+    ///
+    /// # Errors
+    ///
+    /// If this device isn't a member, or another change landed at the same
+    /// time.
+    pub fn change_bucket_key(&mut self, creds: &crate::bucket_key::Credentials) -> Result<u64> {
+        self.refresh_devices()?;
+        let seq = self.coord.latest_key_record()?.map_or(0, |r| r.seq) + 1;
+        let record = crate::bucket_key::KeyRecord::new(&self.signing, seq, &self.state.devices, creds)?;
+        anyhow::ensure!(
+            self.coord.append_key_record(&record)?,
+            "another computer changed the bucket key at the same time; look again"
+        );
+        self.ack_bucket_key(seq)?;
+        Ok(seq)
+    }
+
+    /// What the account's latest bucket key change, past `seen`, means here.
+    ///
+    /// # Errors
+    ///
+    /// If its record doesn't verify, or wasn't sealed to this device although
+    /// it was a member then (it was removed before the change).
+    pub fn key_change_since(&mut self, seen: u64) -> Result<KeyChange> {
+        let Some(record) = self.coord.latest_key_record()?.filter(|r| r.seq > seen) else {
+            return Ok(KeyChange::None);
+        };
+        self.refresh_devices()?;
+        record.verify(&self.state.devices)?;
+        let me = self.device_key();
+        let then = self.state.devices.members_at(record.devices);
+        if !record.keys.contains_key(&me) && !then.valid.contains_key(&me) && !then.revoked.contains_key(&me) {
+            return Ok(KeyChange::CaughtUp(record.seq));
+        }
+        Ok(KeyChange::Switch(record.seq, record.open(&self.signing)?))
+    }
+
+    /// Say this device switched to key change `seq`.
+    ///
+    /// # Errors
+    ///
+    /// If the acknowledgment can't be stored.
+    pub fn ack_bucket_key(&self, seq: u64) -> Result<()> {
+        self.coord.ack_key(seq, &self.device_key())
+    }
+
+    /// The latest key change, and which members switched to it.
+    ///
+    /// # Errors
+    ///
+    /// On coordinator errors.
+    pub fn bucket_key_status(&self) -> Result<Option<(u64, Vec<String>)>> {
+        let Some(record) = self.coord.latest_key_record()? else {
+            return Ok(None);
+        };
+        Ok(Some((record.seq, self.coord.key_acks(record.seq)?)))
     }
 
     /// Change which folders sync here (after `omacloud folders` edited the
@@ -646,12 +711,11 @@ impl Engine {
     /// If this device has no repository key yet.
     pub fn repository(&self) -> Result<(RepoSpec, EpochSecret, u64)> {
         let (epoch, secret) = self.secret()?;
-        let spec = self.repo.keyed(&secret.password);
         anyhow::ensure!(
-            !spec.repository.is_empty(),
+            !self.repo.repository.is_empty(),
             "this computer doesn't know where the repository is; set it up with --repo"
         );
-        Ok((spec.for_epoch(epoch), secret, epoch))
+        Ok((self.repo.for_epoch(epoch), secret, epoch))
     }
 
     fn open_repo(&self) -> Result<Repo> {
@@ -665,10 +729,9 @@ impl Engine {
         self.state.epochs.advance(self.coord.as_ref(), &self.state.devices)?;
         let latest = self.state.epochs.current();
         if latest.is_some()
-            && let Some((epoch, secret)) = &self.state.secret
+            && let Some((epoch, _)) = &self.state.secret
             && Some(*epoch) == latest
         {
-            self.coord.epoch_known(secret);
             return Ok(());
         }
         let (epoch, secret) = self
@@ -684,7 +747,6 @@ impl Engine {
         if from != epoch {
             info!("now syncing in repository epoch {epoch}");
         }
-        self.coord.epoch_known(&secret);
         self.state.secret = Some((epoch, secret));
         self.save_state()
     }
@@ -723,9 +785,9 @@ impl Engine {
         let (old_epoch, old_secret) = self.secret()?;
         let epoch = old_epoch + 1;
         let base = &self.repo;
-        let old_spec = base.keyed(&old_secret.password).for_epoch(old_epoch);
+        let old_spec = base.for_epoch(old_epoch);
         let password = random_secret();
-        let new_spec = base.keyed(&password).for_epoch(epoch);
+        let new_spec = base.for_epoch(epoch);
         let secret = EpochSecret {
             key: new_spec
                 .init(&password)
@@ -777,7 +839,6 @@ impl Engine {
                 break record;
             }
         };
-        self.coord.epoch_started(Some(&old_secret), &secret)?;
 
         self.state.epochs.push(record, &self.state.devices)?;
         if let Some(base) = self.state.base.as_mut()
@@ -797,10 +858,6 @@ impl Engine {
                  deleting them is retried later"
             );
             _ = self.state.leftover.insert(old_epoch);
-            _ = self
-                .state
-                .leftover_passwords
-                .insert(old_epoch, old_secret.password.clone());
             self.state.cleaned_at = unix_now();
             self.save_state()?;
         }
@@ -822,14 +879,9 @@ impl Engine {
         }
         self.state.cleaned_at = now;
         for epoch in std::mem::take(&mut self.state.leftover) {
-            // kept from before passwords were: nothing here can reach it
-            let Some(password) = self.state.leftover_passwords.get(&epoch).cloned() else {
-                continue;
-            };
-            match self.repo.keyed(&password).for_epoch(epoch).destroy() {
+            match self.repo.for_epoch(epoch).destroy() {
                 Ok(0) => {
                     info!("deleted leftover repository epoch {epoch}");
-                    _ = self.state.leftover_passwords.remove(&epoch);
                 }
                 Ok(left) => {
                     debug!("{left} files of repository epoch {epoch} still couldn't be deleted");
