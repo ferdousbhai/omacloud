@@ -23,6 +23,11 @@ shared .config/tmux/tmux.conf
 # bundle instead. Login files (.bash_profile, .profile) and fish's conf.d
 # stay too: installers append lines to them that only make sense where
 # they ran.
+# What's about the machine stays on it, whatever Omarchy's own manifest says: a
+# touchpad's settings, and the bar's plugins, some of which only run on one kind
+# of computer.
+local .config/hypr/input.lua
+local .config/omarchy/shell.json
 shared .bash_aliases
 shared .inputrc
 shared .gitconfig

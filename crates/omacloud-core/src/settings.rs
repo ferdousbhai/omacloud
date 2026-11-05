@@ -454,6 +454,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn what_is_about_the_machine_stays_whatever_omarchys_manifest_says() -> Result<()> {
+        let omarchy = "shared .config/hypr/input.lua\nshared .config/omarchy/shell.json\n";
+        let m = Manifest::parse(&format!("{omarchy}\n{}", additions()))?;
+        assert!(!m.is_shared(Path::new(".config/hypr/input.lua")));
+        assert!(!m.is_shared(Path::new(".config/omarchy/shell.json")));
+        Ok(())
+    }
+
+    #[test]
     fn tiers_and_wildcards() -> Result<()> {
         let m = Manifest::parse(BUNDLED)?;
         let yes = |p: &str| assert!(m.is_shared(Path::new(p)), "{p} should be shared");
@@ -464,6 +473,8 @@ mod tests {
         yes(".config/omarchy/extensions/x.jsonc");
         no(".config/hypr/monitors.lua"); // local tier
         no(".config/hypr/hyprland.lua");
+        no(".config/hypr/input.lua"); // about the machine, over Omarchy's own tier
+        no(".config/omarchy/shell.json");
         no(".config/alacritty/themes/x.toml"); // * stays within one component
         no(".ssh/id_ed25519");
         no(".config/chromium/Default/Preferences");

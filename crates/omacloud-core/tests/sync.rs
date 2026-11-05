@@ -1002,6 +1002,25 @@ impl World {
         Engine::new(setup, self.coord.clone())
     }
 
+    /// [`Self::engine_with_settings`], on a manifest of its own.
+    fn engine_with_manifest(&self, device: &str, manifest: &str) -> Result<Engine> {
+        let dir = self.dir(device);
+        fs::create_dir_all(&dir)?;
+        let home = self.home(device);
+        fs::create_dir_all(&home)?;
+        let mut setup = self.setup(device, dir, Some(self.tmp.path().join(format!("{device}.state.json"))));
+        setup.settings = Some(omacloud_core::SettingsSetup {
+            home,
+            manifest: omacloud_core::settings::Manifest::parse(manifest)?,
+            backups: self.tmp.path().join(format!("{device}-backups")),
+            packages: self.tmp.path().join(format!("{device}-packages")),
+            secrets: self.tmp.path().join(format!("{device}-secrets")),
+            merged: self.tmp.path().join(format!("{device}-merged")),
+            groups: Vec::new(),
+        });
+        Engine::new(setup, self.coord.clone())
+    }
+
     fn home(&self, device: &str) -> PathBuf {
         self.tmp.path().join(format!("{device}-home"))
     }
@@ -1083,6 +1102,77 @@ fn settings_follow_the_dots_manifest_and_merge() -> Result<()> {
 
     // history covers settings too
     assert!(a.versions(&Path::new(".omacloud/settings").join(bindings))?.len() >= 3);
+    Ok(())
+}
+
+/// A file that was shared, and is local from some version on: the copy already
+/// in the repository reaches no computer, and each keeps its own.
+#[test]
+fn a_setting_made_local_stays_out_of_every_computer() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ha, hb) = (w.home("a"), w.home("b"));
+    let input = ".config/hypr/input.lua";
+    write(&ha, input, "a's touchpad\n");
+    write(&hb, input, "b's touchpad\n");
+    w.engine_with_manifest("a", &format!("shared {input}\n"))?.sync()?;
+
+    let local = format!("shared {input}\nlocal {input}\n");
+    let mut b = w.engine_with_manifest("b", &local)?;
+    let st = b.sync()?;
+    assert_eq!(st.conflicts, 0);
+    assert_eq!(fs::read_to_string(hb.join(input))?, "b's touchpad\n");
+    assert!(b.settings_status().held.is_empty());
+
+    // and the computer that first shared it, on the new version, keeps its file
+    let mut a = w.engine_with_manifest("a", &local)?;
+    a.sync()?;
+    assert_eq!(fs::read_to_string(ha.join(input))?, "a's touchpad\n");
+    write(&ha, input, "a's new touchpad\n");
+    a.notice([ha.join(input)]);
+    a.sync()?;
+    b.sync()?;
+    assert_eq!(fs::read_to_string(hb.join(input))?, "b's touchpad\n");
+    Ok(())
+}
+
+/// Two computers set up on their own, whose settings already differ when they
+/// first meet: no earlier version to merge from, and nothing may be lost.
+#[test]
+fn settings_that_already_differ_lose_nothing_when_computers_first_meet() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ha, hb) = (w.home("a"), w.home("b"));
+    let (differs, same, only_a, only_b) = (
+        ".config/hypr/bindings.lua",
+        ".config/starship.toml",
+        ".config/tmux/tmux.conf",
+        ".config/btop/btop.conf",
+    );
+    write(&ha, differs, "a's bindings\n");
+    write(&hb, differs, "b's bindings\n");
+    write(&ha, same, "the same\n");
+    write(&hb, same, "the same\n");
+    write(&ha, only_a, "only a\n");
+    write(&hb, only_b, "only b\n");
+    let (mut a, mut b) = (w.engine_with_settings("a")?, w.engine_with_settings("b")?);
+    a.sync()?;
+    b.sync()?;
+    a.sync()?;
+
+    // what only one has reaches the other; the same is no conflict
+    assert_eq!(fs::read_to_string(hb.join(only_a))?, "only a\n");
+    assert_eq!(fs::read_to_string(ha.join(only_b))?, "only b\n");
+    assert_eq!(fs::read_to_string(hb.join(same))?, "the same\n");
+    // what differs stays as each had it, until someone chooses
+    assert_eq!(fs::read_to_string(ha.join(differs))?, "a's bindings\n");
+    assert_eq!(fs::read_to_string(hb.join(differs))?, "b's bindings\n");
+    assert_eq!(b.settings_status().held, [PathBuf::from(differs)]);
+    assert!(a.settings_status().held.is_empty());
+
+    b.resolve_setting(Path::new(differs), true)?;
+    b.sync()?;
+    a.sync()?;
+    assert_eq!(fs::read_to_string(hb.join(differs))?, "a's bindings\n");
+    assert!(b.settings_status().held.is_empty());
     Ok(())
 }
 

@@ -12,6 +12,8 @@
 - `omacloud export` prints the restic command that restores from the bucket.
 - Removed with the network: `node`, `gateway`, `republish`, credits, and share links
   (`share`, `shares`, `unshare`, `receive`).
+- `input.lua` and the bar's `shell.json` stay on each computer: touchpads differ, and
+  some bar plugins only run on one kind of computer.
 - A computer on the network says so and asks to be set up again: `omacloud init`
   with a bucket keeps the old config aside, deletes what the network left on the
   computer (others' encrypted blobs, up to the space it gave, and its keys for the

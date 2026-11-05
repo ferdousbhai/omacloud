@@ -104,7 +104,10 @@ holding another.
 ## Settings
 
 Omarchy's dots manifest lists which files of home are shared between
-machines and which stay local (`settings.rs`). Omacloud syncs the shared
+machines and which stay local (`settings.rs`). The rule is that what's about you
+follows you and what's about the machine stays on it, so Omacloud's own entries
+keep `input.lua` and the bar's `shell.json` local over Omarchy's manifest: a local
+entry wins, and a copy already in the repository reaches no computer. Omacloud syncs the shared
 ones, inside the same encrypted history, with three-way merges and a backup
 of anything it replaces. A change made on two machines that doesn't merge is
 held for you to choose (Keep Mine or Keep Theirs). Settings sync stands down
