@@ -62,8 +62,12 @@ const READERS: usize = 16;
 #[must_use]
 pub fn key_refused(err: &anyhow::Error) -> bool {
     err.chain().any(|e| {
-        e.downcast_ref::<opendal::Error>()
-            .is_some_and(|e| e.kind() == ErrorKind::PermissionDenied)
+        e.downcast_ref::<opendal::Error>().is_some_and(|e| {
+            // R2 answers a deleted key with a 401, which OpenDAL leaves
+            // unclassified; a 403 comes here as PermissionDenied
+            e.kind() == ErrorKind::PermissionDenied
+                || (e.kind() == ErrorKind::Unexpected && e.to_string().contains("status: 401"))
+        })
     })
 }
 
@@ -416,6 +420,14 @@ mod tests {
         let err = |e: opendal::Error| anyhow::Error::new(e).context("reading the anchor");
         let denied = err(opendal::Error::new(ErrorKind::PermissionDenied, "403"));
         assert!(key_refused(&denied) && !unreachable(&denied));
+        // as R2 answers a key that was deleted
+        let unauthorized =
+            err(opendal::Error::new(ErrorKind::Unexpected, "").with_context("response", "Parts { status: 401, .. }"));
+        assert!(key_refused(&unauthorized) && !unreachable(&unauthorized));
+        assert!(!key_refused(&err(opendal::Error::new(
+            ErrorKind::Unexpected,
+            "status: 500"
+        ))));
         let busy = err(opendal::Error::new(ErrorKind::RateLimited, "429"));
         assert!(unreachable(&busy) && !key_refused(&busy));
         let down = err(opendal::Error::new(ErrorKind::Unexpected, "503").set_temporary());

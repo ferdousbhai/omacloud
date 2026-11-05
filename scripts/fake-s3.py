@@ -55,7 +55,8 @@ class Handler(BaseHTTPRequestHandler):
         if not found or found.group(1) not in good:
             if length_read:
                 self.body()
-            self.error_xml(403, "AccessDenied")
+            # as R2 answers a key that was deleted
+            self.error_xml(401, "Unauthorized")
             return None
         url = urlsplit(self.path)
         if self.command in ("GET", "HEAD") and "flaky" in good:
