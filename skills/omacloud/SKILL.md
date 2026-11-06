@@ -112,6 +112,10 @@ conflict copy where both have a version. `folders list --json` gives each folder
 
 Skipping keeps the cloud's copy; only `folders remove` takes it out.
 
+Dropbox: `init --provider dropbox` needs someone at a browser to allow it once, or a
+refresh token already allowed in OMACLOUD_DROPBOX_REFRESH_TOKEN. Each person uses their
+own Dropbox, so `invite` doesn't apply; `bucket set-key` needs no key id there.
+
 Settings: `settings on|off`, `settings skip|unskip shell|agents|apps|chromium|wifi`,
 `settings resolve PATH --keep local|remote`.
 Changes can affect desktop settings, browser configuration, Wi-Fi, and agent

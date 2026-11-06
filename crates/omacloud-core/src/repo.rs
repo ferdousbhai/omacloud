@@ -38,6 +38,12 @@ impl RepoSpec {
         self.repository.starts_with("opendal:")
     }
 
+    /// In a Dropbox rather than a bucket.
+    #[must_use]
+    pub fn is_dropbox(&self) -> bool {
+        self.repository == "opendal:dropbox"
+    }
+
     /// The path of `name` directly under this location's root in its bucket.
     pub(crate) fn under_root(&self, name: &str) -> String {
         let root = self.options.get("root").map_or("", |r| r.trim_end_matches('/'));
@@ -46,10 +52,21 @@ impl RepoSpec {
 
     /// Use another key for this location.
     pub fn set_key(&mut self, key: &crate::bucket_key::Credentials) {
-        _ = self.options.insert("access_key_id".into(), key.access_key_id.clone());
-        _ = self
-            .options
-            .insert("secret_access_key".into(), key.secret_access_key.clone());
+        use crate::bucket_key::Credentials;
+        match key {
+            Credentials::S3 {
+                access_key_id,
+                secret_access_key,
+            } => {
+                _ = self.options.insert("access_key_id".into(), access_key_id.clone());
+                _ = self
+                    .options
+                    .insert("secret_access_key".into(), secret_access_key.clone());
+            }
+            Credentials::Dropbox { refresh_token } => {
+                _ = self.options.insert("refresh_token".into(), refresh_token.clone());
+            }
+        }
     }
 
     fn backends(&self) -> Result<RepositoryBackends> {
@@ -68,6 +85,13 @@ impl RepoSpec {
     fn raw_backends(&self) -> Result<RepositoryBackends> {
         let mut options = self.options.clone();
         _ = options.remove("bandwidth");
+        if self.is_dropbox() {
+            // Dropbox is slow per request (a pull reads each file with at
+            // least one), and limits writes more than reads: enough at once
+            // that a pull of many small files doesn't crawl, few enough that
+            // pack uploads mostly don't need retrying
+            _ = options.entry("connections".into()).or_insert("16".into());
+        }
         if !self.is_bucket() {
             options.retain(|k, _| !LOCAL_OPTIONS.contains(&k.as_str()));
         }
@@ -78,13 +102,17 @@ impl RepoSpec {
     }
 
     pub fn init(&self, password: &str) -> Result<MasterKey> {
+        if self.is_dropbox() {
+            crate::dropbox::DropboxCreate::new(&self.options)?.prepare_root()?;
+        }
         let repo = Repository::new(&RepositoryOptions::default(), &self.backends()?)?.init(
             &Credentials::password(password),
             &KeyOptions::default(),
             &ConfigOptions::default()
                 .set_pack_padding(true)
                 // packs otherwise grow with the repository, without limit,
-                // and a retry resends a whole pack
+                // and a retry resends a whole pack; Dropbox also caps an upload
+                // at 150 MB
                 .set_datapack_size_limit(bytesize::ByteSize::mib(PACK_SIZE_LIMIT_MIB))
                 .set_treepack_size_limit(bytesize::ByteSize::mib(PACK_SIZE_LIMIT_MIB)),
         )?;

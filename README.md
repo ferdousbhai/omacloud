@@ -59,9 +59,15 @@ new versions until you install the signed repository.
 
 ## Set up
 
-First make a private bucket and a key that reaches it at your provider
-([docs/providers.md](docs/providers.md) has the steps). Then, on the first
-computer, in a terminal (or in the Omacloud app):
+The simplest way is your own Dropbox: on the first computer, click Connect
+Dropbox in the Omacloud app, or run this and allow Omacloud in your browser:
+
+```sh
+omacloud init --provider dropbox
+```
+
+Or use a bucket: make a private one and a key that reaches it at your provider
+([docs/providers.md](docs/providers.md) has the steps), then:
 
 ```sh
 omacloud init --provider r2 --account <cloudflare account id> \
@@ -70,8 +76,8 @@ omacloud init --provider hetzner --location fsn1 --bucket <name> --access-key-id
 omacloud init --provider s3 --endpoint <url> --bucket <name> --access-key-id <id>
 ```
 
-It asks for the key's secret (or takes it from `OMACLOUD_SECRET_ACCESS_KEY`),
-checks that the bucket can hold an account, and shows your **recovery code**
+It asks for the key's secret (or takes it from `OMACLOUD_SECRET_ACCESS_KEY`).
+Either way it checks that the storage can hold an account, and shows your **recovery code**
 once: write it down and keep it offline. With it you can add a computer when
 no other is at hand and recover everything; without it and without a
 computer, nobody can.

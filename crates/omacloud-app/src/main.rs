@@ -483,8 +483,12 @@ fn not_set_up(why: &str) -> adw::StatusPage {
 /// A dialog that stays up while `omacloud init` runs, so the wait (the
 /// account being made) doesn't look like nothing happening. Closed by the
 /// caller when init is done.
-fn setting_up(ui: &Rc<Ui>) -> adw::Dialog {
-    let text = "Omacloud is setting up this computer, which can take a minute.";
+fn setting_up(ui: &Rc<Ui>, browser: bool) -> adw::Dialog {
+    let text = if browser {
+        "Allow Omacloud in Dropbox in your browser. Setting up can then take a minute."
+    } else {
+        "Omacloud is setting up this computer, which can take a minute."
+    };
     let body = gtk::Box::new(gtk::Orientation::Vertical, 18);
     body.set_margin_top(12);
     body.set_margin_bottom(24);
@@ -524,7 +528,7 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
     argv.extend(args);
     let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
     let ui2 = ui.clone();
-    let busy = setting_up(ui);
+    let busy = setting_up(ui, argv.iter().any(|a| a == "dropbox"));
     // creating an account prints its recovery code: only to a terminal
     tty_then(&argv_ref, env, move |r| match r {
         Err(e) => {
@@ -638,9 +642,30 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     let (what, sync_args) = choose_what_syncs();
     page.add(&what);
 
+    // Dropbox first: nothing to make or paste
+    let dropbox = group(
+        "Use your Dropbox",
+        "The simplest start: Dropbox asks you to allow Omacloud in your browser, and your files \
+         go in its Apps/Omacloud folder. Everything is encrypted on this computer before it leaves, \
+         so Dropbox can't read it.",
+    );
+    let connect = button("Connect Dropbox", Some("suggested-action"));
+    connect.set_halign(gtk::Align::End);
+    connect.set_margin_top(12);
+    {
+        let (ui, sync_args) = (ui.clone(), sync_args.clone());
+        connect.connect_clicked(move |_| {
+            let mut args = vec!["--provider".to_string(), "dropbox".to_string()];
+            args.extend(sync_args());
+            run_init(&ui, args, vec![]);
+        });
+    }
+    dropbox.add(&connect);
+    page.add(&dropbox);
+
     // create: in a bucket of the user's own
     let create = group(
-        "Create an account",
+        "Or use a bucket of your own",
         "Make a private bucket and a key that reaches it at your provider, then give them here. \
          Everything is encrypted on this computer before it leaves, so your provider can't read it.",
     );
@@ -669,7 +694,7 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
         .title("Lost every computer? Recovery code (optional)")
         .build();
     create.add(&rescue);
-    let create_button = button("Create Account", Some("suggested-action"));
+    let create_button = button("Create Account", None);
     create_button.set_halign(gtk::Align::End);
     create_button.set_margin_top(12);
     {
@@ -853,6 +878,7 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     let repo = &s["repo"];
     let place = match repo["kind"].as_str() {
         Some("bucket") => format!("{} at {}", text(&repo["bucket"]), text(&repo["endpoint"])),
+        Some("dropbox") => "Your Dropbox, its Apps/Omacloud folder".to_string(),
         Some("path") => short_path(&text(&repo["repository"])),
         _ => text(&repo["repository"]),
     };

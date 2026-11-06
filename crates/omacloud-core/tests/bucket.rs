@@ -92,7 +92,7 @@ fn an_account_with_no_service() -> Result<()> {
     // remove b, then change the bucket key: sealed to a and c, not b
     a.sync()?;
     a.revoke(&public_hex(&kb))?;
-    let new_key = Credentials {
+    let new_key = Credentials::S3 {
         access_key_id: "new-id".into(),
         secret_access_key: "new-secret".into(),
     };

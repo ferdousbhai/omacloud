@@ -12,7 +12,7 @@ repository = "https://github.com/ferdousbhai/omacloud"
 omacloud-core = { path = "crates/omacloud-core" }
 rustic_core = "0.13"
 rustic_backend = { version = "0.7", default-features = false, features = ["opendal"] }
-opendal = { version = "0.58", default-features = false, features = ["blocking", "services-s3", "layers-retry"] }
+opendal = { version = "0.58", default-features = false, features = ["blocking", "services-s3", "services-dropbox", "layers-retry"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread"] }
 anyhow = "1"
 thiserror = "2"
@@ -22,6 +22,8 @@ toml = "0.9"
 ed25519-dalek = { version = "2", features = ["rand_core", "serde"] }
 rand = "0.8"
 sha2 = "0.10"
+ureq = { version = "3.4.2", features = ["json"] }
+base64 = "0.23"
 crypto_box = { version = "0.9", features = ["seal"] }
 hex = "0.4"
 notify = "8"
@@ -37,3 +39,5 @@ fuser = { version = "0.18", default-features = false }
 [patch.crates-io]
 rustic_core = { path = "vendor/rustic_core" }
 rustic_backend = { path = "vendor/rustic_backend" }
+# a refresh token without an app secret, see vendor/opendal-service-dropbox/OMACLOUD.md
+opendal-service-dropbox = { path = "vendor/opendal-service-dropbox" }

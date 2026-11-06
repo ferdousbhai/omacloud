@@ -133,7 +133,8 @@ pub fn classify(e: &anyhow::Error) -> CliError {
     if storage_refused_key(e) {
         return key_refused(format!("the storage refused this computer's key: {message}")).hint(
             "if the account changed its key while this computer was away, get the new key from your provider \
-             and run `omacloud bucket set-key --access-key-id <id> --here-only`",
+             and run `omacloud bucket set-key --access-key-id <id> --here-only`; on Dropbox, `omacloud bucket \
+             set-key --here-only` asks you to allow it again",
         );
     }
     if unreachable(e) || e.chain().any(network_failure) {

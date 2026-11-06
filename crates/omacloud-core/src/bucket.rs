@@ -8,7 +8,8 @@
 //! from the bucket itself. S3, R2, MinIO and Hetzner support it on unversioned
 //! buckets (Hetzner not on versioned ones, so a bucket with object lock keeps
 //! its coordination in a second, plain bucket). [`BucketCoordinator::check`]
-//! finds out before an account depends on it.
+//! finds out before an account depends on it. Dropbox has its own create-only
+//! write, as OpenDAL's overwrites there: see [`crate::dropbox`].
 //!
 //! Devices learn of changes by polling: every write others need also rewrites
 //! `changed`, so an idle device checks that one object instead of syncing.
@@ -27,6 +28,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use crate::{
     Head,
     devices::{Anchor, DeviceEntry, JoinRequest},
+    dropbox::{DropboxCreate, RefusedToken},
     epoch::{EpochRecord, Grant},
     head::Coordinator,
     repo::RepoSpec,
@@ -62,12 +64,13 @@ const READERS: usize = 16;
 #[must_use]
 pub fn key_refused(err: &anyhow::Error) -> bool {
     err.chain().any(|e| {
-        e.downcast_ref::<opendal::Error>().is_some_and(|e| {
-            // R2 answers a deleted key with a 401, which OpenDAL leaves
-            // unclassified; a 403 comes here as PermissionDenied
-            e.kind() == ErrorKind::PermissionDenied
-                || (e.kind() == ErrorKind::Unexpected && e.to_string().contains("status: 401"))
-        })
+        e.is::<RefusedToken>()
+            || e.downcast_ref::<opendal::Error>().is_some_and(|e| {
+                // R2 answers a deleted key with a 401, which OpenDAL leaves
+                // unclassified; a 403 comes here as PermissionDenied
+                e.kind() == ErrorKind::PermissionDenied
+                    || (e.kind() == ErrorKind::Unexpected && e.to_string().contains("status: 401"))
+            })
     })
 }
 
@@ -95,6 +98,8 @@ pub struct BucketCoordinator {
     /// Tries once, for create-only writes: one that landed with its answer
     /// lost would come back as taken, a race it didn't lose.
     once: Operator,
+    /// Dropbox's create-only write and the folders it needs first.
+    dropbox: Option<DropboxCreate>,
     /// The last seq seen per log; appends only add at the end, so finding
     /// the latest is probing forward from here.
     last: Mutex<HashMap<&'static str, u64>>,
@@ -109,12 +114,17 @@ impl BucketCoordinator {
     /// If the options don't make an operator.
     pub fn new(scheme: &str, options: &BTreeMap<String, String>) -> Result<Self> {
         let _guard = runtime().enter();
+        let dropbox = (scheme == "dropbox").then(|| DropboxCreate::new(options)).transpose()?;
+        if let Some(dropbox) = &dropbox {
+            dropbox.prepare_root()?;
+        }
         let once = opendal::Operator::via_iter(scheme, options.clone())
             .with_context(|| format!("opening the {scheme} location for coordination"))?;
         let op = once.clone().layer(RetryLayer::new().with_jitter());
         Ok(Self {
             op: Operator::new(op)?,
             once: Operator::new(once)?,
+            dropbox,
             last: Mutex::new(HashMap::new()),
         })
     }
@@ -143,7 +153,10 @@ impl BucketCoordinator {
     }
 
     /// Write only if nothing is there: `Ok(false)` if something is.
-    fn write_new(&self, key: &str, bytes: Vec<u8>) -> opendal::Result<bool> {
+    fn write_new(&self, key: &str, bytes: Vec<u8>) -> Result<bool> {
+        if let Some(dropbox) = &self.dropbox {
+            return dropbox.create(key, &bytes);
+        }
         let opts = options::WriteOptions {
             if_not_exists: true,
             ..Default::default()
@@ -151,7 +164,7 @@ impl BucketCoordinator {
         match self.once.write_options(key, bytes, opts) {
             Ok(_) => Ok(true),
             Err(e) if matches!(e.kind(), ErrorKind::ConditionNotMatch | ErrorKind::AlreadyExists) => Ok(false),
-            Err(e) => Err(e),
+            Err(e) => Err(e.into()),
         }
     }
 
@@ -183,6 +196,9 @@ impl BucketCoordinator {
     /// stands is no news to the others, and moving the marker would have each
     /// sync wake the rest in turn.
     fn put_quietly<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        if let Some(dropbox) = &self.dropbox {
+            dropbox.prepare_key(key)?;
+        }
         self.op
             .write(key, serde_json::to_vec(value)?)
             .with_context(|| format!("writing {key}"))?;
@@ -310,7 +326,12 @@ impl Coordinator for BucketCoordinator {
     fn check(&self) -> Result<()> {
         // storage that can't do it says so as an error
         let write = || match self.write_new(CHECK, nonce()) {
-            Err(e) if e.kind() == ErrorKind::Unsupported => Err(anyhow::Error::new(NoCreateOnly)),
+            Err(e)
+                if e.downcast_ref::<opendal::Error>()
+                    .is_some_and(|e| e.kind() == ErrorKind::Unsupported) =>
+            {
+                Err(anyhow::Error::new(NoCreateOnly))
+            }
             other => other.context("writing to the bucket"),
         };
         // one left by a try that stopped halfway would look like a refusal

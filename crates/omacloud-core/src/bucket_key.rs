@@ -20,11 +20,17 @@ use crate::{
     epoch::{open, seal_to_holders},
 };
 
-/// A bucket's key.
+/// A bucket's key, or what stands for one at Dropbox.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-pub struct Credentials {
-    pub access_key_id: String,
-    pub secret_access_key: String,
+#[serde(untagged)]
+pub enum Credentials {
+    S3 {
+        access_key_id: String,
+        secret_access_key: String,
+    },
+    Dropbox {
+        refresh_token: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

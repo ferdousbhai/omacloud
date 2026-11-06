@@ -1,8 +1,29 @@
-# Your bucket
+# Where your files live
 
-Omacloud keeps everything in an S3 bucket you rent yourself. You pay the
-provider for what you store and transfer, at their prices; Omacloud charges
-nothing. Each person needs a bucket and a key of their own.
+Omacloud keeps everything in your own Dropbox, or an S3 bucket you rent yourself.
+You pay the provider for what you store and transfer, at their prices; Omacloud
+charges nothing. Each person needs a Dropbox, or a bucket and key, of their own.
+
+## Dropbox
+
+The simplest start: `omacloud init --provider dropbox` (or Connect Dropbox in the
+app), then allow Omacloud in your browser. There's nothing to make or paste. Omacloud
+reaches only its `Apps/Omacloud` folder, and everything there is encrypted before it
+leaves, so Dropbox can't read it.
+
+Each person signs in to their own Dropbox, so there are no invites: they run the same
+command. Dropbox limits how fast an app may write, so a large first upload takes longer
+than on a bucket; 300 small files took about 20 seconds up and 30 down. Space is your
+Dropbox plan's. If the Dropbox desktop app runs on the computer, exclude
+`Apps/Omacloud` from it, or it downloads the encrypted copy too.
+
+After a computer is lost, `omacloud bucket set-key` asks you to allow Omacloud again.
+Once every other computer has switched, the old token is revoked by itself.
+
+Leaving: `omacloud export --to <folder>` copies everything here for plain restic to
+read; `omacloud export` prints the command for restic through rclone.
+
+## A bucket
 
 Any S3-compatible storage with create-only writes (`If-None-Match: *`) works:
 `omacloud init` and `omacloud invite` check, and refuse a bucket without them.
