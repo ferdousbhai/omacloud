@@ -99,7 +99,21 @@ Folder controls: `folders add Music`, `folders skip Pictures`, `folders unskip
 Pictures`. Adding affects the shared folder set; skipping leaves this device's
 files in place and stops syncing them here. Explain scope before changing it.
 
-Settings: `settings on|off`, `settings resolve PATH --keep local|remote`.
+Choices can change at any time, and a running `watch` follows them. A folder or
+subfolder coming back loses nothing: what differs from the cloud is kept, as a
+conflict copy where both have a version. `folders list --json` gives each folder's
+`size` in bytes, plus `others`, `skipped`, `excluded` and `removed_from_cloud`.
+
+- `folders exclude Documents/Notes`, `folders include Documents/Notes`: leave a
+  subfolder out here. Its files stay, and other devices keep syncing it.
+- `folders remove Documents --yes`: take it out of the cloud. No device deletes its
+  files, each stops syncing it, and earlier versions go within 30 days. Ask the
+  user first. `folders add Documents` brings it back from what's on that device.
+
+Skipping keeps the cloud's copy; only `folders remove` takes it out.
+
+Settings: `settings on|off`, `settings skip|unskip shell|agents|apps|chromium|wifi`,
+`settings resolve PATH --keep local|remote`.
 Changes can affect desktop settings, browser configuration, Wi-Fi, and agent
 settings across computers. Existing settings can contain API keys. Do not sync
 or settle conflicts without the owner's requested scope; never blindly prefer

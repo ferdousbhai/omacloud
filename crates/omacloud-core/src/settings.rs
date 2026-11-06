@@ -11,6 +11,7 @@
 //! are symlinks or another dotfile manager is in use: those users already
 //! have their own sync, and writing through their links would fight it.
 
+use std::collections::BTreeSet;
 use std::{
     fs,
     path::{Component, Path, PathBuf},
@@ -45,6 +46,8 @@ pub struct Manifest {
     /// How many entries are Omarchy's own: the rest are Omacloud's
     /// additions (after [`ADDITIONS`]).
     omarchy: usize,
+    /// Groups this computer leaves out (see [`group_of`]).
+    skip: BTreeSet<String>,
 }
 
 impl Manifest {
@@ -85,7 +88,11 @@ impl Manifest {
             entries.push((tier, path.to_string()));
         }
         let omarchy = omarchy.unwrap_or(entries.len());
-        Ok(Self { entries, omarchy })
+        Ok(Self {
+            entries,
+            omarchy,
+            skip: BTreeSet::new(),
+        })
     }
 
     /// The manifest from dots (PR #12037) that omacloud ships.
@@ -113,6 +120,19 @@ impl Manifest {
         }
     }
 
+    /// The same manifest, with these groups of settings left out here.
+    #[must_use]
+    pub fn skipping(mut self, groups: &BTreeSet<String>) -> Self {
+        self.skip.clone_from(groups);
+        self
+    }
+
+    /// Whether any group of settings is left out here.
+    #[must_use]
+    pub fn skips_any(&self) -> bool {
+        !self.skip.is_empty()
+    }
+
     /// Whether `rel` (relative to home) is in the shared tier. A path listed
     /// as local is never shared, whatever else matches.
     /// Sign-ins and tokens never are, whatever matches (see [`secret_name`]).
@@ -123,7 +143,7 @@ impl Manifest {
                 .iter()
                 .any(|(t, pattern)| *t == tier && matches(pattern, rel))
         };
-        matching(Tier::Shared) && !matching(Tier::Local) && !secret_name(rel)
+        matching(Tier::Shared) && !matching(Tier::Local) && !secret_name(rel) && !self.skip.contains(group_of(rel))
     }
 
     /// Whether `rel` is shared only by Omacloud's additions.

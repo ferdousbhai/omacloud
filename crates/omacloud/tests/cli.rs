@@ -557,6 +557,32 @@ fn versions_find_a_folder_another_computer_added() {
     let ids = stdout(&h.run("b", &["folders", "add", "Bilder", "--ids-only"]));
     assert!(ids.lines().any(|l| l == "Pictures"), "{ids}");
     assert!(!ids.lines().any(|l| l == "Bilder"), "{ids}");
+
+    // a subfolder, by the account's name for its folder, with sizes to choose by
+    let list = json(&h.run("b", &["folders", "exclude", "Bilder/trip"]));
+    assert_eq!(list["data"]["excluded"][0]["path"], "Pictures/trip", "{list}");
+    assert!(list["data"]["synced"][0]["size"].is_u64(), "{list}");
+    machine_error(&h.run("b", &["folders", "exclude", "Pictures"]), "usage", 2);
+    machine_error(&h.run("b", &["folders", "exclude", "Pictures/../secret"]), "usage", 2);
+    let list = json(&h.run("b", &["folders", "include", "Pictures/trip"]));
+    assert_eq!(list["data"]["excluded"], serde_json::json!([]), "{list}");
+
+    // removing asks first, which a script can't answer
+    assert_ne!(code(&h.run("b", &["folders", "remove", "Pictures"])), 0);
+    let list = json(&h.run("b", &["folders", "remove", "Pictures", "--yes"]));
+    assert_eq!(
+        list["data"]["removed_from_cloud"],
+        serde_json::json!(["Pictures"]),
+        "{list}"
+    );
+    assert!(cat.exists());
+
+    // groups of settings
+    let s = json(&h.run("b", &["settings", "skip", "agents"]));
+    assert_eq!(s["data"]["skipped"], serde_json::json!(["agents"]), "{s}");
+    machine_error(&h.run("b", &["settings", "skip", "nonsense"]), "usage", 2);
+    let s = json(&h.run("b", &["settings", "unskip", "agents"]));
+    assert_eq!(s["data"]["skipped"], serde_json::json!([]), "{s}");
 }
 
 #[test]

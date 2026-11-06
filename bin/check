@@ -28,6 +28,9 @@ fi
 step "an account in a bucket"
 scripts/s3-sync.sh target/debug/omacloud
 
+step "daemons keeping up with changing files and choices"
+scripts/s3-choices.sh target/debug/omacloud
+
 step "server"
 (cd server && { [[ -d node_modules ]] || npm ci; } && npm run check)
 

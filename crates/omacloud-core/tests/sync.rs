@@ -1004,6 +1004,10 @@ impl World {
 
     /// [`Self::engine_with_settings`], on a manifest of its own.
     fn engine_with_manifest(&self, device: &str, manifest: &str) -> Result<Engine> {
+        self.engine_with_parsed(device, omacloud_core::settings::Manifest::parse(manifest)?)
+    }
+
+    fn engine_with_parsed(&self, device: &str, manifest: omacloud_core::settings::Manifest) -> Result<Engine> {
         let dir = self.dir(device);
         fs::create_dir_all(&dir)?;
         let home = self.home(device);
@@ -1011,7 +1015,7 @@ impl World {
         let mut setup = self.setup(device, dir, Some(self.tmp.path().join(format!("{device}.state.json"))));
         setup.settings = Some(omacloud_core::SettingsSetup {
             home,
-            manifest: omacloud_core::settings::Manifest::parse(manifest)?,
+            manifest,
             backups: self.tmp.path().join(format!("{device}-backups")),
             packages: self.tmp.path().join(format!("{device}-packages")),
             secrets: self.tmp.path().join(format!("{device}-secrets")),
@@ -1132,6 +1136,49 @@ fn a_setting_made_local_stays_out_of_every_computer() -> Result<()> {
     a.sync()?;
     b.sync()?;
     assert_eq!(fs::read_to_string(hb.join(input))?, "b's touchpad\n");
+    Ok(())
+}
+
+/// Settings turned off and on again, or a group of them, overwrite nothing.
+#[test]
+fn settings_back_on_lose_nothing() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ha, hb) = (w.home("a"), w.home("b"));
+    let (bindings, tmux) = (".config/hypr/bindings.lua", ".bashrc");
+    write(&ha, bindings, "one\n");
+    write(&ha, tmux, "one\n");
+    let m = "shared .config/hypr/bindings.lua\nshared .bashrc\n";
+    let (mut a, mut b) = (w.engine_with_manifest("a", m)?, w.engine_with_manifest("b", m)?);
+    a.sync()?;
+    b.sync()?;
+
+    // a leaves the desktop group out; it changes on both meanwhile
+    drop(a);
+    let apps: std::collections::BTreeSet<String> = ["apps".to_string()].into();
+    let mut a = w.engine_with_parsed("a", omacloud_core::settings::Manifest::parse(m)?.skipping(&apps))?;
+    a.sync()?;
+    write(&ha, bindings, "a's\n");
+    a.notice([ha.join(bindings)]);
+    write(&hb, bindings, "b's\n");
+    b.notice([hb.join(bindings)]);
+    b.sync()?;
+    a.sync()?;
+    assert_eq!(fs::read_to_string(ha.join(bindings))?, "a's\n");
+    // the group left on keeps syncing
+    write(&hb, tmux, "two\n");
+    b.notice([hb.join(tmux)]);
+    b.sync()?;
+    a.sync()?;
+    assert_eq!(fs::read_to_string(ha.join(tmux))?, "two\n");
+
+    // back on: each keeps its own until someone chooses
+    drop(a);
+    let mut a = w.engine_with_manifest("a", m)?;
+    a.sync()?;
+    b.sync()?;
+    assert_eq!(fs::read_to_string(ha.join(bindings))?, "a's\n");
+    assert_eq!(fs::read_to_string(hb.join(bindings))?, "b's\n");
+    assert_eq!(a.settings_status().held, [PathBuf::from(bindings)]);
     Ok(())
 }
 
@@ -1304,6 +1351,7 @@ impl World {
                 .iter()
                 .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
                 .collect(),
+            exclude: BTreeSet::new(),
         });
         Engine::new(setup, self.coord.clone())
     }
@@ -1361,6 +1409,210 @@ fn chosen_home_folders_sync_in_place() -> Result<()> {
 
 /// A folder is matched by what it is, not what it's called: a German
 /// machine's `Dokumente` is the English machine's `Documents`.
+/// A folder switched off and back on overwrites nothing: what changed anywhere
+/// while it was away comes through, and two versions of a file are both kept.
+#[test]
+fn a_folder_switched_back_on_loses_nothing() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ha, hb) = (w.home("a"), w.home("b"));
+    for (f, text) in [
+        ("keep", "keep\n"),
+        ("edited", "one\n"),
+        ("both", "one\n"),
+        ("gone-here", "gone\n"),
+        ("gone-there", "gone\n"),
+    ] {
+        write(&ha, &format!("Documents/{f}"), text);
+    }
+    let (mut a, mut b) = (
+        w.engine_home("a", &["Documents"], &[])?,
+        w.engine_home("b", &["Documents"], &[])?,
+    );
+    a.sync()?;
+    b.sync()?;
+
+    // a switches Documents off, and it changes on both while it's off
+    drop(a);
+    let mut a = w.engine_home("a", &[], &["Documents"])?;
+    a.sync()?;
+    write(&ha, "Documents/edited", "two from a\n");
+    write(&ha, "Documents/new-here", "new from a\n");
+    write(&ha, "Documents/both", "from a\n");
+    fs::remove_file(ha.join("Documents/gone-here"))?;
+    let bset = write(&hb, "Documents/both", "from b\n");
+    let bnew = write(&hb, "Documents/new-there", "new from b\n");
+    let bgone = hb.join("Documents/gone-there");
+    fs::remove_file(&bgone)?;
+    b.notice([bset, bnew, bgone]);
+    b.sync()?;
+    a.sync()?;
+    assert_eq!(fs::read_to_string(ha.join("Documents/both"))?, "from a\n");
+    assert!(!ha.join("Documents/new-there").exists());
+
+    // back on
+    drop(a);
+    let mut a = w.engine_home("a", &["Documents"], &[])?;
+    // which computer changed a file can't be told after that long apart, so
+    // what differs is kept twice: `edited` and `both`
+    let st = a.sync()?;
+    assert_eq!(st.conflicts, 2);
+    b.sync()?;
+    a.sync()?;
+
+    for home in [&ha, &hb] {
+        let read = |f: &str| fs::read_to_string(home.join("Documents").join(f)).unwrap_or_default();
+        assert_eq!(read("keep"), "keep\n");
+        assert_eq!(read("edited"), "two from a\n");
+        assert_eq!(read("new-here"), "new from a\n");
+        assert_eq!(read("new-there"), "new from b\n");
+        // a delete made while they were apart doesn't win over a copy
+        assert_eq!(read("gone-here"), "gone\n");
+        assert_eq!(read("gone-there"), "gone\n");
+        // both versions of both, one under its name and one as a conflict copy
+        let mut versions: Vec<String> = fs::read_dir(home.join("Documents"))?
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("both"))
+            .map(|e| fs::read_to_string(e.path()).unwrap())
+            .collect();
+        versions.sort();
+        assert_eq!(versions, ["from a\n", "from b\n"]);
+    }
+    assert_eq!(digest(&ha.join("Documents")), digest(&hb.join("Documents")));
+
+    // and back to normal: an edit syncs, with no second look at everything
+    let f = write(&hb, "Documents/keep", "keep two\n");
+    b.notice([f]);
+    b.sync()?;
+    assert_eq!(a.sync()?.conflicts, 0);
+    assert_eq!(fs::read_to_string(ha.join("Documents/keep"))?, "keep two\n");
+    Ok(())
+}
+
+/// A subfolder left out stays out both ways, and comes back losing nothing.
+#[test]
+fn a_subfolder_left_out_and_taken_back() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ha, hb) = (w.home("a"), w.home("b"));
+    write(&ha, "Documents/Notes/shared", "from a\n");
+    write(&ha, "Documents/rest", "rest\n");
+    let mut a = w.engine_home("a", &["Documents"], &[])?;
+    let mut b = w.engine_home("b", &["Documents"], &[])?;
+    a.sync()?;
+    b.sync()?;
+    let exclude: BTreeSet<String> = ["Documents/Notes".to_string()].into();
+    let docs: BTreeSet<String> = ["Documents".to_string()].into();
+    a.set_folders(docs.clone(), BTreeSet::new(), exclude);
+    a.sync()?;
+
+    // left out here: its changes go nowhere, and others' don't come
+    let f = write(&ha, "Documents/Notes/mine", "only here\n");
+    a.notice([f]);
+    let f = write(&hb, "Documents/Notes/theirs", "from b\n");
+    b.notice([f]);
+    a.sync()?;
+    b.sync()?;
+    a.sync()?;
+    assert!(!hb.join("Documents/Notes/mine").exists());
+    assert!(!ha.join("Documents/Notes/theirs").exists());
+    // and the rest of the folder keeps syncing
+    let f = write(&ha, "Documents/rest", "rest two\n");
+    a.notice([f]);
+    a.sync()?;
+    b.sync()?;
+    assert_eq!(fs::read_to_string(hb.join("Documents/rest"))?, "rest two\n");
+
+    // taken back: the union, with no conflicts over what's only on one side
+    a.set_folders(docs, BTreeSet::new(), BTreeSet::new());
+    assert_eq!(a.sync()?.conflicts, 0);
+    b.sync()?;
+    a.sync()?;
+    for home in [&ha, &hb] {
+        assert_eq!(fs::read_to_string(home.join("Documents/Notes/mine"))?, "only here\n");
+        assert_eq!(fs::read_to_string(home.join("Documents/Notes/theirs"))?, "from b\n");
+        assert_eq!(fs::read_to_string(home.join("Documents/Notes/shared"))?, "from a\n");
+    }
+    Ok(())
+}
+
+/// Emptying a folder is an ordinary delete of its files, not its removal.
+#[test]
+fn a_folder_emptied_is_not_a_folder_removed() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ha, hb) = (w.home("a"), w.home("b"));
+    let f = write(&ha, "Pictures/cat", "meow\n");
+    let mut a = w.engine_home("a", &["Pictures"], &[])?;
+    let mut b = w.engine_home("b", &["Pictures"], &[])?;
+    a.sync()?;
+    b.sync()?;
+    fs::remove_dir_all(ha.join("Pictures"))?;
+    a.notice([f]);
+    a.sync()?;
+    b.sync()?;
+    assert!(!hb.join("Pictures/cat").exists());
+    assert!(a.dropped_folders().is_empty() && b.dropped_folders().is_empty());
+    let f = write(&hb, "Pictures/dog", "woof\n");
+    b.notice([f]);
+    b.sync()?;
+    a.sync()?;
+    assert_eq!(fs::read_to_string(ha.join("Pictures/dog"))?, "woof\n");
+    Ok(())
+}
+
+/// Removing a folder from the cloud deletes it on no computer; each stops
+/// syncing it, and any can bring it back.
+#[test]
+fn a_folder_removed_from_the_cloud_stays_on_every_computer() -> Result<()> {
+    let w = World::new(&["a", "b", "c"])?;
+    let (ha, hb) = (w.home("a"), w.home("b"));
+    write(&ha, "Documents/Notes/private", "private\n");
+    write(&ha, "Pictures/cat", "meow\n");
+    let mut a = w.engine_home("a", &["Documents", "Pictures"], &[])?;
+    let mut b = w.engine_home("b", &["Documents", "Pictures"], &[])?;
+    a.sync()?;
+    b.sync()?;
+    let local = write(&hb, "Documents/made-while-it-went", "b's\n");
+    b.notice([local]);
+
+    a.remove_from_cloud("Documents")?;
+    b.sync()?;
+    a.sync()?;
+    // gone from the latest version: a computer joining now doesn't get it
+    let mut c = w.engine_home("c", &["Pictures"], &[])?;
+    c.sync()?;
+    assert!(!w.home("c").join("Documents").exists());
+    assert_eq!(fs::read_to_string(w.home("c").join("Pictures/cat"))?, "meow\n");
+    // no computer lost a file, and what b just made stays with it
+    assert_eq!(fs::read_to_string(ha.join("Documents/Notes/private"))?, "private\n");
+    assert_eq!(fs::read_to_string(hb.join("Documents/Notes/private"))?, "private\n");
+    assert_eq!(fs::read_to_string(hb.join("Documents/made-while-it-went"))?, "b's\n");
+    // nor does it go back up by itself, though Documents is among what they add
+    let f = write(&hb, "Documents/more", "more\n");
+    b.notice([f]);
+    b.sync()?;
+    a.sync()?;
+    assert!(!ha.join("Documents/more").exists());
+    assert!(a.dropped_folders().contains("Documents"));
+
+    // other folders go on
+    let f = write(&ha, "Pictures/dog", "woof\n");
+    a.notice([f]);
+    a.sync()?;
+    b.sync()?;
+    assert_eq!(fs::read_to_string(hb.join("Pictures/dog"))?, "woof\n");
+
+    // a computer brings it back, and the others follow, losing nothing
+    b.take_back("Documents");
+    b.sync()?;
+    a.sync()?;
+    b.sync()?;
+    a.sync()?;
+    assert!(a.dropped_folders().is_empty());
+    assert_eq!(fs::read_to_string(ha.join("Documents/more"))?, "more\n");
+    assert_eq!(fs::read_to_string(ha.join("Documents/Notes/private"))?, "private\n");
+    assert_eq!(fs::read_to_string(hb.join("Documents/Notes/private"))?, "private\n");
+    Ok(())
+}
+
 #[test]
 fn folders_match_across_languages() -> Result<()> {
     let w = World::new(&["de", "en"])?;

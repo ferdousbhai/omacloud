@@ -12,6 +12,12 @@
 - `omacloud export` prints the restic command that restores from the bucket.
 - Removed with the network: `node`, `gateway`, `republish`, credits, and share links
   (`share`, `shares`, `unshare`, `receive`).
+- Change what syncs at any time, and a running `watch` follows. A folder that comes
+  back loses nothing: before, what changed while it was off could overwrite the
+  cloud, delete others' new files or undo their deletes.
+- `omacloud folders exclude` and `include` choose subfolders; `folders remove` takes a
+  folder out of the cloud, leaving every computer's files alone; `settings skip` and
+  `unskip` choose groups of settings; `folders list` reports sizes.
 - `input.lua` and the bar's `shell.json` stay on each computer: touchpads differ, and
   some bar plugins only run on one kind of computer.
 - A computer on the network says so and asks to be set up again: `omacloud init`

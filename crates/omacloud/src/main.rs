@@ -474,6 +474,11 @@ enum SettingsCmd {
     On,
     /// Stop syncing settings on this device (files stay as they are)
     Off,
+    /// Leave a group of settings out on this device: shell, agents, apps,
+    /// chromium or wifi
+    Skip { group: String },
+    /// Sync a skipped group of settings here again
+    Unskip { group: String },
     /// Settle a setting that changed here and on another device
     Resolve {
         /// The setting, like ~/.config/hypr/bindings.lua
@@ -503,6 +508,20 @@ enum FoldersCmd {
     Skip { name: String },
     /// Sync a skipped folder here again
     Unskip { name: String },
+    /// Leave a subfolder out on this device, like `Documents/Notes`; its files
+    /// stay, and other devices keep syncing it
+    Exclude { path: String },
+    /// Sync an excluded subfolder here again
+    Include { path: String },
+    /// Take a folder out of the cloud: no device deletes its files, each stops
+    /// syncing it, and its earlier versions go within 30 days. `folders add`
+    /// brings it back
+    Remove {
+        name: String,
+        /// Don't ask; needed where nobody can be asked
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -544,6 +563,9 @@ struct Config {
     /// Sync settings (the dots manifest's shared tier) on this device
     #[serde(default)]
     settings: bool,
+    /// Groups of settings this device leaves out
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    settings_skip: std::collections::BTreeSet<String>,
     /// Desktop notifications from the daemon: join requests, settings that
     /// need a choice, this device being removed
     #[serde(default = "yes")]
@@ -576,6 +598,9 @@ struct FolderChoice {
     /// Folders this device doesn't sync
     #[serde(default)]
     skip: std::collections::BTreeSet<String>,
+    /// Subfolders this device leaves out, by path in the account
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    exclude: std::collections::BTreeSet<String>,
 }
 
 /// What syncs by default, as iCloud's Desktop & Documents and Photos.
@@ -951,9 +976,10 @@ fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
             groups.push(Arc::new(omacloud_core::wifi::Wifi::new(Box::new(
                 omacloud_core::wifi::Nmcli::new(&user),
             ))));
+            groups.retain(|g| !config.settings_skip.contains(g.name()));
             Some(SettingsSetup {
                 home,
-                manifest: Manifest::load()?,
+                manifest: Manifest::load()?.skipping(&config.settings_skip),
                 backups: paths.data.join("settings"),
                 packages: paths.data.join("packages"),
                 secrets: paths.data.join("secrets"),
@@ -967,6 +993,7 @@ fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
             add: f.add.clone(),
             skip: f.skip.clone(),
             local_names: xdg_names(&config.folder),
+            exclude: f.exclude.clone(),
         }),
     };
     let mut e = Engine::new(setup, coord)?;
@@ -1236,13 +1263,13 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
         if now != config_seen {
             config_seen = now;
             if let Ok(c) = load(paths) {
-                if c.settings != config.settings || c.repo != config.repo {
+                if c.settings != config.settings || c.settings_skip != config.settings_skip || c.repo != config.repo {
                     info!("settings sync or the bucket's key changed; restarting into it");
                     return Ok(Ended::Upgraded);
                 }
                 if let Some(choice) = c.folders {
                     info!("folder choice changed");
-                    engine.set_folders(choice.add, choice.skip);
+                    engine.set_folders(choice.add, choice.skip, choice.exclude);
                     folders_changed = true;
                 }
             }
@@ -1705,7 +1732,14 @@ fn run(cli: Cli) -> Out {
                         .into_iter()
                         .filter(|n| !at_home.contains(n))
                         .collect();
-                    (home, Some(FolderChoice { add, skip }))
+                    (
+                        home,
+                        Some(FolderChoice {
+                            add,
+                            skip,
+                            exclude: std::collections::BTreeSet::new(),
+                        }),
+                    )
                 }
             };
             let device = device.unwrap_or_else(hostname);
@@ -1717,6 +1751,7 @@ fn run(cli: Cli) -> Out {
                 root: String::new(),
                 limits: Limits::default(),
                 settings,
+                settings_skip: std::collections::BTreeSet::new(),
                 notifications: true,
                 folders,
                 coordination_bucket: target.coordination_bucket,
@@ -2471,6 +2506,9 @@ fn home_dir() -> Result<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from).context("HOME not set")
 }
 
+/// The groups of settings a computer can leave out.
+const SETTINGS_GROUPS: &[&str] = &["shell", "agents", "apps", "chromium", "wifi"];
+
 fn settings(paths: &Paths, action: SettingsCmd) -> Out {
     let mut config = load(paths)?;
     match action {
@@ -2491,7 +2529,30 @@ fn settings(paths: &Paths, action: SettingsCmd) -> Out {
             } else {
                 "settings sync is off"
             };
-            Ok(Response::new(settings_json(&st), summary).human(out.trim_end()))
+            Ok(Response::new(settings_json(&st, &config), summary).human(out.trim_end()))
+        }
+        SettingsCmd::Skip { group } | SettingsCmd::Unskip { group } if !SETTINGS_GROUPS.contains(&group.as_str()) => {
+            Err(fail::usage(format!("{group} isn't a group of settings"))
+                .hint(format!("the groups are {}", SETTINGS_GROUPS.join(", ")))
+                .into())
+        }
+        SettingsCmd::Skip { group } => {
+            _ = config.settings_skip.insert(group.clone());
+            save(paths, &config)?;
+            let st = engine(paths, &config)?.settings_status();
+            Ok(
+                Response::new(settings_json(&st, &config), format!("{group} stays on this computer"))
+                    .human(settings_text(&st).trim_end()),
+            )
+        }
+        SettingsCmd::Unskip { group } => {
+            _ = config.settings_skip.remove(&group);
+            save(paths, &config)?;
+            let st = engine(paths, &config)?.settings_status();
+            Ok(
+                Response::new(settings_json(&st, &config), format!("{group} syncs again"))
+                    .human(settings_text(&st).trim_end()),
+            )
         }
         SettingsCmd::Status => {
             let st = engine(paths, &config)?.settings_status();
@@ -2500,7 +2561,7 @@ fn settings(paths: &Paths, action: SettingsCmd) -> Out {
                 (true, Some(_)) => "settings sync stands down".to_string(),
                 (true, None) => format!("settings sync is on, {} waiting to be resolved", st.held.len()),
             };
-            Ok(Response::new(settings_json(&st), summary).human(settings_text(&st).trim_end()))
+            Ok(Response::new(settings_json(&st, &config), summary).human(settings_text(&st).trim_end()))
         }
         SettingsCmd::Resolve { path, keep } => {
             let home = home_dir()?;
@@ -2536,9 +2597,10 @@ fn settings(paths: &Paths, action: SettingsCmd) -> Out {
     }
 }
 
-fn settings_json(st: &omacloud_core::SettingsStatus) -> Value {
+fn settings_json(st: &omacloud_core::SettingsStatus, config: &Config) -> Value {
     json!({
         "on": st.on,
+        "skipped": config.settings_skip,
         "dormant": st.dormant,
         "held": st.held,
         "groups": st.groups,
@@ -3078,10 +3140,12 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
         ))
         .into());
     };
+    let (mut back, mut removing) = (None, None);
     let changed = match action {
         FoldersCmd::List => false,
         FoldersCmd::Add { name } => {
             let name = folder_name(&config.folder, &name)?;
+            back = Some(name.clone());
             let here = xdg_names(&config.folder)
                 .get(&name)
                 .cloned()
@@ -3100,8 +3164,23 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
             _ = choice.add.remove(&name);
             choice.skip.insert(name)
         }
-        FoldersCmd::Unskip { name } => {
-            choice.skip.remove(name.trim()) || choice.skip.remove(&folder_name(&config.folder, &name)?)
+        FoldersCmd::Unskip { ref name } => {
+            back = Some(folder_name(&config.folder, name)?);
+            choice.skip.remove(name.trim()) || choice.skip.remove(&folder_name(&config.folder, name)?)
+        }
+        FoldersCmd::Exclude { ref path } => choice.exclude.insert(subfolder(&config.folder, path)?),
+        FoldersCmd::Include { ref path } => choice.exclude.remove(&subfolder(&config.folder, path)?),
+        FoldersCmd::Remove { ref name, yes } => {
+            let name = folder_name(&config.folder, name)?;
+            confirm(
+                yes,
+                "taking a folder out of the cloud",
+                &format!(
+                    "take {name} out of the cloud? No computer deletes its files; each stops syncing it, and its earlier versions go within 30 days."
+                ),
+            )?;
+            removing = Some(name.clone());
+            choice.add.remove(&name)
         }
     };
     if changed {
@@ -3109,6 +3188,13 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
     }
     // the account's folders are the ones in its history: sync to see them
     let mut e = engine(paths, &config)?;
+    if let Some(name) = &back {
+        e.take_back(name);
+    }
+    if let Some(name) = &removing {
+        e.remove_from_cloud(name)
+            .map_err(|err| fail::not_found(format!("{err:#}")))?;
+    }
     e.sync()?;
     let synced = e.folder_list();
     let mut out = String::new();
@@ -3121,11 +3207,36 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
         say!(out, "skipped here: {}", list.join(", "));
     }
 
-    let local = xdg_names(&config.folder);
-    let skipped_here: Vec<_> = skipped.iter().map(|s| folder_here(&config.folder, &local, s)).collect();
+    let excluded = &config.folders.as_ref().expect("checked above").exclude;
+    if !excluded.is_empty() {
+        let list: Vec<&str> = excluded.iter().map(String::as_str).collect();
+        say!(out, "left out here: {}", list.join(", "));
+    }
+    if !e.dropped_folders().is_empty() {
+        let list: Vec<&str> = e.dropped_folders().iter().map(String::as_str).collect();
+        say!(out, "out of the cloud, kept here: {}", list.join(", "));
+    }
+
+    // with sizes, for whoever is choosing
+    let home = &config.folder;
+    let local = xdg_names(home);
+    let sized = |name: &str| {
+        let mut v = folder_here(home, &local, name);
+        let size = tree_size(&PathBuf::from(v["path"].as_str().unwrap_or_default()));
+        v["size"] = json!(size);
+        v
+    };
+    let others: Vec<_> = USUAL_FOLDERS
+        .iter()
+        .filter(|n| !synced.iter().any(|(s, _)| s == *n) && !skipped.contains(**n))
+        .map(|n| sized(n))
+        .collect();
     let data = json!({
-        "synced": synced.iter().map(|(name, path)| json!({ "name": name, "path": path })).collect::<Vec<_>>(),
-        "skipped": skipped_here,
+        "synced": synced.iter().map(|(name, path)| json!({ "name": name, "path": path, "size": tree_size(path) })).collect::<Vec<_>>(),
+        "skipped": skipped.iter().map(|s| sized(s)).collect::<Vec<_>>(),
+        "others": others,
+        "excluded": excluded.iter().map(|p| json!({ "path": p, "size": tree_size(&home.join(p)) })).collect::<Vec<_>>(),
+        "removed_from_cloud": e.dropped_folders(),
         "changed": changed,
     });
     let ids = synced.iter().map(|(name, _)| name.clone()).collect();
@@ -3135,6 +3246,36 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
             .ids(ids)
             .count(synced.len()),
     )
+}
+
+/// A subfolder of a folder of home, as the account names it: `Documents/Notes`.
+fn subfolder(home: &Path, given: &str) -> Result<String> {
+    let given = given.trim().trim_end_matches('/');
+    let rel = Path::new(given).strip_prefix(home).unwrap_or(Path::new(given));
+    let parts: Vec<_> = rel.components().collect();
+    let plain = parts.iter().all(|c| matches!(c, std::path::Component::Normal(_)));
+    let (Some(first), true, true) = (parts.first(), parts.len() >= 2, plain) else {
+        return Err(fail::usage(format!("{given:?} isn't a subfolder of a folder of home"))
+            .hint("give one like Documents/Notes; a whole folder is `folders skip`")
+            .into());
+    };
+    let name = folder_name(home, &first.as_os_str().to_string_lossy())?;
+    let rest = parts[1..]
+        .iter()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>();
+    Ok(format!("{name}/{}", rest.join("/")))
+}
+
+/// The bytes of the files under `path`, not following links.
+fn tree_size(path: &Path) -> u64 {
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if !meta.is_dir() {
+        return meta.len();
+    }
+    fs::read_dir(path).map_or(0, |entries| entries.flatten().map(|e| tree_size(&e.path())).sum())
 }
 
 /// Show or change the bucket's key.
