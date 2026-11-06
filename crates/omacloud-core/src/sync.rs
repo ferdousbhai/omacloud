@@ -197,6 +197,10 @@ pub struct SettingsSetup {
 /// Where package lists live in the synced tree, one file per device.
 pub const PACKAGES: &str = ".omacloud/packages";
 
+/// How [`State::away`] names a group of settings left out: no folder of the
+/// account starts with a dot.
+const GROUP_LEFT_OUT: &str = ".settings group ";
+
 /// Where sealed secrets bundles live in the synced tree, one per device.
 pub const SECRETS: &str = ".omacloud/secrets";
 
@@ -282,7 +286,7 @@ pub struct State {
     /// subfolders and settings. One that comes back was out of step with
     /// `base` while it was away.
     #[serde(default)]
-    pub away: Option<BTreeSet<String>>,
+    pub away: BTreeSet<String>,
     /// Folders removed from the cloud: they stay on disk, and out of sync,
     /// until one comes back to the account.
     #[serde(default)]
@@ -351,6 +355,11 @@ enum Local {
     Delete,
 }
 
+/// Asked to take out of the cloud a folder that isn't there.
+#[derive(Debug, thiserror::Error)]
+#[error("the cloud has no folder {0}")]
+pub struct NoCloudFolder(pub String);
+
 pub struct Engine {
     device: String,
     folder: PathBuf,
@@ -383,8 +392,6 @@ pub struct Engine {
     /// The folders syncing here, when syncing chosen folders of home:
     /// the account's, less the skipped ones.
     synced: BTreeSet<String>,
-    /// Folders back among those syncing here, until the pull that takes them in.
-    rejoining: BTreeSet<String>,
 }
 
 impl Engine {
@@ -440,7 +447,6 @@ impl Engine {
                 .as_ref()
                 .map(|f| f.add.difference(&f.skip).cloned().collect())
                 .unwrap_or_default(),
-            rejoining: BTreeSet::new(),
             folders,
         })
     }
@@ -554,49 +560,47 @@ impl Engine {
     fn left_out(&self, repo: &Repo) -> Result<BTreeSet<String>> {
         let mut out = BTreeSet::new();
         if let Some(f) = &self.folders {
-            for (name, node) in nodes(repo, self.base_tree()?)? {
-                if node.is_dir() && !name.starts_with('.') && !self.synced.contains(&name) {
-                    _ = out.insert(name);
-                }
-            }
+            let folders = account_folders(repo, self.base_tree()?)?;
+            out.extend(folders.difference(&self.synced).cloned());
             out.extend(f.exclude.iter().cloned());
         }
-        if self.settings_on().is_none_or(|s| s.manifest.skips_any()) {
-            _ = out.insert(SETTINGS.to_string());
-            _ = out.insert(MERGED.to_string());
+        match self.settings_on() {
+            Some(s) => out.extend(s.manifest.skipped().iter().map(|g| format!("{GROUP_LEFT_OUT}{g}"))),
+            None => out.extend([SETTINGS.to_string(), MERGED.to_string()]),
         }
         Ok(out)
     }
 
     fn note_away(&mut self, repo: &Repo) -> Result<()> {
-        self.state.away = Some(self.left_out(repo)?);
+        self.state.away = self.left_out(repo)?;
         Ok(())
     }
 
-    /// Note what's back that `base` has: `base` moved on without it while it
-    /// was away, so it says nothing about what's on disk. Look at everything,
-    /// to find what differs.
-    fn find_rejoining(&mut self, repo: &Repo) -> Result<()> {
-        let Some(away) = self.state.away.clone() else {
-            return Ok(());
-        };
+    /// What's back that `base` has: `base` moved on without it while it was
+    /// away, so it says nothing about what's on disk. Look at everything, to
+    /// find what differs.
+    fn find_rejoining(&mut self, repo: &Repo) -> Result<BTreeSet<String>> {
         let now = self.left_out(repo)?;
         let base = self.base_tree()?;
         let trees = Trees::new(repo);
         let mut back = BTreeSet::new();
-        for name in away.difference(&now) {
-            if trees.lookup(base, Path::new(name))?.is_some() {
-                info!("{name} is back: taking in what changed while it was away");
-                _ = back.insert(name.clone());
+        for name in self.state.away.difference(&now) {
+            // a group's files aren't apart in the tree: all settings come back
+            // through the same rules, and what didn't change is no difference
+            let names = if name.starts_with(GROUP_LEFT_OUT) {
+                vec![SETTINGS, MERGED]
+            } else {
+                vec![name.as_str()]
+            };
+            for name in names {
+                if trees.lookup(base, Path::new(name))?.is_some() {
+                    info!("{name} is back: taking in what changed while it was away");
+                    _ = back.insert(name.to_string());
+                }
             }
         }
         self.rescan |= !back.is_empty();
-        self.rejoining = back;
-        Ok(())
-    }
-
-    fn is_rejoining(&self, path: &Path) -> bool {
-        self.rejoining.iter().any(|name| path.starts_with(name))
+        Ok(back)
     }
 
     /// Take a folder of the account out of the cloud: it leaves the latest
@@ -612,10 +616,9 @@ impl Engine {
             let repo = self.open_repo()?;
             let trees = Trees::new(&repo);
             let path = PathBuf::from(name);
-            anyhow::ensure!(
-                trees.lookup(self.base_tree()?, &path)?.is_some(),
-                "the cloud has no folder {name}"
-            );
+            if trees.lookup(self.base_tree()?, &path)?.is_none() {
+                bail!(NoCloudFolder(name.to_string()));
+            }
             if self.push(&repo, BTreeMap::from([(path, Local::Delete)]))?.is_some() {
                 _ = self.state.dropped.insert(name.to_string());
                 _ = self.synced.remove(name);
@@ -643,18 +646,13 @@ impl Engine {
         let Some(f) = &self.folders else {
             return Ok(());
         };
-        let mut names: BTreeSet<String> = f.add.clone();
-        for (name, node) in nodes(repo, tree)? {
-            if node.is_dir() && !name.starts_with('.') {
-                _ = names.insert(name);
-            }
-        }
+        let folders = account_folders(repo, tree)?;
+        let mut names: BTreeSet<String> = f.add.union(&folders).cloned().collect();
         for name in &f.skip {
             _ = names.remove(name);
         }
         // removed from the cloud: back only when the account has it again
-        let in_tree = nodes(repo, tree)?;
-        self.state.dropped.retain(|name| !in_tree.contains_key(name));
+        self.state.dropped.retain(|name| !folders.contains(name));
         for name in &self.state.dropped {
             _ = names.remove(name);
         }
@@ -1738,25 +1736,25 @@ impl Engine {
             let repo = self.open_repo()?;
             let base = self.base_tree()?;
             self.refresh_synced(&repo, base)?;
-            self.find_rejoining(&repo)?;
+            let rejoining = self.find_rejoining(&repo)?;
             if std::mem::take(&mut self.rescan) {
                 self.queue_rescan(&repo)?;
             }
             let mut local = self.local_changes(&repo)?;
 
-            if head.as_ref().map(|h| h.seq) != self.state.base.as_ref().map(|b| b.seq) || !self.rejoining.is_empty() {
+            if head.as_ref().map(|h| h.seq) != self.state.base.as_ref().map(|b| b.seq) || !rejoining.is_empty() {
                 let head = head.ok_or_else(|| anyhow!("base without a head"))?;
-                self.pull(&repo, &head, &mut local, &mut stats)?;
-                self.rejoining.clear();
+                self.pull(&repo, &head, &mut local, &rejoining, &mut stats)?;
                 self.note_away(&repo)?;
                 self.save_state()?;
                 // now, not only when the sync ends well: the version this
                 // computer stands on must be kept even if the rest fails
                 self.tell_synced();
                 local = self.local_changes(&repo)?;
+            } else {
+                self.note_away(&repo)?;
             }
 
-            self.note_away(&repo)?;
             if local.is_empty() {
                 self.pending.clear();
                 self.state.synced_at = unix_now();
@@ -2274,8 +2272,10 @@ impl Engine {
         repo: &Repo,
         head: &Head,
         local: &mut BTreeMap<PathBuf, Local>,
+        rejoining: &BTreeSet<String>,
         stats: &mut Stats,
     ) -> Result<()> {
+        let is_rejoining = |path: &Path| rejoining.iter().any(|name| path.starts_with(name));
         let id = self
             .snapshot_now(head)
             .ok_or_else(|| anyhow!("snapshot of head {} is not in this epoch", head.seq))?;
@@ -2289,8 +2289,11 @@ impl Engine {
         // a folder gone from the account altogether was removed from the
         // cloud, which is no delete of what's here
         if self.folders.is_some() {
-            let (was, is) = (nodes(repo, self.base_tree()?)?, nodes(repo, Some(snap.tree))?);
-            for name in was.keys().filter(|n| !is.contains_key(*n) && !n.starts_with('.')) {
+            let (was, is) = (
+                account_folders(repo, self.base_tree()?)?,
+                account_folders(repo, Some(snap.tree))?,
+            );
+            for name in was.difference(&is) {
                 info!("{name} was removed from the cloud: it stays here, and stops syncing");
                 _ = self.state.dropped.insert(name.clone());
             }
@@ -2308,7 +2311,7 @@ impl Engine {
         // differs from the head is no edit made here, so it goes through the
         // same rules as one changed on both sides, and nothing is overwritten
         let trees = Trees::new(repo);
-        for path in local.keys().filter(|p| self.is_rejoining(p)) {
+        for path in local.keys().filter(|p| is_rejoining(p)) {
             if !remote.contains_key(path)
                 && let Some(node) = trees.lookup(Some(snap.tree), path)?
             {
@@ -2331,7 +2334,7 @@ impl Engine {
             stats.pulled += 1;
             if path.starts_with(SETTINGS) || path.starts_with(MERGED) {
                 // back after being left out: what differs has no shared past
-                let base = if self.is_rejoining(&path) { None } else { base_tree };
+                let base = if is_rejoining(&path) { None } else { base_tree };
                 self.pull_setting(repo, base, path, rnode, local, &mut writes, &mut deletes, stats)?;
                 continue;
             }
@@ -3171,6 +3174,15 @@ impl Read for LazyFile {
         }
         Ok(n)
     }
+}
+
+/// The account's folders in `tree`: its directories, less Omacloud's own.
+fn account_folders(repo: &Repo, tree: Option<TreeId>) -> Result<BTreeSet<String>> {
+    Ok(nodes(repo, tree)?
+        .into_iter()
+        .filter(|(name, node)| node.is_dir() && !name.starts_with('.'))
+        .map(|(name, _)| name)
+        .collect())
 }
 
 fn nodes(repo: &Repo, id: Option<TreeId>) -> Result<BTreeMap<String, Node>> {

@@ -42,18 +42,20 @@ current. Consult `omacloud <command> --help`.
 
 ## Setup (only when requested)
 
-Storage is an S3 bucket of the owner's: Cloudflare R2, Hetzner or any other with
-create-only writes (https://github.com/ferdousbhai/omacloud/blob/master/docs/providers.md). Agree on device name, folders, and whether
+Storage is the owner's own Dropbox (the simplest), or an S3 bucket: Cloudflare R2,
+Hetzner or any other with create-only writes (https://github.com/ferdousbhai/omacloud/blob/master/docs/providers.md). Agree on device name, folders, and whether
 to sync settings first.
 
-- New account: the owner makes a private bucket and a key at their provider, then
+- New account: on Dropbox, the owner runs `omacloud init --provider dropbox` in their
+  own terminal, allows Omacloud in the browser, and is shown the recovery code once.
+  With a bucket, the owner makes a private one and a key at their provider, then
   runs `omacloud init --provider r2 --account <id> --bucket <name> --access-key-id
   <id>` (or `hetzner --location fsn1`, or `s3 --endpoint <url>`) in their own
   terminal; it asks for the secret and shows the recovery code once.
 - Another computer: the owner runs `omacloud join-code` on a computer already
   in; the new one runs `omacloud init` with the code in `OMACLOUD_JOIN_CODE`
   and asks to join; the owner approves with `omacloud devices approve
-  <fingerprint>` after comparing fingerprints. With the bucket's details and
+  <fingerprint>` after comparing fingerprints. With `--provider ...` and
   `OMACLOUD_RECOVERY_CODE` instead, `init` gets in without approval.
 - Someone else (family, a friend): the owner makes them a bucket and key, and
   runs `omacloud invite` with those details; the person runs `omacloud init` with
@@ -63,9 +65,10 @@ to sync settings first.
   development and tests only. Point test accounts at `OMACLOUD_CONFIG`, never
   the owner's real `~/.config/omacloud`.
 
-Removing a lost computer also takes changing the bucket's key: `devices revoke
---rotate`, a new key at the provider, `bucket set-key`, then deleting the old key
-once `bucket status` says every computer switched. Each step needs the owner.
+Removing a lost computer: `devices revoke --lost`. On Dropbox that's all: it asks to
+allow Omacloud again, and the old token is revoked once every computer has switched.
+With a bucket, also make a new key at the provider, run `bucket set-key`, then delete
+the old key once `bucket status` says every computer switched. Each step needs the owner.
 
 The owner must retain the recovery code privately. Commands that print a
 secret (`init` creating an account, `join-code`, `invite`, `export`,
@@ -125,7 +128,7 @@ remote settings. Follow the applicable desktop configuration skill when editing
 Omarchy config directly.
 
 Leaving: `omacloud export` prints the plain restic command that restores from the
-bucket, with its key and the repository password; `--to <folder>` copies the
+storage, with the repository password (and a bucket's key; Dropbox goes through rclone); `--to <folder>` copies the
 repository to a folder first. It prints secrets: the owner runs it.
 
 Machine migration: `packages restore --from NAME` previews package installation;

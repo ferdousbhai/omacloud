@@ -32,13 +32,13 @@ pub struct RepoSpec {
 const LOCAL_OPTIONS: &[&str] = &["bandwidth", "connections"];
 
 impl RepoSpec {
-    /// A bucket (OpenDAL, such as S3), as opposed to a local path.
+    /// At a provider (through OpenDAL: S3 or Dropbox), as opposed to a local path.
     #[must_use]
-    pub fn is_bucket(&self) -> bool {
+    pub fn is_remote(&self) -> bool {
         self.repository.starts_with("opendal:")
     }
 
-    /// In a Dropbox rather than a bucket.
+    /// In someone's Dropbox.
     #[must_use]
     pub fn is_dropbox(&self) -> bool {
         self.repository == "opendal:dropbox"
@@ -92,7 +92,7 @@ impl RepoSpec {
             // pack uploads mostly don't need retrying
             _ = options.entry("connections".into()).or_insert("16".into());
         }
-        if !self.is_bucket() {
+        if !self.is_remote() {
             options.retain(|k, _| !LOCAL_OPTIONS.contains(&k.as_str()));
         }
         Ok(BackendOptions::default()
@@ -102,9 +102,6 @@ impl RepoSpec {
     }
 
     pub fn init(&self, password: &str) -> Result<MasterKey> {
-        if self.is_dropbox() {
-            crate::dropbox::DropboxCreate::new(&self.options)?.prepare_root()?;
-        }
         let repo = Repository::new(&RepositoryOptions::default(), &self.backends()?)?.init(
             &Credentials::password(password),
             &KeyOptions::default(),
@@ -127,7 +124,7 @@ impl RepoSpec {
             return self.clone();
         }
         let mut spec = self.clone();
-        if spec.is_bucket() {
+        if spec.is_remote() {
             _ = spec
                 .options
                 .insert("root".into(), self.under_root(&format!("omacloud-e{n}")));
@@ -150,7 +147,7 @@ impl RepoSpec {
         // a protected object stays protected: retrying a refused delete only
         // waits (OpenDAL takes R2's 409 for a temporary error and backs off)
         let mut spec = self.clone();
-        if spec.is_bucket() {
+        if spec.is_remote() {
             _ = spec.options.insert("retry".into(), "off".into());
         }
         let be = spec.backends()?.repository();

@@ -12,7 +12,7 @@
 - `omacloud export` prints the restic command that restores from the bucket.
 - Removed with the network: `node`, `gateway`, `republish`, credits, and share links
   (`share`, `shares`, `unshare`, `receive`).
-- **Dropbox is back:** `omacloud init --provider dropbox`, or Connect Dropbox in the
+- **Dropbox is back:** `omacloud init --provider dropbox`, or Set Up With Dropbox in the
   app, with one click in the browser and nothing to paste. It uses Omacloud's own Dropbox
   app only, reaching only its `Apps/Omacloud` folder. `bucket set-key` allows it again
   and revokes the old token once every computer has switched. Dropbox accounts from

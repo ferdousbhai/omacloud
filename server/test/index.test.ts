@@ -32,6 +32,6 @@ test("/install.sh sends to the latest release's installer", async () => {
 test("no page mentions what was dropped", async () => {
 	for (const path of ["/", "/privacy", "/terms", "/llms.txt"]) {
 		const text = await (await get(path)).text();
-		assert.doesNotMatch(text, /google|waitlist|dropbox|quota|turnstile|credit|holder|storage network|omacloud share|gateway/i, path);
+		assert.doesNotMatch(text, /google|waitlist|quota|turnstile|credit|holder|storage network|omacloud share|gateway/i, path);
 	}
 });

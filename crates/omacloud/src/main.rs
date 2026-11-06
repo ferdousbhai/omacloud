@@ -102,11 +102,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Set up this device: create the account in your bucket (`--provider
-    /// ...`), or join one with the code from `omacloud join-code` or `omacloud
+    /// Set up this device: create the account in your Dropbox or bucket
+    /// (`--provider ...`), or join one with the code from `omacloud join-code` or `omacloud
     /// invite` in OMACLOUD_JOIN_CODE (joining is then approved on a computer
     /// already in), or with the recovery code in OMACLOUD_RECOVERY_CODE and
-    /// the bucket's details
+    /// `--provider ...` as when it was made
     Init {
         /// Sync this one folder, whole [default: Desktop, Documents and
         /// Pictures in home, as iCloud does; `omacloud folders` changes them]
@@ -146,7 +146,7 @@ enum Cmd {
         #[command(flatten)]
         bucket: BucketArgs,
     },
-    /// Your bucket's key: change it, to cut off a lost or removed computer
+    /// The key to your storage: change it, to cut off a lost or removed computer
     Bucket {
         #[command(subcommand)]
         action: Option<BucketCmd>,
@@ -289,7 +289,7 @@ struct BucketArgs {
     /// asked for
     #[arg(long)]
     access_key_id: Option<String>,
-    /// A folder in the bucket, if not all of it
+    /// A folder in the bucket or Dropbox app folder, if not all of it
     #[arg(long)]
     root: Option<String>,
     /// Keep the records that keep computers in step in this second bucket
@@ -393,11 +393,6 @@ impl BucketArgs {
     }
 }
 
-/// The code Dropbox shows where no browser can come back here.
-fn read_dropbox_code() -> Result<String> {
-    read_secret("OMACLOUD_DROPBOX_AUTH_CODE", "Dropbox authorization code")
-}
-
 /// A key's secret half, from the environment or a prompt.
 fn read_key_secret() -> Result<String> {
     read_secret("OMACLOUD_SECRET_ACCESS_KEY", "secret access key")
@@ -410,7 +405,8 @@ enum BucketCmd {
     /// Switch every computer to a new key. Make it at your provider first,
     /// and keep the old one until `bucket status` says every computer
     /// switched. The secret comes from OMACLOUD_SECRET_ACCESS_KEY, or is
-    /// asked for
+    /// asked for. On Dropbox it asks you to allow Omacloud again instead, and
+    /// the old token is revoked by itself
     SetKey {
         /// The new key's id; Dropbox asks you to allow it again instead
         #[arg(long)]
@@ -564,6 +560,10 @@ enum DevicesCmd {
         /// Also rotate the repository key, so the device can't read new data
         #[arg(long)]
         rotate: bool,
+        /// It's lost or stolen: rotate too, and on Dropbox change the token (it
+        /// asks you to allow Omacloud again) so it can't reach the storage either
+        #[arg(long)]
+        lost: bool,
         /// Don't ask; needed where nobody can be asked
         #[arg(long)]
         yes: bool,
@@ -828,7 +828,7 @@ fn storage_gone(config: &Config) -> Option<&'static str> {
         return Some("the Omacloud network");
     }
     if config.repo.is_dropbox() && !config.repo.options.contains_key("refresh_token") {
-        return Some("Dropbox");
+        return Some("the earlier Dropbox app");
     }
     if config
         .repo
@@ -1105,7 +1105,7 @@ fn init_target(
         need_terminal_for_recovery_code()?;
     }
     if repo.is_dropbox() {
-        let refresh = dropbox::authorize(read_dropbox_code)?;
+        let refresh = dropbox::authorize()?;
         _ = repo.options.insert("refresh_token".into(), refresh);
     } else {
         _ = repo.options.insert("secret_access_key".into(), read_key_secret()?);
@@ -1135,8 +1135,8 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<String>, account: Op
     let anchor = anchor_of(coord.as_ref())?;
     let creating = anchor.is_none();
     if creating && (recovery.is_some() || account.is_some()) {
-        return Err(fail::setup("no_account", "this bucket has no account in it")
-            .hint("check that it's the bucket the code is for")
+        return Err(fail::setup("no_account", "this storage has no account in it")
+            .hint("check that it's the bucket or Dropbox the code is for")
             .into());
     }
     if let (Some(anchor), Some(code)) = (&anchor, &recovery) {
@@ -1169,15 +1169,14 @@ fn init(paths: &Paths, mut config: Config, recovery: Option<String>, account: Op
     let how = if creating {
         let created = account::create(coord.as_ref(), &config.repo, &signing, &config.device)?;
         config.root = created.root;
-        let place = config
-            .repo
-            .options
-            .get("bucket")
-            .map_or_else(|| config.repo.repository.clone(), |b| format!("in bucket {b}"));
         let place = if config.repo.is_dropbox() {
             "in your Dropbox".to_string()
         } else {
-            place
+            config
+                .repo
+                .options
+                .get("bucket")
+                .map_or_else(|| config.repo.repository.clone(), |b| format!("in bucket {b}"))
         };
         say!(
             out,
@@ -1402,7 +1401,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             // key just refused can't read one
             if refused_at.is_none_or(|t: Instant| t.elapsed() >= REFUSED_WAIT)
                 && let Err(e) =
-                    follow_bucket_key(paths, &mut engine).and_then(|()| retire_old_token(paths, &mut engine))
+                    follow_bucket_key(paths, &mut engine).and_then(|()| retire_old_token(paths, &mut engine).map(drop))
             {
                 warn!("checking for a new bucket key: {e:#}");
             }
@@ -1716,7 +1715,7 @@ fn run(cli: Cli) -> Out {
             let (recovery_code, join_code) = (code("OMACLOUD_RECOVERY_CODE"), code("OMACLOUD_JOIN_CODE"));
             if set_aside_old_setup(&paths)? {
                 eprintln!(
-                    "The old setup ({}) is kept aside as .before-bucket; setting up in your bucket.",
+                    "The old setup ({}) is kept aside as .before-bucket; setting up in your storage.",
                     paths.config.display()
                 );
             }
@@ -2018,7 +2017,7 @@ fn run(cli: Cli) -> Out {
         Cmd::Secrets { action } => secrets(&paths, action.unwrap_or(SecretsCmd::List)),
         Cmd::JoinCode => {
             if !output::to_terminal(mode()) {
-                return Err(fail::terminal_required("a join code (it holds your bucket's key)").into());
+                return Err(fail::terminal_required("a join code (it holds the key to your storage)").into());
             }
             let config = load(&paths)?;
             if config.coordinator != BUCKET {
@@ -2035,7 +2034,7 @@ fn run(cli: Cli) -> Out {
             }
             .encode()?;
             eprintln!(
-                "Pass it privately: it holds your bucket's key (it can't open your files). The new\n\
+                "Pass it privately: it holds the key to your storage (it can't open your files). The new\n\
                  computer runs `omacloud init` with it in OMACLOUD_JOIN_CODE (or Add This Computer\n\
                  in the app), and then needs your approval (or your recovery code)."
             );
@@ -2185,7 +2184,7 @@ fn run(cli: Cli) -> Out {
                 );
                 return Ok(Response::new(Value::Null, "export").human(out.trim_end()));
             }
-            if spec.is_bucket() {
+            if spec.is_remote() {
                 let opt = |k: &str| spec.options.get(k).cloned().unwrap_or_default();
                 say!(
                     out,
@@ -2342,6 +2341,7 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
         DevicesCmd::Revoke {
             fingerprint: fp,
             rotate,
+            lost,
             yes,
         } => {
             let (key, name) = pick(&fp, members.valid.into_iter().collect())?;
@@ -2359,7 +2359,7 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
             let mut out = String::new();
             say!(out, "removed {name} ({}). It can't push anymore.", fingerprint(&key));
             let mut rotated = Value::Null;
-            if rotate {
+            if rotate || lost {
                 let r = e.rotate()?;
                 say!(
                     out,
@@ -2372,8 +2372,28 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
             } else {
                 say!(
                     out,
-                    "It still holds the repository key it had. If the device is lost or not \
-                     trusted, run `omacloud rotate`."
+                    "It still holds the repository key it had, and the key to your storage. If the device is \
+                     lost or not trusted, run `omacloud rotate` and `omacloud bucket set-key`."
+                );
+            }
+            if lost && config.repo.is_dropbox() {
+                drop(e);
+                bucket(
+                    paths,
+                    BucketCmd::SetKey {
+                        access_key_id: None,
+                        here_only: false,
+                    },
+                )
+                .map_err(|err| err.context(format!("{name} is removed; finish with `omacloud bucket set-key`")))?;
+                say!(
+                    out,
+                    "The old Dropbox token is revoked once your other computers have switched."
+                );
+            } else if lost {
+                say!(
+                    out,
+                    "It still holds the bucket's key: make a new one at your provider, and run `omacloud bucket set-key`."
                 );
             }
             let fp = fingerprint(&key);
@@ -2564,6 +2584,7 @@ const SETTINGS_GROUPS: &[&str] = &["shell", "agents", "apps", "chromium", "wifi"
 
 fn settings(paths: &Paths, action: SettingsCmd) -> Out {
     let mut config = load(paths)?;
+    let skipping = matches!(action, SettingsCmd::Skip { .. });
     match action {
         SettingsCmd::On | SettingsCmd::Off => {
             config.settings = matches!(action, SettingsCmd::On);
@@ -2589,23 +2610,17 @@ fn settings(paths: &Paths, action: SettingsCmd) -> Out {
                 .hint(format!("the groups are {}", SETTINGS_GROUPS.join(", ")))
                 .into())
         }
-        SettingsCmd::Skip { group } => {
-            _ = config.settings_skip.insert(group.clone());
+        SettingsCmd::Skip { group } | SettingsCmd::Unskip { group } => {
+            let summary = if skipping {
+                _ = config.settings_skip.insert(group.clone());
+                format!("{group} stays on this computer")
+            } else {
+                _ = config.settings_skip.remove(&group);
+                format!("{group} syncs again")
+            };
             save(paths, &config)?;
             let st = engine(paths, &config)?.settings_status();
-            Ok(
-                Response::new(settings_json(&st, &config), format!("{group} stays on this computer"))
-                    .human(settings_text(&st).trim_end()),
-            )
-        }
-        SettingsCmd::Unskip { group } => {
-            _ = config.settings_skip.remove(&group);
-            save(paths, &config)?;
-            let st = engine(paths, &config)?.settings_status();
-            Ok(
-                Response::new(settings_json(&st, &config), format!("{group} syncs again"))
-                    .human(settings_text(&st).trim_end()),
-            )
+            Ok(Response::new(settings_json(&st, &config), summary).human(settings_text(&st).trim_end()))
         }
         SettingsCmd::Status => {
             let st = engine(paths, &config)?.settings_status();
@@ -3049,7 +3064,7 @@ fn status(paths: &Paths) -> Out {
     let bucket_name = repo.options.get("bucket");
     let kind = if repo.is_dropbox() {
         "dropbox"
-    } else if repo.is_bucket() {
+    } else if repo.is_remote() {
         "bucket"
     } else {
         "path"
@@ -3138,13 +3153,10 @@ fn status(paths: &Paths) -> Out {
         "folders": config.folders.as_ref().map(|f| {
             // the usual folders this computer doesn't sync, with where they'd be
             let local = xdg_names(&config.folder);
-            let at_home = xdg_at_home(&config.folder);
             let here = |name: &str| folder_here(&config.folder, &local, name);
-            let others: Vec<_> = USUAL_FOLDERS
-                .iter()
-                .filter(|u| !synced.iter().any(|(n, _)| n == *u) && !f.skip.contains(**u))
-                .filter(|u| !at_home.iter().any(|h| h == *u))
-                .map(|u| here(u))
+            let others: Vec<_> = other_folders(&config.folder, &synced, &f.skip)
+                .into_iter()
+                .map(here)
                 .collect();
             let skipped: Vec<_> = f.skip.iter().map(|s| here(s)).collect();
             json!({
@@ -3201,6 +3213,8 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
         .into());
     };
     let (mut back, mut removing) = (None, None);
+    // what's weighed is for choosing: not after every change
+    let weigh = matches!(action, FoldersCmd::List);
     let changed = match action {
         FoldersCmd::List => false,
         FoldersCmd::Add { name } => {
@@ -3225,8 +3239,10 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
             choice.skip.insert(name)
         }
         FoldersCmd::Unskip { ref name } => {
-            back = Some(folder_name(&config.folder, name)?);
-            choice.skip.remove(name.trim()) || choice.skip.remove(&folder_name(&config.folder, name)?)
+            let name2 = folder_name(&config.folder, name)?;
+            let changed = choice.skip.remove(name.trim()) || choice.skip.remove(&name2);
+            back = Some(name2);
+            changed
         }
         FoldersCmd::Exclude { ref path } => choice.exclude.insert(subfolder(&config.folder, path)?),
         FoldersCmd::Include { ref path } => choice.exclude.remove(&subfolder(&config.folder, path)?),
@@ -3252,10 +3268,10 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
         e.take_back(name);
     }
     if let Some(name) = &removing {
-        e.remove_from_cloud(name)
-            .map_err(|err| fail::not_found(format!("{err:#}")))?;
+        e.remove_from_cloud(name)?;
+    } else {
+        e.sync()?;
     }
-    e.sync()?;
     let synced = e.folder_list();
     let mut out = String::new();
     for (_, dir) in &synced {
@@ -3279,23 +3295,17 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
 
     // with sizes, for whoever is choosing
     let home = &config.folder;
-    let local = xdg_names(home);
+    let size = |path: &Path| weigh.then(|| tree_size(path));
     let sized = |name: &str| {
-        let mut v = folder_here(home, &local, name);
-        let size = tree_size(&PathBuf::from(v["path"].as_str().unwrap_or_default()));
-        v["size"] = json!(size);
-        v
+        let path = e.on_disk(Path::new(name));
+        json!({ "name": name, "path": path, "size": size(&path) })
     };
-    let others: Vec<_> = USUAL_FOLDERS
-        .iter()
-        .filter(|n| !synced.iter().any(|(s, _)| s == *n) && !skipped.contains(**n))
-        .map(|n| sized(n))
-        .collect();
+    let others = other_folders(home, &synced, skipped);
     let data = json!({
-        "synced": synced.iter().map(|(name, path)| json!({ "name": name, "path": path, "size": tree_size(path) })).collect::<Vec<_>>(),
+        "synced": synced.iter().map(|(name, path)| json!({ "name": name, "path": path, "size": size(path) })).collect::<Vec<_>>(),
         "skipped": skipped.iter().map(|s| sized(s)).collect::<Vec<_>>(),
-        "others": others,
-        "excluded": excluded.iter().map(|p| json!({ "path": p, "size": tree_size(&home.join(p)) })).collect::<Vec<_>>(),
+        "others": others.iter().map(|n| sized(n)).collect::<Vec<_>>(),
+        "excluded": excluded.iter().map(|p| json!({ "path": p, "size": size(&e.on_disk(Path::new(p))) })).collect::<Vec<_>>(),
         "removed_from_cloud": e.dropped_folders(),
         "changed": changed,
     });
@@ -3306,6 +3316,21 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
             .ids(ids)
             .count(synced.len()),
     )
+}
+
+/// The usual folders this computer doesn't sync and could.
+fn other_folders(
+    home: &Path,
+    synced: &[(String, PathBuf)],
+    skip: &std::collections::BTreeSet<String>,
+) -> Vec<&'static str> {
+    let at_home = xdg_at_home(home);
+    USUAL_FOLDERS
+        .iter()
+        .filter(|u| !synced.iter().any(|(n, _)| n == *u) && !skip.contains(**u))
+        .filter(|u| !at_home.iter().any(|h| h == *u))
+        .copied()
+        .collect()
 }
 
 /// A subfolder of a folder of home, as the account names it: `Documents/Notes`.
@@ -3338,32 +3363,32 @@ fn tree_size(path: &Path) -> u64 {
     fs::read_dir(path).map_or(0, |entries| entries.flatten().map(|e| tree_size(&e.path())).sum())
 }
 
-/// Show or change the bucket's key.
 /// Revoke the Dropbox token a key change here replaced, once every computer has
-/// switched. Only the computer that made the change holds it.
-fn retire_old_token(paths: &Paths, e: &mut Engine) -> Result<()> {
+/// switched. Only the computer that made the change holds it. True if it did.
+fn retire_old_token(paths: &Paths, e: &mut Engine) -> Result<bool> {
     let file = paths.data.join(dropbox::OLD_TOKEN_FILE);
     let old = match fs::read_to_string(&file) {
         Ok(token) => token,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(err) => return Err(err.into()),
     };
     // saved by a change that never got published: it's still the one in use
     if load(paths)?.repo.options.get("refresh_token") == Some(&old) {
-        return Ok(());
+        return Ok(false);
     }
     let Some((seq, acked)) = e.bucket_key_status()? else {
-        return Ok(());
+        return Ok(false);
     };
     if !e.refresh_devices()?.members().valid.keys().all(|k| acked.contains(k)) {
-        return Ok(());
+        return Ok(false);
     }
     dropbox::revoke(&old)?;
     fs::remove_file(file)?;
     info!("revoked the old Dropbox token after key change {seq}");
-    Ok(())
+    Ok(true)
 }
 
+/// Show or change the bucket's key.
 fn bucket(paths: &Paths, action: BucketCmd) -> Out {
     let config = load(paths)?;
     if config.coordinator != BUCKET {
@@ -3387,11 +3412,11 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Out {
                 computers.push(json!({ "device": name, "fingerprint": fp, "switched": switched }));
                 waiting += usize::from(!switched);
             }
-            if waiting == 0 {
-                retire_old_token(paths, &mut e)?;
-            }
-            let summary = if waiting == 0 && config.repo.is_dropbox() {
+            let revoked = waiting == 0 && retire_old_token(paths, &mut e)?;
+            let summary = if revoked {
                 format!("every computer switched to key change {seq}; the old Dropbox token is revoked")
+            } else if waiting == 0 && config.repo.is_dropbox() {
+                format!("every computer switched to key change {seq}; the computer that made it revokes the old token")
             } else if waiting == 0 {
                 format!("every computer switched to key change {seq}; delete the old key at your provider")
             } else {
@@ -3408,8 +3433,19 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Out {
             access_key_id,
             here_only,
         } => {
+            let old_token = paths.data.join(dropbox::OLD_TOKEN_FILE);
             let key = if config.repo.is_dropbox() {
-                let refresh_token = dropbox::authorize(read_dropbox_code)?;
+                // not after sending anyone to the browser; the same token again
+                // was saved by a change that never got published
+                if !here_only
+                    && fs::read_to_string(&old_token)
+                        .is_ok_and(|saved| Some(&saved) != config.repo.options.get("refresh_token"))
+                {
+                    return Err(fail::usage("an earlier Dropbox token is still waiting to be revoked")
+                        .hint("wait until every computer switched (`omacloud bucket status`), then try again")
+                        .into());
+                }
+                let refresh_token = dropbox::authorize()?;
                 if !here_only && config.repo.options.get("refresh_token") == Some(&refresh_token) {
                     return Err(CliError::new(
                         "same_key",
@@ -3445,7 +3481,7 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Out {
             let coord = coordinator(&trial)?;
             check_bucket(coord.as_ref())?;
             if anchor_of(coord.as_ref())?.is_none() {
-                return Err(fail::setup("no_account", "the new key reaches a bucket with no account in it").into());
+                return Err(fail::setup("no_account", "the new key reaches storage with no account in it").into());
             }
             if here_only {
                 save(paths, &trial)?;
@@ -3456,37 +3492,11 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Out {
             }
             // published with the old key, which still works
             let mut e = engine(paths, &config)?;
-            let old_token = paths.data.join(dropbox::OLD_TOKEN_FILE);
             if config.repo.is_dropbox() {
-                use std::{io::Write, os::unix::fs::OpenOptionsExt};
                 let old = config.repo.options.get("refresh_token").context("no Dropbox token")?;
-                match fs::read_to_string(&old_token) {
-                    // saved by a change that never got published
-                    Ok(saved) if saved == *old => fs::remove_file(&old_token)?,
-                    Ok(_) => {
-                        return Err(fail::usage("an earlier Dropbox token is still waiting to be revoked")
-                            .hint("wait until every computer switched (`omacloud bucket status`), then try again")
-                            .into());
-                    }
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(err) => return Err(err.into()),
-                }
-                let mut file = fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .mode(0o600)
-                    .open(&old_token)?;
-                file.write_all(old.as_bytes())?;
-                file.sync_all()?;
+                write_private(&old_token, old.as_bytes())?;
             }
-            let seq = match e.change_bucket_key(&key) {
-                Ok(seq) => seq,
-                Err(err) => {
-                    // nothing published: this token stays in use
-                    _ = fs::remove_file(&old_token);
-                    return Err(err);
-                }
-            };
+            let seq = e.change_bucket_key(&key)?;
             trial.bucket_key_seq = seq;
             save(paths, &trial)?;
             let after = if trial.repo.is_dropbox() {

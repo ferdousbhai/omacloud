@@ -93,8 +93,8 @@ impl Alerts {
         if !std::mem::replace(&mut self.key_refused, true) {
             self.show(
                 "This device can't reach your storage",
-                "Your storage refused its key. If the key changed while it was away, get the new one from your \
-                 provider and run omacloud bucket set-key --access-key-id <id> --here-only.",
+                "Your storage refused its key. If it changed while this device was away, run omacloud bucket \
+                 set-key --here-only (Dropbox asks you to allow it again), with --access-key-id <id> for a bucket.",
                 "overview",
             );
         }

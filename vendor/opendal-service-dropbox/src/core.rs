@@ -48,6 +48,14 @@ impl Debug for DropboxCore {
     }
 }
 
+/// Omacloud: access tokens by refresh token, for as long as they last.
+fn tokens() -> &'static std::sync::Mutex<std::collections::HashMap<String, (String, Timestamp)>> {
+    static TOKENS: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, (String, Timestamp)>>,
+    > = std::sync::OnceLock::new();
+    TOKENS.get_or_init(Default::default)
+}
+
 impl DropboxCore {
     fn build_path(&self, path: &str) -> String {
         let path = build_rooted_abs_path(&self.root, path);
@@ -58,6 +66,13 @@ impl DropboxCore {
 
     pub async fn sign<T>(&self, ctx: &OperationContext, req: &mut Request<T>) -> Result<()> {
         let mut signer = self.signer.lock().await;
+
+        // Omacloud: one token per refresh token in a process; each repository
+        // opened otherwise asks for its own
+        if let Some((token, until)) = tokens().lock().unwrap().get(&signer.refresh_token).cloned() {
+            signer.access_token = token;
+            signer.expires_in = until;
+        }
 
         // Access token is valid, use it directly.
         if !signer.access_token.is_empty() && signer.expires_in > Timestamp::now() {
@@ -111,6 +126,11 @@ impl DropboxCore {
         // Refresh it 2 minutes earlier.
         signer.expires_in =
             Timestamp::now() + Duration::from_secs(token.expires_in) - Duration::from_secs(120);
+        // Omacloud: for the next repository opened
+        tokens().lock().unwrap().insert(
+            signer.refresh_token.clone(),
+            (token.access_token.clone(), signer.expires_in),
+        );
 
         let value = format!("Bearer {}", token.access_token)
             .parse()
@@ -161,10 +181,15 @@ impl DropboxCore {
         body: Buffer,
     ) -> Result<Response<Buffer>> {
         let url = "https://content.dropboxapi.com/2/files/upload".to_string();
-        let dropbox_update_args = DropboxUploadArgs {
+        let mut dropbox_update_args = DropboxUploadArgs {
             path: build_rooted_abs_path(&self.root, path),
             ..Default::default()
         };
+        // Omacloud: strict, so an identical file there is a conflict too
+        if args.if_not_exists() {
+            dropbox_update_args.mode = "add".to_string();
+            dropbox_update_args.strict_conflict = true;
+        }
         let mut request_builder = Request::post(&url);
         if let Some(size) = size {
             request_builder = request_builder.header(CONTENT_LENGTH, size);
@@ -243,6 +268,9 @@ impl DropboxCore {
                 let err = parse_error(resp);
                 match err.kind() {
                     ErrorKind::AlreadyExists => Ok(RpCreateDir::default()),
+                    // Omacloud: AlreadyExists is a file at the path now; a folder
+                    // there is what was asked for
+                    _ if err.to_string().contains("path/conflict/folder") => Ok(RpCreateDir::default()),
                     _ => Err(err),
                 }
             }
@@ -568,9 +596,10 @@ mod error {
             StatusCode::NOT_FOUND => (ErrorKind::NotFound, false),
             StatusCode::FORBIDDEN => (ErrorKind::PermissionDenied, false),
             StatusCode::TOO_MANY_REQUESTS => (ErrorKind::RateLimited, true),
+            // Omacloud: a 503 is Dropbox turning a write down, as a 429 is
+            StatusCode::SERVICE_UNAVAILABLE => (ErrorKind::RateLimited, true),
             StatusCode::INTERNAL_SERVER_ERROR
             | StatusCode::BAD_GATEWAY
-            | StatusCode::SERVICE_UNAVAILABLE
             | StatusCode::GATEWAY_TIMEOUT => (ErrorKind::Unexpected, true),
             _ => (ErrorKind::Unexpected, false),
         };
@@ -606,7 +635,9 @@ mod error {
             || summary.starts_with("from_lookup/not_found")
         {
             Some((ErrorKind::NotFound, false))
-        } else if summary.starts_with("path/conflict") {
+        } else if summary.starts_with("path/conflict/file/") || summary == "path/conflict/file" {
+            // Omacloud: only a file at the path itself; a conflict with a
+            // folder or an ancestor isn't another writer having got there first
             Some((ErrorKind::AlreadyExists, false))
         } else if summary.starts_with("too_many_write_operations") {
             Some((ErrorKind::RateLimited, true))

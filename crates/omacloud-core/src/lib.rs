@@ -12,7 +12,6 @@ pub mod bucket;
 pub mod bucket_key;
 pub mod chromium;
 pub mod devices;
-pub mod dropbox;
 pub mod epoch;
 pub mod head;
 pub mod ignore;
@@ -36,6 +35,6 @@ pub const VERSIONS_KEPT: std::time::Duration = std::time::Duration::from_secs(30
 pub use repo::RepoSpec;
 pub use rustic_core::{jiff, repofile::MasterKey};
 pub use sync::{
-    Deleted, Engine, Folders, KeyChange, Membership, PACKAGES, Rotated, SECRETS, SettingsSetup, SettingsStatus, Setup,
-    State, Stats, Version,
+    Deleted, Engine, Folders, KeyChange, Membership, NoCloudFolder, PACKAGES, Rotated, SECRETS, SettingsSetup,
+    SettingsStatus, Setup, State, Stats, Version,
 };

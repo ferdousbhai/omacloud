@@ -29,15 +29,16 @@ work, root, finished = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
 def tokens():
     for name in ["a.toml", "a-before-key-change.toml"]:
         if (work / name).exists():
-            yield tomllib.loads((work / name).read_text())["repo"]["options"]["refresh_token"]
+            options = tomllib.loads((work / name).read_text())["repo"]["options"]
+            yield options["refresh_token"], options["client_id"]
 def call(url, token, body):
     req = urllib.request.Request(url, data=body, headers={
         "authorization": f"Bearer {token}", "content-type": "application/json"})
     return urllib.request.urlopen(req, timeout=60).read()
 deleted = False
-for refresh in dict.fromkeys(tokens()):
+for refresh, client_id in dict.fromkeys(tokens()):
     form = urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": refresh,
-                                   "client_id": "337rl43cn3fcoj8"}).encode()
+                                   "client_id": client_id}).encode()
     try:
         answer = urllib.request.urlopen("https://api.dropboxapi.com/oauth2/token", form, timeout=60).read()
     except urllib.error.HTTPError:
@@ -164,9 +165,8 @@ oc c sync >/dev/null
 cp "$work/b.toml" "$work/b-stolen.toml"
 cp "$work/a.toml" "$work/a-before-key-change.toml"
 fpb=$(oc b device-key | sed -n 's/^fingerprint //p')
-oc a devices revoke "$fpb" --rotate --yes >/dev/null
 step "allow Omacloud in the browser (second of two)"
-oc a bucket set-key >/dev/null 2>"$work/key.log" &
+oc a devices revoke "$fpb" --lost --yes >/dev/null 2>"$work/key.log" &
 changing=$!
 show_links "$work/key.log" "$changing" &
 wait "$changing"

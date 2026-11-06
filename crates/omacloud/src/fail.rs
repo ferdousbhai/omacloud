@@ -9,12 +9,12 @@
 //! |---|---|
 //! | `error` (anything unrecognised), `verification_failed`, `pending`, `command_failed`, `cancelled` | 1 |
 //! | `usage`, `confirmation_required`, `terminal_required`, `ambiguous`, `already_set_up`, `exists`, `unsupported`, `same_key` | 2 |
-//! | `not_set_up`, `storage_gone`, `not_approved`, `removed`, `recovery_code_rejected`, `join_code_rejected`, `no_account`, `key_refused`, `shares_rejected`, `settings_off` | 3 |
+//! | `not_set_up`, `storage_gone`, `dropbox_not_allowed`, `dropbox_code_rejected`, `not_approved`, `removed`, `recovery_code_rejected`, `join_code_rejected`, `no_account`, `key_refused`, `shares_rejected`, `settings_off` | 3 |
 //! | `not_found` | 4 |
 //! | `unavailable` | 5 |
 
 use omacloud_core::{
-    DeviceError, HeadError, Membership,
+    DeviceError, HeadError, Membership, NoCloudFolder,
     bucket::{NoCreateOnly, key_refused as storage_refused_key, unreachable},
     epoch::EpochError,
 };
@@ -29,12 +29,14 @@ pub fn storage_gone(kind: &str) -> CliError {
         EXIT_SETUP,
         format!("this computer was set up on {kind}, which Omacloud no longer uses"),
     )
-    .hint("run `omacloud init` with your bucket to set it up again (the old config is kept aside); the files here stay as they are")
+    .hint("run `omacloud init` with your Dropbox or a bucket to set it up again (the old config is kept aside); the files here stay as they are")
 }
 
 /// The storage refusing a key this command was just given.
 pub fn key_refused(message: impl Into<String>) -> CliError {
-    setup("key_refused", message).hint("check the key's id and secret, and that it may read and write this bucket")
+    setup("key_refused", message).hint(
+        "check the key's id and secret, and that it may read and write this bucket; on Dropbox, allow Omacloud again",
+    )
 }
 
 pub fn usage(message: impl Into<String>) -> CliError {
@@ -116,13 +118,16 @@ pub fn classify(e: &anyhow::Error) -> CliError {
     }
     if is_rollback(e) {
         return CliError::new("verification_failed", EXIT_ERROR, message).hint(
-            "the bucket's records are older than this computer has seen: it was restored from an old \
+            "the storage's records are older than this computer has seen: it was restored from an old \
              copy, or someone with its key rolled it back; check the account from another computer",
         );
     }
     if is_unverified(e) {
         return CliError::new("verification_failed", EXIT_ERROR, message)
             .hint("the storage served a history this computer refuses; check the account from another computer");
+    }
+    if e.downcast_ref::<NoCloudFolder>().is_some() {
+        return not_found(message);
     }
     if e.downcast_ref::<NoCreateOnly>().is_some() {
         return unsupported(message).hint(

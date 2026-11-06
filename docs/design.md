@@ -9,9 +9,9 @@ can't do. The source files named here hold the details.
 
 ## Where it's stored
 
-Everything lives in a bucket you choose: a restic repository with the files,
-and beside it, under `omacloud-coordination/`, the records that keep your
-computers in step. Any S3 store with create-only writes works
+Everything lives in your Dropbox or a bucket you choose: a restic repository with the
+files, and beside it, under `omacloud-coordination/`, the records that keep your
+computers in step. Dropbox or any S3 store with create-only writes works
 ([providers.md](providers.md)); `omacloud init` checks for them before an
 account depends on them (`BucketCoordinator::check`). Omacloud runs no storage
 and no service an account depends on. For development and tests, `omacloud init
@@ -39,7 +39,7 @@ one subtree of a snapshot without walking the whole folder.
 Because it's plain restic, you can always leave: `omacloud export --to
 <folder>` copies the repository to a folder and prints its password, and
 restic or rustic restores everything without Omacloud; without `--to` it prints
-the command that restores from the bucket directly.
+the command that restores from the bucket directly (from Dropbox, through rclone).
 
 ## Keys
 
@@ -64,7 +64,9 @@ the command that restores from the bucket directly.
   encrypted objects only. `omacloud bucket set-key` publishes a new one sealed
   to each member and the root, signed, beside the other records (`bucket_key.rs`).
   Each switches on its next sync and says so; once all have, the old key is
-  deleted at the provider, which cuts off a removed computer.
+  deleted at the provider, which cuts off a removed computer. On Dropbox the key is
+  a refresh token: allowing Omacloud again makes a new one, and the computer that did
+  it revokes the old one once all have switched.
 - **Secrets bundle.** ssh and gpg keys never sync as files. `omacloud secrets
   save` seals them to the root (`secrets.rs`), so only the recovery code
   opens them: no computer, not even a member, can read another computer's
@@ -81,8 +83,8 @@ fork it or forge it without the other computers noticing.
 
 The heads, device chain and epoch records are append-only logs
 (`head.rs`'s `Coordinator`), objects in the bucket (`bucket.rs`). Appending is
-a create-only write (`If-None-Match: *`): the bucket refuses it if another
-computer took that position first, which makes the bucket a compare and swap.
+a create-only write (`If-None-Match: *`, or Dropbox's add mode): the storage refuses it
+if another computer took that position first, which makes it a compare and swap.
 For development they are files in a shared directory (`DirCoordinator`), each
 hard linked into place so a taken name fails. Every write the others need also rewrites an
 object named `changed`; an idle computer reads it every ten seconds and syncs
@@ -94,7 +96,7 @@ minutes.
 
 One person is one account: a recovery code, a device chain, a repository. Every
 computer of an account can read all of it, so a family isn't one account. Each
-person gets a bucket and a key of their own: `omacloud invite` checks a bucket
+person uses their own Dropbox, or a bucket and key of their own: `omacloud invite` checks a bucket
 and prints a join code that names no account, and the first computer to use it
 creates that person's account, with a recovery code only they see. The person
 who made the bucket holds its key and can delete what's in it, as a provider
@@ -166,7 +168,8 @@ infected holds the key, and could delete the bucket's objects. Against that,
 the bucket needs delete protection (R2 bucket locks, object lock elsewhere;
 [providers.md](providers.md#delete-protection)), which can't be set up from
 here, because a key that could turn it on could turn it off. It's a step of
-setting up a bucket, and the setup doesn't check for it.
+setting up a bucket, and the setup doesn't check for it. On Dropbox there's no such
+lock: what's left is Dropbox's own deleted-files recovery, for as long as your plan keeps them.
 
 One bucket is one provider. A provider losing the bucket or closing your
 account takes the backup with it, though every computer keeps its synced files.

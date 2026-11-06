@@ -17,3 +17,19 @@ fn s3_is_registered() {
     )
     .unwrap();
 }
+
+/// Upstream's Dropbox service has neither: it wants an app secret, and overwrites
+/// on every write. Without the vendored copy, this fails only at someone's browser.
+#[test]
+fn dropbox_is_the_patched_service() -> anyhow::Result<()> {
+    let op = Operator::via_iter(
+        "dropbox",
+        [
+            ("root".to_string(), "/test".to_string()),
+            ("client_id".to_string(), "app".to_string()),
+            ("refresh_token".to_string(), "token".to_string()),
+        ],
+    )?;
+    assert!(op.info().capability().write_with_if_not_exists);
+    Ok(())
+}

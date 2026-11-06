@@ -57,11 +57,11 @@ export const home = () =>
 <li>Your SSH and GPG keys.</li>
 </ul>
 <p>You can get back an earlier version of a file, or a file that you deleted.</p>
-<p>Omacloud encrypts your files on your computer, then keeps them in a storage bucket that you
-choose, such as Cloudflare R2 or Hetzner. Your storage provider can't read them. Omacloud runs no
+<p>Omacloud encrypts your files on your computer, then keeps them in your own Dropbox, or a
+storage bucket that you choose, such as Cloudflare R2 or Hetzner. Your storage provider can't read them. Omacloud runs no
 storage and sees nothing of yours.</p>
-<p>You can make a bucket for each person in your family. Each person gets a separate account that
-only they can read.</p>
+<p>Each person in your family can use their own Dropbox, or a bucket that you make for them. Each
+person gets a separate account that only they can read.</p>
 <p>Keep your recovery code in a safe location. If you lose all your computers, you need this code
 to get your data.</p>
 <h2>Get it</h2>
@@ -110,8 +110,8 @@ export const llms = (env: Env) => {
 
 > Your files and settings on every Omarchy computer, end to end encrypted. The folders
 > you choose sync in place; Omarchy settings, AI agent settings, Chromium, Wi-Fi, package lists
-> and ssh and gpg keys follow; earlier versions and deleted files come back. Storage is an S3 bucket
-> of your own (Cloudflare R2, Hetzner or others), one per person, with no sign-in. Underneath it is
+> and ssh and gpg keys follow; earlier versions and deleted files come back. Storage is your own
+> Dropbox or S3 bucket (Cloudflare R2, Hetzner or others), one per person, with no Omacloud sign-in. Underneath it is
 > plain restic, so restic or rustic restore everything without Omacloud.
 
 Everything is encrypted on the computer before it is stored: whoever holds the data can't read

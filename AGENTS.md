@@ -1,8 +1,8 @@
 # Omacloud
 
 End-to-end encrypted sync of files, Omarchy settings, package lists and keys
-across Omarchy computers, on plain restic, in an S3 bucket of each person's own.
-User docs: README.md; buckets: docs/providers.md; design and threat model:
+across Omarchy computers, on plain restic, in each person's own Dropbox or S3 bucket.
+User docs: README.md; storage: docs/providers.md; design and threat model:
 docs/design.md; build, test and release: CONTRIBUTING.md.
 
 ## Layout
@@ -10,11 +10,11 @@ docs/design.md; build, test and release: CONTRIBUTING.md.
 | path | what |
 |---|---|
 | `crates/omacloud-core` | sync engine (`sync.rs`), settings sync (`settings.rs`, `agents.rs`, `merged.rs`, `chromium/`, `wifi.rs`), signed heads (`head.rs`), the on-demand view of a head (`browse.rs`), device chain (`devices.rs`, `account.rs`), repository keys and rotation (`epoch.rs`), coordination (`Coordinator`, and `DirCoordinator` for development and tests, in `head.rs`; `BucketCoordinator` in `bucket.rs`), the bucket's key (`bucket_key.rs`), secrets bundle (`secrets.rs`), Shamir split (`shamir.rs`). Integration tests in `tests/` |
-| `crates/omacloud` | the `omacloud` CLI and `watch` daemon (`main.rs`: every subcommand; `mount.rs`: the read-only FUSE view `mount` serves; `output.rs`: the shared output contract, vendored from icloud-for-omarchy; `fail.rs`: error codes and exit codes; `agent_skill.rs`: installs `skills/omacloud` for coding agents; `alerts.rs`, `power.rs`). CLI tests in `tests/cli.rs` |
+| `crates/omacloud` | the `omacloud` CLI and `watch` daemon (`main.rs`: every subcommand; `dropbox.rs`: allowing Omacloud in Dropbox; `mount.rs`: the read-only FUSE view `mount` serves; `output.rs`: the shared output contract, vendored from icloud-for-omarchy; `fail.rs`: error codes and exit codes; `agent_skill.rs`: installs `skills/omacloud` for coding agents; `alerts.rs`, `power.rs`). CLI tests in `tests/cli.rs` |
 | `crates/omacloud-app` | GTK4/libadwaita app; it shells out to the CLI with `--json` and reads the envelope's `data` (`status` above all) or `error.code`, so keep that output stable; `init` and `join-code` it runs on a pseudo-terminal of its own |
-| `vendor/rustic_core`, `vendor/rustic_backend`, `vendor/opendal-service-dropbox` | patched rustic_core 0.13 (pack padding, `splice_tree`), rustic_backend (S3 and Dropbox) and OpenDAL's Dropbox service (refresh without an app secret), wired in through `[patch.crates-io]`; see their `OMACLOUD.md` |
+| `vendor/rustic_core`, `vendor/rustic_backend`, `vendor/opendal-service-dropbox` | patched rustic_core 0.13 (pack padding, `splice_tree`), rustic_backend (S3 and Dropbox) and OpenDAL's Dropbox service (create-only writes, refresh without an app secret), wired in through `[patch.crates-io]`; see their `OMACLOUD.md` |
 | `server/` | Cloudflare Worker (TypeScript, `cf` CLI): omacloud.computer's public pages (home, privacy, terms, `/llms.txt`, `/install.sh`). No account depends on it. See server/README.md |
-| `scripts/` | end to end checks (`s3-sync.sh`: an account in a bucket, on `fake-s3.py`; `restic-compat.sh`: upstream restic), release scripts, and `tests/*.py` for installer and release tooling |
+| `scripts/` | end to end checks (`s3-sync.sh`: an account in a bucket, on `fake-s3.py`; `s3-choices.sh`: daemons following changing files and choices; `restic-compat.sh`: upstream restic; `dropbox-sync.sh`: a real Dropbox, which needs someone at a browser, so not in `bin/check`), release scripts, and `tests/*.py` for installer and release tooling |
 | `pkgbuild/`, `packaging/omarchy-pkgs/` | Arch PKGBUILD and the Omarchy recipe: change them together |
 | `contrib/` | systemd user unit and desktop entry |
 
@@ -51,7 +51,7 @@ stand-in S3; with `S3_*` set it proves a real provider. `scripts/restic-compat.s
   `watch` keeps its exit codes (2 stopped, 75 upgraded): the systemd unit's
   `RestartPreventExitStatus=2` depends on them.
 - Secrets never go on a command line: they come from env vars
-  (`OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE`, `OMACLOUD_SECRET_ACCESS_KEY`) or a no-echo prompt
+  (`OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE`, `OMACLOUD_SECRET_ACCESS_KEY`, `OMACLOUD_DROPBOX_REFRESH_TOKEN`, `OMACLOUD_DROPBOX_AUTH_CODE`) or a no-echo prompt
   (`read_secret` in `crates/omacloud/src/main.rs`), asked only in text mode
   with stdin and stdout on a terminal.
 - Worker code is TypeScript with tabs, run directly by node

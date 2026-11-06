@@ -21,11 +21,17 @@ libadwaita-1-dev`). After changing `server/`, run `npm run check` there
 
 ## Storage backend features
 
-Builds include one OpenDAL service, S3, for buckets; the coordinator's tests add
+Builds include two OpenDAL services, S3 for buckets and Dropbox (patched, see
+`vendor/opendal-service-dropbox/OMACLOUD.md`); the coordinator's tests add
 its filesystem service as a dev-dependency. Local repository paths (development and tests) need none. Other OpenDAL
 providers, REST and rclone are left out, to keep their protocol stacks out
 of the build; the manifest-only patch that allows it is documented in
 `vendor/rustic_backend/OMACLOUD.md`.
+
+## Dropbox in development
+
+`scripts/dropbox-sync.sh` runs an account on a real Dropbox, in a test folder of the
+app's. It needs someone at a browser to allow Omacloud, so it's not in `bin/check`.
 
 ## Buckets in development
 

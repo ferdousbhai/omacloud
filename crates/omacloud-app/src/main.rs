@@ -258,6 +258,9 @@ fn tty_then(argv: &[&str], env: Vec<(String, String)>, then: impl FnOnce(Result<
 
 struct Ui {
     window: adw::ApplicationWindow,
+    stack: adw::ViewStack,
+    /// Its tabs and sync button, which mean nothing until setup is done.
+    view: adw::ToolbarView,
     toasts: adw::ToastOverlay,
     overview: adw::Bin,
     devices: adw::Bin,
@@ -292,6 +295,11 @@ impl Ui {
         }
     }
 
+    fn show_tabs(&self, show: bool) {
+        self.view.set_reveal_top_bars(show);
+        self.view.set_reveal_bottom_bars(show);
+    }
+
     fn refresh(self: &Rc<Self>) {
         let ui = self.clone();
         cli_then(&["omacloud", "status"], Vec::new(), move |status| {
@@ -304,12 +312,15 @@ impl Ui {
                              your files here stay as they are."
                         ));
                     }
-                    ui.overview.set_child(Some(&setup(&ui)));
-                    for bin in [&ui.devices, &ui.settings, &ui.secrets, &ui.recovery] {
-                        bin.set_child(Some(&not_set_up("Set up this computer first, under Overview.")));
+                    ui.show_tabs(false);
+                    // not while someone is partway through it
+                    if !ui.overview.child().is_some_and(|c| c.is::<adw::NavigationView>()) {
+                        ui.overview.set_child(Some(&setup(&ui)));
                     }
+                    ui.stack.set_visible_child_name("overview");
                 }
                 Ok(s) => {
+                    ui.show_tabs(true);
                     ui.overview.set_child(Some(&overview(&ui, &s)));
                     ui.devices.set_child(Some(&devices(&ui, &s)));
                     ui.settings.set_child(Some(&settings(&ui, &s)));
@@ -317,6 +328,7 @@ impl Ui {
                     ui.recovery.set_child(Some(&recovery()));
                 }
                 Err(e) => {
+                    ui.show_tabs(true);
                     let why = match e.code.as_str() {
                         "unavailable" => format!("Can't reach your storage: {}", e.shown()),
                         _ => e.shown(),
@@ -420,6 +432,8 @@ fn build(app: &adw::Application, page: Option<&str>) {
     window.add_breakpoint(narrow);
     let ui = Rc::new(Ui {
         window: window.clone(),
+        stack: stack.clone(),
+        view: view.clone(),
         toasts,
         overview: overview_bin,
         devices: devices_bin,
@@ -480,15 +494,9 @@ fn not_set_up(why: &str) -> adw::StatusPage {
         .build()
 }
 
-/// A dialog that stays up while `omacloud init` runs, so the wait (the
-/// account being made) doesn't look like nothing happening. Closed by the
-/// caller when init is done.
-fn setting_up(ui: &Rc<Ui>, browser: bool) -> adw::Dialog {
-    let text = if browser {
-        "Allow Omacloud in Dropbox in your browser. Setting up can then take a minute."
-    } else {
-        "Omacloud is setting up this computer, which can take a minute."
-    };
+/// A dialog that stays up through a long command, so the wait doesn't look like
+/// nothing happening. Closed by the caller when it's done.
+fn waiting(ui: &Rc<Ui>, text: &str) -> adw::Dialog {
     let body = gtk::Box::new(gtk::Orientation::Vertical, 18);
     body.set_margin_top(12);
     body.set_margin_bottom(24);
@@ -513,7 +521,7 @@ fn setting_up(ui: &Rc<Ui>, browser: bool) -> adw::Dialog {
     view.add_top_bar(&adw::HeaderBar::builder().show_end_title_buttons(false).build());
     view.set_content(Some(&body));
     let dialog = adw::Dialog::builder()
-        .title("Setting Up")
+        .title("One Moment")
         .can_close(false)
         .child(&view)
         .build();
@@ -523,12 +531,12 @@ fn setting_up(ui: &Rc<Ui>, browser: bool) -> adw::Dialog {
 
 /// Run `omacloud init` with `args` (and secrets in `env`, never on the
 /// command line), then show what came of it.
-fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>) {
+fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>, wait: &str) {
     let mut argv = vec!["omacloud".to_string(), "init".to_string()];
     argv.extend(args);
     let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
     let ui2 = ui.clone();
-    let busy = setting_up(ui, argv.iter().any(|a| a == "dropbox"));
+    let busy = waiting(ui, wait);
     // creating an account prints its recovery code: only to a terminal
     tty_then(&argv_ref, env, move |r| match r {
         Err(e) => {
@@ -636,39 +644,104 @@ fn provider_at(i: u32) -> (&'static str, &'static str, &'static str, &'static st
     PROVIDERS[usize::try_from(i).unwrap_or(0).min(PROVIDERS.len() - 1)]
 }
 
-/// First run: start an account, or add this computer to one.
-fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
+const SETTING_UP: &str = "Omacloud is setting up this computer, which can take a minute.";
+
+/// First run, one question at a time: what most people need comes first, and
+/// the details of buckets and codes only for those who choose them.
+fn setup(ui: &Rc<Ui>) -> adw::NavigationView {
+    let nav = adw::NavigationView::new();
+    let first = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    first.set_halign(gtk::Align::Center);
+    let choice = |label: &str, class: Option<&str>, page: fn(&Rc<Ui>) -> adw::NavigationPage| {
+        let b = button(label, class);
+        b.add_css_class("pill");
+        let (ui, nav) = (ui.clone(), nav.clone());
+        b.connect_clicked(move |_| nav.push(&page(&ui)));
+        first.append(&b);
+    };
+    choice("Set Up With Dropbox", Some("suggested-action"), dropbox_step);
+    choice("I Already Use Omacloud", None, join_step);
+    choice("Use My Own Storage", Some("flat"), bucket_step);
+    let welcome = adw::StatusPage::builder()
+        .icon_name("folder-remote-symbolic")
+        .title("Your files on all your computers")
+        .description(
+            "Omacloud keeps your files and Omarchy settings the same on every computer. They're \
+             encrypted here before they leave, so only your computers can read them.",
+        )
+        .child(&first)
+        .build();
+    nav.add(&step("Omacloud", &welcome, None));
+    nav
+}
+
+/// A page of setup, with its own way back, and its action always in view.
+fn step(title: &str, content: &impl IsA<gtk::Widget>, action: Option<&gtk::Button>) -> adw::NavigationPage {
+    let view = adw::ToolbarView::new();
+    let header = adw::HeaderBar::new();
+    if let Some(action) = action {
+        header.pack_end(action);
+    }
+    view.add_top_bar(&header);
+    view.set_content(Some(content));
+    adw::NavigationPage::new(&view, title)
+}
+
+/// For someone who lost every computer: out of the way of everyone else.
+fn recovery_group() -> (adw::PreferencesGroup, adw::PasswordEntryRow) {
+    let g = group("", "");
+    let more = adw::ExpanderRow::builder().title("Lost every computer?").build();
+    let code = adw::PasswordEntryRow::builder().title("Recovery code").build();
+    more.add_row(&code);
+    g.add(&more);
+    (g, code)
+}
+
+/// The recovery code typed in, if any; `None` if it can't be one.
+fn recovery_env(ui: &Rc<Ui>, row: &adw::PasswordEntryRow) -> Option<Vec<(String, String)>> {
+    let typed = row.text().to_string();
+    match typed.chars().filter(char::is_ascii_alphanumeric).count() {
+        0 => Some(Vec::new()),
+        28 => Some(vec![("OMACLOUD_RECOVERY_CODE".to_string(), typed)]),
+        _ => {
+            ui.toast("That's not a recovery code (28 characters)");
+            None
+        }
+    }
+}
+
+fn dropbox_step(ui: &Rc<Ui>) -> adw::NavigationPage {
     let page = adw::PreferencesPage::new();
     let (what, sync_args) = choose_what_syncs();
     page.add(&what);
+    let (rescue_group, rescue) = recovery_group();
+    page.add(&rescue_group);
+    let connect = button("Continue", Some("suggested-action"));
+    let ui = ui.clone();
+    connect.connect_clicked(move |_| {
+        let Some(env) = recovery_env(&ui, &rescue) else {
+            return;
+        };
+        let mut args = vec!["--provider".to_string(), "dropbox".to_string()];
+        args.extend(sync_args());
+        run_init(
+            &ui,
+            args,
+            env,
+            "Allow Omacloud in Dropbox in your browser. Setting up can then take a minute.",
+        );
+    });
+    step("What to Sync", &page, Some(&connect))
+}
 
-    // Dropbox first: nothing to make or paste
-    let dropbox = group(
-        "Use your Dropbox",
-        "The simplest start: Dropbox asks you to allow Omacloud in your browser, and your files \
-         go in its Apps/Omacloud folder. Everything is encrypted on this computer before it leaves, \
-         so Dropbox can't read it.",
-    );
-    let connect = button("Connect Dropbox", Some("suggested-action"));
-    connect.set_halign(gtk::Align::End);
-    connect.set_margin_top(12);
-    {
-        let (ui, sync_args) = (ui.clone(), sync_args.clone());
-        connect.connect_clicked(move |_| {
-            let mut args = vec!["--provider".to_string(), "dropbox".to_string()];
-            args.extend(sync_args());
-            run_init(&ui, args, vec![]);
-        });
-    }
-    dropbox.add(&connect);
-    page.add(&dropbox);
-
-    // create: in a bucket of the user's own
+fn bucket_step(ui: &Rc<Ui>) -> adw::NavigationPage {
+    let page = adw::PreferencesPage::new();
+    let (what, sync_args) = choose_what_syncs();
     let create = group(
-        "Or use a bucket of your own",
-        "Make a private bucket and a key that reaches it at your provider, then give them here. \
-         Everything is encrypted on this computer before it leaves, so your provider can't read it.",
+        "Your bucket",
+        "Make a private bucket and a key that reaches it at your provider, then give them here.",
     );
+    let (rescue_group, rescue) = recovery_group();
     let provider = adw::ComboRow::builder()
         .title("Provider")
         .model(&gtk::StringList::new(&PROVIDERS.map(|p| p.0)))
@@ -689,16 +762,9 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
     create.add(&key_id);
     let secret = adw::PasswordEntryRow::builder().title("Secret access key").build();
     create.add(&secret);
-    // no computer left to approve this one: the recovery code lets it in
-    let rescue = adw::PasswordEntryRow::builder()
-        .title("Lost every computer? Recovery code (optional)")
-        .build();
-    create.add(&rescue);
-    let create_button = button("Create Account", None);
-    create_button.set_halign(gtk::Align::End);
-    create_button.set_margin_top(12);
+    let create_button = button("Create Account", Some("suggested-action"));
     {
-        let (ui, sync_args) = (ui.clone(), sync_args.clone());
+        let ui = ui.clone();
         create_button.connect_clicked(move |_| {
             let (place, bucket, key_id) = (
                 place.text().trim().to_string(),
@@ -724,59 +790,51 @@ fn setup(ui: &Rc<Ui>) -> adw::PreferencesPage {
             .to_vec();
             args.extend(sync_args());
             let mut env = vec![("OMACLOUD_SECRET_ACCESS_KEY".to_string(), secret.text().to_string())];
-            let typed = rescue.text().to_string();
-            match typed.chars().filter(char::is_ascii_alphanumeric).count() {
-                0 => {}
-                28 => env.push(("OMACLOUD_RECOVERY_CODE".to_string(), typed)),
-                _ => {
-                    ui.toast("That's not a recovery code (28 characters)");
-                    return;
-                }
-            }
-            run_init(&ui, args, env);
+            let Some(rescue) = recovery_env(&ui, &rescue) else {
+                return;
+            };
+            env.extend(rescue);
+            run_init(&ui, args, env, SETTING_UP);
         });
     }
-    create.add(&create_button);
     page.add(&create);
+    page.add(&what);
+    page.add(&rescue_group);
+    step("Your Own Storage", &page, Some(&create_button))
+}
 
-    // join
+fn join_step(ui: &Rc<Ui>) -> adw::NavigationPage {
+    let page = adw::PreferencesPage::new();
+    let (what, sync_args) = choose_what_syncs();
     let join = group(
-        "Or use a code",
-        "Already use Omacloud on another computer? On that computer, open Omacloud, go to \
-         Devices and click Show Join Code, then paste the code here. That computer approves \
-         this one, or your recovery code lets it in right away. Someone who made you a bucket \
-         gave you an invite instead: paste that, and you get an account of your own.",
+        "Your code",
+        "On your other computer, open Omacloud, go to Devices and click Show Join Code, then \
+         paste it here. That computer then approves this one. If someone gave you an invite, \
+         paste that instead, and you get an account of your own.",
     );
     let jcode = adw::PasswordEntryRow::builder().title("Join code").build();
-    let code = adw::PasswordEntryRow::builder()
-        .title("Recovery code (optional)")
-        .build();
+    let (rescue_group, code) = recovery_group();
     join.add(&jcode);
-    join.add(&code);
-    let join_button = button("Add This Computer", None);
-    join_button.set_halign(gtk::Align::End);
-    join_button.set_margin_top(12);
+    let join_button = button("Add This Computer", Some("suggested-action"));
     {
         let ui = ui.clone();
         join_button.connect_clicked(move |_| {
-            let (j, c) = (jcode.text().trim().to_string(), code.text().to_string());
-            let mut env = Vec::new();
-            if !j.is_empty() {
-                env.push(("OMACLOUD_JOIN_CODE".to_string(), j));
-            }
-            if !c.is_empty() {
-                env.push(("OMACLOUD_RECOVERY_CODE".to_string(), c));
-            }
-            if env.first().is_none_or(|(k, _)| k != "OMACLOUD_JOIN_CODE") {
+            let j = jcode.text().trim().to_string();
+            if j.is_empty() {
                 ui.toast("Paste the join code or invite");
                 return;
             }
-            run_init(&ui, sync_args(), env);
+            let Some(mut env) = recovery_env(&ui, &code) else {
+                return;
+            };
+            env.push(("OMACLOUD_JOIN_CODE".to_string(), j));
+            run_init(&ui, sync_args(), env, SETTING_UP);
         });
     }
-    join.add(&join_button);
     page.add(&join);
-    page
+    page.add(&what);
+    page.add(&rescue_group);
+    step("Add This Computer", &page, Some(&join_button))
 }
 
 /// A button that opens `path` in the file manager.
@@ -801,7 +859,7 @@ fn open_button(window: &adw::ApplicationWindow, path: String) -> gtk::Button {
 fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();
 
-    let sync = group("Sync", "");
+    let sync = group("", "");
     let search = row(
         "Find files by meaning",
         "Optional Recall · searches folders selected in Recall settings",
@@ -818,7 +876,6 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         });
     });
     search.add_suffix(&launch);
-    sync.add(&search);
     let folders = &s["folders"];
     let mut folders_group = None;
     let mut folder_group_row = None;
@@ -831,17 +888,37 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         folder_group_row = Some(folder_row);
     }
     let daemon = s["daemon"].as_bool().unwrap_or(false);
-    let synced = s["synced_at"]
-        .as_u64()
-        .map_or_else(|| "Not synced yet".to_string(), |t| format!("Synced {}", ago(t)));
+    let synced_at = s["synced_at"].as_u64();
+    let synced = synced_at.map_or_else(|| "Not synced yet".to_string(), |t| format!("Synced {}", ago(t)));
+    let repo = &s["repo"];
+    let place = match repo["kind"].as_str() {
+        Some("bucket") => format!("{} at {}", text(&repo["bucket"]), text(&repo["endpoint"])),
+        Some("dropbox") => "your Dropbox".to_string(),
+        Some("path") => short_path(&text(&repo["repository"])),
+        _ => text(&repo["repository"]),
+    };
+    // a daemon syncs at least every ten minutes: much longer, and something's wrong
+    let fresh = synced_at.is_some_and(|t| secs_since(t) < 3600);
+    let (state, icon) = if !daemon {
+        ("Not syncing", Some("dialog-warning-symbolic"))
+    } else if fresh {
+        ("Up to date", Some("object-select-symbolic"))
+    } else if synced_at.is_some() {
+        ("Not synced lately", Some("dialog-warning-symbolic"))
+    } else {
+        ("Syncing…", None)
+    };
     let status = row(
-        &synced,
-        if daemon {
-            "Changes sync as they happen"
+        state,
+        &if daemon {
+            format!("{synced} · in {}", place.trim())
         } else {
-            "Background sync is off: nothing syncs until it starts"
+            "Nothing syncs until background sync starts".to_string()
         },
     );
+    if let Some(icon) = icon {
+        status.add_prefix(&gtk::Image::from_icon_name(icon));
+    }
     if !daemon {
         let start = button("Start", Some("suggested-action"));
         let ui2 = ui.clone();
@@ -862,32 +939,25 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     let ui2 = ui.clone();
     browse.connect_clicked(move |_| browse_online(&ui2));
     online.add_suffix(&browse);
-    sync.add(&online);
     let deleted = row("Recently Deleted", "Files deleted in the last 30 days, to put back");
     let show = button("Show…", None);
     let ui2 = ui.clone();
     show.connect_clicked(move |_| show_deleted(&ui2));
     deleted.add_suffix(&show);
-    sync.add(&deleted);
     page.add(&sync);
     if let Some(g) = folders_group {
         page.add(&g);
     }
-
-    let storage = group("Storage", "");
-    let repo = &s["repo"];
-    let place = match repo["kind"].as_str() {
-        Some("bucket") => format!("{} at {}", text(&repo["bucket"]), text(&repo["endpoint"])),
-        Some("dropbox") => "Your Dropbox, its Apps/Omacloud folder".to_string(),
-        Some("path") => short_path(&text(&repo["repository"])),
-        _ => text(&repo["repository"]),
-    };
-    storage.add(&row("Where", place.trim()));
-    page.add(&storage);
+    let files = group("Your files", "");
+    files.add(&online);
+    files.add(&deleted);
+    files.add(&search);
+    page.add(&files);
 
     // for support and the curious
     let details = adw::ExpanderRow::builder().title("Details").build();
     for (title, value) in [
+        ("Stored in", place.trim().to_string()),
         ("Account", text(&s["account_fingerprint"])),
         ("Account id", text(&s["account"])),
         (
@@ -1025,12 +1095,16 @@ fn show_deleted(ui: &Rc<Ui>) {
     });
 }
 
+fn secs_since(t: u64) -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+        .saturating_sub(t)
+}
+
 /// "2 minutes ago", for a time in seconds since the epoch.
 fn ago(t: u64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let s = now.saturating_sub(t);
+    let s = secs_since(t);
     let n = |v: u64, unit: &str| format!("{v} {unit}{} ago", if v == 1 { "" } else { "s" });
     match s {
         0..60 => "just now".to_string(),
@@ -1208,12 +1282,8 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
 /// The setup page's choice of what syncs, as iCloud asks on a new Mac:
 /// switches for the usual folders and Omarchy settings, with their sizes.
 /// Returns the group and what to add to `omacloud init`.
-fn choose_what_syncs() -> (adw::PreferencesGroup, Rc<dyn Fn() -> Vec<String>>) {
-    let g = group(
-        "What to sync",
-        "Change any of these later on Overview. Anything named like name.nosync stays on \
-         this computer only.",
-    );
+fn choose_what_syncs() -> (adw::PreferencesGroup, impl Fn() -> Vec<String>) {
+    let g = group("What to sync", "You can change these any time.");
     let home = std::env::var("HOME").unwrap_or_default();
     // where this computer keeps each (a German one's Documents is Dokumente)
     // None when this computer points the folder at home itself, as Omarchy
@@ -1269,7 +1339,7 @@ fn choose_what_syncs() -> (adw::PreferencesGroup, Rc<dyn Fn() -> Vec<String>>) {
         }
         args
     };
-    (g, Rc::new(args))
+    (g, args)
 }
 
 fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
@@ -1321,6 +1391,7 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         add.connect_clicked(move |_| show_join_code(&ui2));
         g.set_header_suffix(Some(&add));
     }
+    let on_dropbox = s["repo"]["kind"] == "dropbox";
     for d in list("devices") {
         let (name, fp) = (text(&d["name"]), text(&d["fingerprint"]));
         let rw = row(&name, &fp);
@@ -1336,18 +1407,19 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
                 let fp2 = fp.clone();
                 ui2.confirm(
                     &format!("Remove {name}?"),
-                    "It can't sync anymore. It still holds the key to what it has already seen; \
-                     changing the key locks it out of that too, but uploads everything again.",
+                    "It stops syncing, and its files stay on it. If it's lost or stolen, or someone \
+                     else has it, Omacloud also changes your keys so it can't reach anything new. \
+                     That uploads everything again, so it can take a while.",
                     &[
-                        ("remove", "Remove", adw::ResponseAppearance::Destructive),
-                        ("rotate", "Remove and Change Key", adw::ResponseAppearance::Destructive),
+                        ("remove", "Remove", adw::ResponseAppearance::Default),
+                        ("lost", "It's Lost or Stolen", adw::ResponseAppearance::Destructive),
                     ],
                     move |id| {
-                        let mut argv = vec!["omacloud", "devices", "revoke", fp2.as_str(), "--yes"];
-                        if id == "rotate" {
-                            argv.push("--rotate");
+                        if id == "lost" {
+                            cut_off(&ui3, &fp2, on_dropbox);
+                        } else {
+                            ui3.act(&["omacloud", "devices", "revoke", fp2.as_str(), "--yes"], "Removed");
                         }
-                        ui3.act(&argv, "Removed");
                     },
                 );
             });
@@ -1366,6 +1438,33 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         page.add(&g);
     }
     page
+}
+
+/// A computer lost or stolen: removed, and cut off as far as the storage allows.
+fn cut_off(ui: &Rc<Ui>, fingerprint: &str, on_dropbox: bool) {
+    let (wait, done) = if on_dropbox {
+        (
+            "Changing your keys, which uploads everything again. Dropbox then asks you in your browser to \
+             allow Omacloud once more.",
+            "Removed. It's cut off once your other computers have switched",
+        )
+    } else {
+        (
+            "Changing your keys, which uploads everything again.",
+            "Removed. Now make a new key at your provider, and run omacloud bucket set-key",
+        )
+    };
+    let busy = waiting(ui, wait);
+    let ui = ui.clone();
+    cli_then(
+        &["omacloud", "devices", "revoke", fingerprint, "--yes", "--lost"],
+        Vec::new(),
+        move |removed| {
+            busy.force_close();
+            ui.toast(&removed.map_or_else(|e| e.shown(), |_| done.to_string()));
+            ui.refresh();
+        },
+    );
 }
 
 /// A join code for adding another computer to this account.

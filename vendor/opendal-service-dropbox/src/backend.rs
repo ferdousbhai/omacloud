@@ -161,6 +161,8 @@ impl Builder for DropboxBuilder {
                     read_with_suffix: true,
 
                     write: true,
+                    // Omacloud: create-only writes, through Dropbox's add mode
+                    write_with_if_not_exists: true,
 
                     create_dir: true,
 

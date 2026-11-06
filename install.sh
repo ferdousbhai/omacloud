@@ -188,7 +188,7 @@ fi
 cat <<EOT
 
 Done. Set up this computer with "Omacloud" in the app launcher (Super +
-Space), or in a terminal (you'll need a storage bucket of your own):
+Space), or in a terminal (you'll need your own Dropbox or storage bucket):
 omacloud init --help
 Updates arrive with the rest of the system through:
 omarchy update

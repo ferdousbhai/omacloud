@@ -6,7 +6,7 @@ charges nothing. Each person needs a Dropbox, or a bucket and key, of their own.
 
 ## Dropbox
 
-The simplest start: `omacloud init --provider dropbox` (or Connect Dropbox in the
+The simplest start: `omacloud init --provider dropbox` (or Set Up With Dropbox in the
 app), then allow Omacloud in your browser. There's nothing to make or paste. Omacloud
 reaches only its `Apps/Omacloud` folder, and everything there is encrypted before it
 leaves, so Dropbox can't read it.
@@ -17,8 +17,11 @@ than on a bucket; 300 small files took about 20 seconds up and 30 down. Space is
 Dropbox plan's. If the Dropbox desktop app runs on the computer, exclude
 `Apps/Omacloud` from it, or it downloads the encrypted copy too.
 
-After a computer is lost, `omacloud bucket set-key` asks you to allow Omacloud again.
-Once every other computer has switched, the old token is revoked by itself.
+After a computer is lost, `omacloud devices revoke <fingerprint> --lost` moves to a new
+encryption key and asks you to allow Omacloud again. Once every other computer has
+switched, the old token is revoked by itself. A computer with the token could delete
+what's in the folder until then, and there's no lock to set here: Dropbox's deleted-files
+recovery is what's left, for as long as your plan keeps them.
 
 Leaving: `omacloud export --to <folder>` copies everything here for plain restic to
 read; `omacloud export` prints the command for restic through rclone.

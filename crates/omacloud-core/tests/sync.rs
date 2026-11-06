@@ -1182,6 +1182,42 @@ fn settings_back_on_lose_nothing() -> Result<()> {
     Ok(())
 }
 
+/// One group of several left out coming back overwrites nothing either.
+#[test]
+fn a_settings_group_back_among_others_loses_nothing() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ha, hb) = (w.home("a"), w.home("b"));
+    let bindings = ".config/hypr/bindings.lua";
+    write(&ha, bindings, "one\n");
+    write(&ha, ".bashrc", "one\n");
+    let m = "shared .config/hypr/bindings.lua\nshared .bashrc\n";
+    let (mut a, mut b) = (w.engine_with_manifest("a", m)?, w.engine_with_manifest("b", m)?);
+    a.sync()?;
+    b.sync()?;
+    let skipping = |groups: &[&str]| -> Result<omacloud_core::settings::Manifest> {
+        let groups: std::collections::BTreeSet<String> = groups.iter().map(ToString::to_string).collect();
+        Ok(omacloud_core::settings::Manifest::parse(m)?.skipping(&groups))
+    };
+    drop(a);
+    let mut a = w.engine_with_parsed("a", skipping(&["apps", "shell"])?)?;
+    a.sync()?;
+    write(&ha, bindings, "a's\n");
+    write(&hb, bindings, "b's\n");
+    b.notice([hb.join(bindings)]);
+    b.sync()?;
+    a.sync()?;
+
+    // apps comes back, shell stays out: each keeps its own until someone chooses
+    drop(a);
+    let mut a = w.engine_with_parsed("a", skipping(&["shell"])?)?;
+    a.sync()?;
+    b.sync()?;
+    assert_eq!(fs::read_to_string(ha.join(bindings))?, "a's\n");
+    assert_eq!(fs::read_to_string(hb.join(bindings))?, "b's\n");
+    assert_eq!(a.settings_status().held, [PathBuf::from(bindings)]);
+    Ok(())
+}
+
 /// Two computers set up on their own, whose settings already differ when they
 /// first meet: no earlier version to merge from, and nothing may be lost.
 #[test]
@@ -1407,8 +1443,6 @@ fn chosen_home_folders_sync_in_place() -> Result<()> {
     Ok(())
 }
 
-/// A folder is matched by what it is, not what it's called: a German
-/// machine's `Dokumente` is the English machine's `Documents`.
 /// A folder switched off and back on overwrites nothing: what changed anywhere
 /// while it was away comes through, and two versions of a file are both kept.
 #[test]
@@ -1613,6 +1647,8 @@ fn a_folder_removed_from_the_cloud_stays_on_every_computer() -> Result<()> {
     Ok(())
 }
 
+/// A folder is matched by what it is, not what it's called: a German
+/// machine's `Dokumente` is the English machine's `Documents`.
 #[test]
 fn folders_match_across_languages() -> Result<()> {
     let w = World::new(&["de", "en"])?;

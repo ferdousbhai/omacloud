@@ -561,11 +561,12 @@ fn versions_find_a_folder_another_computer_added() {
     // a subfolder, by the account's name for its folder, with sizes to choose by
     let list = json(&h.run("b", &["folders", "exclude", "Bilder/trip"]));
     assert_eq!(list["data"]["excluded"][0]["path"], "Pictures/trip", "{list}");
-    assert!(list["data"]["synced"][0]["size"].is_u64(), "{list}");
     machine_error(&h.run("b", &["folders", "exclude", "Pictures"]), "usage", 2);
     machine_error(&h.run("b", &["folders", "exclude", "Pictures/../secret"]), "usage", 2);
     let list = json(&h.run("b", &["folders", "include", "Pictures/trip"]));
     assert_eq!(list["data"]["excluded"], serde_json::json!([]), "{list}");
+    let list = json(&h.run("b", &["folders", "list"]));
+    assert!(list["data"]["synced"][0]["size"].is_u64(), "{list}");
 
     // removing asks first, which a script can't answer
     assert_ne!(code(&h.run("b", &["folders", "remove", "Pictures"])), 0);
@@ -641,7 +642,7 @@ fn a_computer_set_up_on_storage_thats_gone_is_told_and_set_up_again() {
     .unwrap();
     let v = json(&h.run("a", &["status"]));
     assert_eq!(v["data"]["set_up"], false, "{v}");
-    assert_eq!(v["data"]["storage_gone"], "Dropbox");
+    assert_eq!(v["data"]["storage_gone"], "the earlier Dropbox app");
     let e = machine_error(&h.run("a", &["sync"]), "storage_gone", 3);
     assert!(e["hint"].as_str().unwrap().contains("omacloud init"), "{e}");
     // the daemon stops for good rather than restarting into it

@@ -34,12 +34,10 @@ struct Token {
     refresh_token: Option<String>,
 }
 
-fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .http_status_as_error(false)
-        .timeout_global(Some(Duration::from_secs(60)))
-        .build()
-        .into()
+fn agent() -> Result<reqwest::blocking::Client> {
+    Ok(reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()?)
 }
 
 fn random_url_safe(bytes: usize) -> String {
@@ -90,9 +88,9 @@ fn reply(mut stream: &TcpStream, status: &str, title: &str, text: &str) {
     );
 }
 
-fn authorize_url(client_id: &str, extra: &str) -> String {
+fn authorize_url(extra: &str) -> String {
     format!(
-        "https://www.dropbox.com/oauth2/authorize?client_id={client_id}&response_type=code&token_access_type=offline{extra}"
+        "https://www.dropbox.com/oauth2/authorize?client_id={APP_KEY}&response_type=code&token_access_type=offline{extra}"
     )
 }
 
@@ -102,15 +100,19 @@ fn on_desktop() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some()
 }
 
+/// PKCE's S256 challenge for a verifier.
+fn challenge(verifier: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+}
+
 /// Authorize Omacloud's app and get an offline refresh token.
-pub fn authorize(ask_code: impl FnOnce() -> Result<String>) -> Result<String> {
+pub fn authorize() -> Result<String> {
     // one already allowed, for setting up where nobody is at a browser
     if let Ok(token) = std::env::var("OMACLOUD_DROPBOX_REFRESH_TOKEN") {
         return Ok(token);
     }
-    let client_id = APP_KEY;
     let verifier = random_url_safe(48);
-    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+    let challenge = challenge(&verifier);
     let pkce = format!("&code_challenge={challenge}&code_challenge_method=S256");
     let listener = on_desktop()
         .then(|| TcpListener::bind(("127.0.0.1", REDIRECT_PORT)).ok())
@@ -118,25 +120,22 @@ pub fn authorize(ask_code: impl FnOnce() -> Result<String>) -> Result<String> {
     let Some(listener) = listener else {
         eprintln!(
             "Open this Dropbox authorization URL, allow Omacloud, and paste the code it shows:\n\n  {}\n",
-            authorize_url(client_id, &pkce)
+            authorize_url(&pkce)
         );
-        let code = ask_code()?;
-        return exchange(client_id, &[("code", &code), ("code_verifier", &verifier)]);
+        let code = crate::read_secret("OMACLOUD_DROPBOX_AUTH_CODE", "Dropbox authorization code")?;
+        return exchange(&[("code", &code), ("code_verifier", &verifier)]);
     };
     let redirect = format!("http://127.0.0.1:{REDIRECT_PORT}{REDIRECT_PATH}");
     let state = random_url_safe(16);
-    let url = authorize_url(client_id, &format!("{pkce}&redirect_uri={redirect}&state={state}"));
+    let url = authorize_url(&format!("{pkce}&redirect_uri={redirect}&state={state}"));
     eprintln!("Allow Omacloud in Dropbox in your browser. If it didn't open, go to:\n\n  {url}\n");
     open_browser(&url);
     let code = wait_for_code(&listener, &state)?;
-    exchange(
-        client_id,
-        &[
-            ("code", &code),
-            ("code_verifier", &verifier),
-            ("redirect_uri", &redirect),
-        ],
-    )
+    exchange(&[
+        ("code", &code),
+        ("code_verifier", &verifier),
+        ("redirect_uri", &redirect),
+    ])
 }
 
 /// The code Dropbox sends the browser back with.
@@ -194,24 +193,22 @@ fn wait_for_code(listener: &TcpListener, state: &str) -> Result<String> {
     }
 }
 
-/// Trade an authorization code for an offline refresh token.
-fn exchange(client_id: &str, fields: &[(&str, &str)]) -> Result<String> {
-    let mut form = vec![("grant_type", "authorization_code"), ("client_id", client_id)];
-    form.extend_from_slice(fields);
-    // a code turned down as too fast wasn't used: it can go again, and asking
-    // the person to allow Omacloud again is the worse way to wait
-    let agent = agent();
+/// A request to Dropbox's token service. One turned down as too fast wasn't
+/// used, so it can go again, and asking someone to allow Omacloud again is the
+/// worse way to wait.
+fn token_request(form: &[(&str, &str)]) -> Result<reqwest::blocking::Response> {
+    let agent = agent()?;
     let mut pause = Duration::from_secs(1);
-    let mut response = loop {
+    loop {
         let response = agent
             .post("https://api.dropboxapi.com/oauth2/token")
-            .send_form(form.iter().copied())
-            .context("exchanging the Dropbox authorization code")?;
+            .form(form)
+            .send()
+            .context("asking Dropbox's token service")?;
         let status = response.status().as_u16();
         if status != 429 && status < 500 {
-            break response;
+            return Ok(response);
         }
-        log::info!("Dropbox answered {status} to the authorization code; trying again");
         if pause > Duration::from_secs(30) {
             return Err(fail::unavailable(format!("Dropbox answered {status}"))
                 .hint("try again in a minute")
@@ -226,11 +223,18 @@ fn exchange(client_id: &str, fields: &[(&str, &str)]) -> Result<String> {
             .unwrap_or_default();
         std::thread::sleep(asked.max(pause));
         pause *= 2;
-    };
+    }
+}
+
+/// Trade an authorization code for an offline refresh token.
+fn exchange(fields: &[(&str, &str)]) -> Result<String> {
+    let mut form = vec![("grant_type", "authorization_code"), ("client_id", APP_KEY)];
+    form.extend_from_slice(fields);
+    let response = token_request(&form)?;
     let status = response.status().as_u16();
     if !response.status().is_success() {
         // what Dropbox says about a refused code: it never repeats the code
-        let why = response.body_mut().read_to_string().unwrap_or_default();
+        let why = response.text().unwrap_or_default();
         return Err(fail::setup(
             "dropbox_code_rejected",
             format!("Dropbox refused the authorization code ({status}): {why}"),
@@ -238,34 +242,34 @@ fn exchange(client_id: &str, fields: &[(&str, &str)]) -> Result<String> {
         .hint("authorize again for a new code")
         .into());
     }
-    let token: Token = response.body_mut().read_json().context("Dropbox token response")?;
+    let token: Token = serde_json::from_str(&response.text()?).context("Dropbox token response")?;
     token.refresh_token.context("Dropbox returned no offline refresh token")
 }
 
 /// Revoke an old authorization after every remaining computer has switched.
 pub fn revoke(refresh_token: &str) -> Result<()> {
-    let agent = agent();
     // Dropbox refuses an empty secret: a public app sends none
-    let form = [
+    let token = token_request(&[
         ("grant_type", "refresh_token"),
         ("refresh_token", refresh_token),
         ("client_id", APP_KEY),
-    ];
-    let mut token = agent
-        .post("https://api.dropboxapi.com/oauth2/token")
-        .send_form(form)
-        .context("refreshing the old Dropbox token for revocation")?;
+    ])?;
+    // refused: it's revoked already
+    if matches!(token.status().as_u16(), 400 | 401) {
+        return Ok(());
+    }
     ensure!(
         token.status().is_success(),
         "the old Dropbox token could not be refreshed ({})",
         token.status()
     );
-    let access: Token = token.body_mut().read_json()?;
-    let response = agent
+    let access: Token = serde_json::from_str(&token.text()?)?;
+    let response = agent()?
         .post("https://api.dropboxapi.com/2/auth/token/revoke")
-        .header("authorization", &format!("Bearer {}", access.access_token))
+        .bearer_auth(&access.access_token)
         .header("content-type", "application/json")
-        .send("null")
+        .body("null")
+        .send()
         .context("revoking the old Dropbox token")?;
     ensure!(
         response.status().is_success(),
@@ -283,10 +287,7 @@ mod tests {
     fn the_challenge_is_s256_of_the_verifier() {
         // RFC 7636, appendix B
         let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
-        assert_eq!(
-            URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes())),
-            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
-        );
+        assert_eq!(challenge(verifier), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
         // 48 bytes: 64 characters, within PKCE's 43 to 128
         assert_eq!(random_url_safe(48).len(), 64);
     }

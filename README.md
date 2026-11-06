@@ -11,11 +11,11 @@ only ever holds what it can't read. Underneath it's plain restic, so you can
 always restore without Omacloud. [docs/design.md](docs/design.md) explains
 how it protects your data.
 
-Storage is an S3 bucket of your own: Cloudflare R2, Hetzner or any other
-provider with create-only writes ([docs/providers.md](docs/providers.md)).
+Storage is your own: your Dropbox, or an S3 bucket at Cloudflare R2, Hetzner or any
+other provider with create-only writes ([docs/providers.md](docs/providers.md)).
 You pay your provider, if anything; Omacloud runs no storage and charges
-nothing. Your family and friends each get a bucket and an account of their
-own, which you can set up for them ([below](#family-and-friends)).
+nothing. Your family and friends each get an account of their own, in their own
+Dropbox or a bucket you set up for them ([below](#family-and-friends)).
 
 ## Install
 
@@ -59,8 +59,8 @@ new versions until you install the signed repository.
 
 ## Set up
 
-The simplest way is your own Dropbox: on the first computer, click Connect
-Dropbox in the Omacloud app, or run this and allow Omacloud in your browser:
+The simplest way is your own Dropbox: on the first computer, click Set Up
+With Dropbox in the Omacloud app, or run this and allow Omacloud in your browser:
 
 ```sh
 omacloud init --provider dropbox
@@ -83,8 +83,8 @@ no other is at hand and recover everything; without it and without a
 computer, nobody can.
 
 To add another computer, run `omacloud join-code` on one that's set up (or
-the app) and give the code to the new one privately: it holds your
-bucket's key, though it can't open your files. On the new computer,
+the app) and give the code to the new one privately: it holds the
+key to your storage, though it can't open your files. On the new computer,
 with the code in `OMACLOUD_JOIN_CODE` (or in the app):
 
 ```sh
@@ -94,7 +94,7 @@ omacloud devices approve <fingerprint> # on a computer already in, after compari
 ```
 
 With no other computer at hand, the recovery code gets a computer in without
-approval: `omacloud init` with your bucket's details as above and the code in
+approval: `omacloud init` with `--provider` and the rest as above, and the code in
 `OMACLOUD_RECOVERY_CODE`.
 
 Secrets never go on the command line: the recovery code, the join code and
@@ -108,10 +108,11 @@ directories you share yourself, for development.
 
 ## Family and friends
 
-Each person gets an account of their own, in a bucket of their own, and
-you can do the setting up. Sharing one account wouldn't do: every computer
-of an account reads all its files and Wi-Fi keys. Separate buckets and keys
-also mean a computer that's lost or infected can't reach anyone else's backups.
+Each person gets an account of their own. On Dropbox they run `omacloud init --provider
+dropbox` on their computer and sign in to their own Dropbox, with no invite needed. With
+buckets, each has a bucket of their own, and you can do the setting up. Sharing one
+account wouldn't do: every computer of an account reads all its files and Wi-Fi keys.
+Separate storage also means a computer that's lost or infected can't reach anyone else's backups.
 
 1. At your provider, make a bucket for them and a key limited to it.
 2. Run `omacloud invite` with that bucket, as for `init` above. It checks the
@@ -227,27 +228,27 @@ version to restore, and the app's Recently Deleted, under Overview, puts
 one back where it was.
 
 Leaving needs nothing from Omacloud: `omacloud export` prints the command that
-has plain restic or rustic restore everything from your bucket, with its key
-and the repository's password, and `omacloud export --to <folder>` copies the
+has plain restic or rustic restore everything from your storage, with the
+repository's password (and the bucket's key; Dropbox goes through rclone), and `omacloud export --to <folder>` copies the
 repository to a folder first.
 
 ## A lost computer
 
-Remove it under Devices (or `omacloud devices revoke <fingerprint>`, which
-asks first; `--yes` where nobody can be asked). It can't sync anymore, but
-it still holds your bucket's key and the repository key it had:
+Remove it under Devices and choose It's Lost or Stolen (or `omacloud devices revoke
+<fingerprint> --lost`, which asks first; `--yes` where nobody can be asked). It can't
+sync anymore, and everything moves to a new encryption key only the remaining computers
+get. On Dropbox that's all: Dropbox asks you to allow Omacloud again, and the old token
+is revoked by itself once your other computers have switched.
 
-1. `omacloud rotate --yes` (or `devices revoke --rotate`) moves everything to a
-   new encryption key that only the remaining computers get, so it can't read
-   anything written after.
-2. Make a new key at your provider, and run `omacloud bucket set-key
+A bucket's key takes two more steps, as the removed computer still holds it:
+
+1. Make a new key at your provider, and run `omacloud bucket set-key
    --access-key-id <id>`. It reaches the other computers sealed to them.
-3. When `omacloud bucket status` says every computer switched, delete the old
+2. When `omacloud bucket status` says every computer switched, delete the old
    key at your provider. The removed computer can't reach the bucket from then
    on.
 
-Until that last step it could still delete objects from the bucket, as any
-computer with the key can: [docs/providers.md](docs/providers.md#delete-protection)
+Until then it could still delete what's there, as any computer with the key can: [docs/providers.md](docs/providers.md#delete-protection)
 says how to make that harmless.
 
 ## Keeping the recovery code
@@ -321,7 +322,7 @@ restarts into that), 1 for anything else.
 
 ```toml
 # ~/.config/omacloud/config.toml (written by `omacloud init`, readable by you
-# alone: it holds your bucket's key)
+# alone: it holds the key to your storage)
 [limits]
 # bandwidth = "5MiB"          # per second, if you set one; see below
 # connections = 4             # parallel requests to the storage, if set

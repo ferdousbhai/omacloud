@@ -127,10 +127,10 @@ impl Manifest {
         self
     }
 
-    /// Whether any group of settings is left out here.
+    /// The groups of settings left out here.
     #[must_use]
-    pub fn skips_any(&self) -> bool {
-        !self.skip.is_empty()
+    pub fn skipped(&self) -> &BTreeSet<String> {
+        &self.skip
     }
 
     /// Whether `rel` (relative to home) is in the shared tier. A path listed
