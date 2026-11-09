@@ -1249,7 +1249,7 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
             },
         );
     });
-    settings.set_subtitle("Shell, AI agents, desktop and apps, Chromium, Wi-Fi");
+    settings.set_subtitle(SETTINGS_SYNCED);
     g.add(&settings);
 
     let add = button("Add Folder…", Some("flat"));
@@ -1323,7 +1323,7 @@ fn choose_what_syncs() -> (adw::PreferencesGroup, impl Fn() -> Vec<String>) {
     }
     let settings = adw::SwitchRow::builder()
         .title("Omarchy settings")
-        .subtitle("Bindings, themes, terminal and shell setup")
+        .subtitle(SETTINGS_SYNCED)
         .active(true)
         .build();
     g.add(&settings);
@@ -1486,6 +1486,11 @@ fn show_join_code(ui: &Rc<Ui>) {
         ),
     });
 }
+
+/// What the settings switch sends: passwords and keys are named, so nobody
+/// turns it on thinking it's only themes.
+const SETTINGS_SYNCED: &str =
+    "Shell, desktop and apps, Chromium, AI agents with any API keys in their settings, and Wi-Fi passwords";
 
 fn settings(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     let page = adw::PreferencesPage::new();

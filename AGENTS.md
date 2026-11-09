@@ -62,6 +62,9 @@ stand-in S3; with `S3_*` set it proves a real provider. `scripts/restic-compat.s
 - `OMACLOUD_CONFIG` points the CLI at a test account and `OMACLOUD_BIN`
   points the app at a local build. Don't touch the real `~/.config/omacloud`
   when testing.
+- A scratch `HOME` doesn't isolate settings sync: Wi-Fi comes from
+  NetworkManager, so a test account with settings on uploads this computer's
+  saved networks and their keys. Keep settings off on real storage.
 - Test with `init --repo <path> --coordinator <dir>`, or `scripts/s3-sync.sh`;
   never against a real bucket of the user's.
 - Coordination appends must stay create-only (a taken position fails);

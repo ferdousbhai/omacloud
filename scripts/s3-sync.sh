@@ -6,10 +6,11 @@
 #   scripts/s3-sync.sh [path/to/omacloud]
 #
 # On scripts/fake-s3.py, which needs nothing installed. To prove a provider,
-# set S3_ENDPOINT, S3_KEY, S3_SECRET and four empty buckets S3_BUCKET{,2,3,4};
+# set S3_ENDPOINT, S3_REGION, S3_KEY, S3_SECRET and four empty buckets S3_BUCKET{,2,3,4};
 # with S3_KEY2 and S3_SECRET2, a second key, the key change runs there too (a
 # provider can't be told to retire the first from here).
 set -euo pipefail
+trap 'echo "failed at line $LINENO: $BASH_COMMAND"' ERR
 
 OMACLOUD=${1:-target/debug/omacloud}
 OMACLOUD=$(realpath "$OMACLOUD")
@@ -42,7 +43,7 @@ oc() { local dev=$1; shift; "$OMACLOUD" --config "$work/$dev.toml" --styled "$@"
 # stdout (stderr shows there too)
 on_tty() { SHELL=/bin/bash script -qefc "$(printf '%q ' "$@")" /dev/null </dev/null | tr -d '\r'; }
 oc_tty() { local dev=$1; shift; on_tty "$OMACLOUD" --config "$work/$dev.toml" "$@"; }
-s3() { echo --provider s3 --endpoint "$S3_ENDPOINT" --region us-east-1 --bucket "$1" --access-key-id "$S3_KEY"; }
+s3() { echo --provider s3 --endpoint "$S3_ENDPOINT" --region "${S3_REGION:-us-east-1}" --bucket "$1" --access-key-id "$S3_KEY"; }
 # computer $2, its files in folder $4, asks to join with code $3, and $1
 # approves it by fingerprint
 join() {
@@ -132,7 +133,8 @@ echo "invite: ok"
 
 # object-lock accounts keep their records in a second bucket
 # shellcheck disable=SC2046
-oc_tty lock init --folder "$work/Lock" $(s3 "$S3_BUCKET3") --root /data --coordination-bucket "$S3_BUCKET4" --device lock >/dev/null
+oc_tty lock init --folder "$work/Lock" $(s3 "$S3_BUCKET3") --root /data --coordination-bucket "$S3_BUCKET4" --device lock >"$work/lock.out" \
+  || { grep -a -i 'error\|hint' "$work/lock.out"; exit 1; }
 echo "kept" >"$work/Lock/kept.txt"
 oc lock sync >/dev/null
 echo "second bucket: ok"

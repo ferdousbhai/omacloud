@@ -66,7 +66,9 @@ Run `gtk4-broadwayd :7`, start `omacloud-app <page>` with
 in a browser kept open for a few seconds (the page renders after it
 connects). Clicks through Broadway are unreliable; `omacloud-app devices`
 opens a page directly. `OMACLOUD_CONFIG` and `OMACLOUD_BIN` point the app at
-a test account and a local build.
+a test account and a local build. The setup wizard's settings switch starts on,
+and even with a scratch `HOME` it would upload this computer's Wi-Fi passwords:
+turn it off before Continue when testing on real storage.
 
 ## Secrets
 
