@@ -336,6 +336,7 @@ fn commands_that_print_a_secret_refuse_anywhere_but_a_terminal() {
     let recovery = h.create();
     for args in [
         &["export"][..],
+        &["drive-code"],
         &["recovery", "split", "--threshold", "2", "--shares", "3"],
         &["recovery", "combine"],
     ] {

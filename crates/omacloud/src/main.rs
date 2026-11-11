@@ -244,6 +244,10 @@ enum Cmd {
         #[arg(long)]
         yes: bool,
     },
+    /// Print a code that opens your files in a browser, at
+    /// omacloud.computer/drive (a bucket's account; it holds the key to your
+    /// storage and the password to your files)
+    DriveCode,
     /// Print everything needed to restore without omacloud; with `--to`,
     /// first copy the repository somewhere of your own
     Export {
@@ -960,6 +964,35 @@ impl JoinCode {
     fn parse(code: &str) -> Option<Self> {
         let bytes = hex::decode(code.trim().strip_prefix(Self::PREFIX)?).ok()?;
         serde_json::from_slice(&bytes).ok()
+    }
+}
+
+/// What Omacloud Drive's page needs to read an account's files from its
+/// bucket in a browser: where the bucket is, its key, and the repository's
+/// password. One line with no spaces, so a terminal's wrapping can't break
+/// a copy of it.
+#[derive(Serialize)]
+struct DriveCode {
+    v: u8,
+    endpoint: String,
+    bucket: String,
+    root: String,
+    region: String,
+    key: String,
+    secret: String,
+    password: String,
+}
+
+impl DriveCode {
+    const PREFIX: &str = "omacloud-drive-";
+
+    fn encode(&self) -> Result<String> {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        Ok(format!(
+            "{}{}",
+            Self::PREFIX,
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(self)?)
+        ))
     }
 }
 
@@ -2170,6 +2203,38 @@ fn run(cli: Cli) -> Out {
             let data = json!({ "epoch": r.epoch, "snapshots": r.snapshots, "left": r.left });
             Ok(Response::new(data, summary.clone()).human(format!("{summary}\n{}", leftover_text(&r))))
         }
+        Cmd::DriveCode => {
+            if !output::to_terminal(mode()) {
+                return Err(fail::terminal_required("a drive code (it opens your files)").into());
+            }
+            let config = load(&paths)?;
+            let mut e = engine(&paths, &config)?;
+            e.sync()?; // pick up any key rotation first
+            let (spec, secret, _) = e.repository()?;
+            if spec.is_dropbox() || !spec.is_remote() {
+                return Err(fail::unsupported("Omacloud Drive in a browser reads a bucket for now")
+                    .hint("this account's files aren't in one; `omacloud mount` shows them on a computer")
+                    .into());
+            }
+            let opt = |k: &str| spec.options.get(k).cloned().unwrap_or_default();
+            let code = DriveCode {
+                v: 1,
+                endpoint: opt("endpoint"),
+                bucket: opt("bucket"),
+                root: opt("root").trim_matches('/').to_string(),
+                region: opt("region"),
+                key: opt("access_key_id"),
+                secret: opt("secret_access_key"),
+                password: secret.password,
+            }
+            .encode()?;
+            eprintln!(
+                "Paste it at https://omacloud.computer/drive/ to open your files in a browser. Keep it\n\
+                 private: it holds the key to your storage and the password to your files, so whoever has\n\
+                 it can read them. It stops working when the bucket's key is changed."
+            );
+            Ok(Response::new(Value::Null, "drive code").human(code))
+        }
         Cmd::Export { to } => {
             if !output::to_terminal(mode()) {
                 return Err(fail::terminal_required("the repository password").into());
@@ -2207,7 +2272,8 @@ fn run(cli: Cli) -> Out {
                 say!(
                     out,
                     "# restore without omacloud: restic or rustic, this bucket and password\n\
-                     # (repository epoch {epoch})\n\
+                     # (repository epoch {epoch}; restic reads any S3 storage's key from the AWS_ names,\n\
+                     # whoever the provider is)\n\
                      AWS_ACCESS_KEY_ID='{}' AWS_SECRET_ACCESS_KEY='{}' AWS_DEFAULT_REGION='{}' \\\n  \
                      RESTIC_PASSWORD='{password}' \\\n  \
                      restic -r s3:{}/{}{} restore latest --target <dir>",

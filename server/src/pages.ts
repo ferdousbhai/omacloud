@@ -75,8 +75,8 @@ the data is gone. If that worries you, you can split the code among people you t
 <h2>In a browser</h2>
 <p><a href="/drive/">Omacloud Drive</a> opens your files from any browser. Same rule as everything else: the
 page fetches from your bucket and decrypts in the tab, so this site never sees a file or a key. It is early.
-Today it needs a bucket (no Dropbox yet), and you sign in by pasting what <code>omacloud export</code> prints,
-which is clunky. Approving a browser from one of your computers comes next.</p>
+Today it needs a bucket (no Dropbox yet), and you sign in by pasting a code that
+<code>omacloud drive-code</code> prints. Approving a browser from one of your computers comes next.</p>
 <h2>Family</h2>
 <p>Each person gets an account of their own, in storage of their own. You can pay for someone's bucket and
 still not be able to read their files, which is how it should be.</p>

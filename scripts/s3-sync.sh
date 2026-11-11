@@ -72,6 +72,14 @@ oc b sync >/dev/null
 oc a sync >/dev/null
 diff -r --no-dereference "$work/A" "$work/B"
 [ ! -e "$work/A/big.bin" ]
+# the code that opens the files in a browser names this bucket and its key
+drive=$(oc_tty a drive-code | grep '^omacloud-drive-')
+python3 - "${drive#omacloud-drive-}" "$S3_BUCKET" "$S3_KEY" <<'PY'
+import base64, json, sys
+code, bucket, key = sys.argv[1:]
+said = json.loads(base64.urlsafe_b64decode(code + "=" * (-len(code) % 4)))
+assert said["bucket"] == bucket and said["key"] == key and said["password"], said.keys()
+PY
 echo "two computers: ok"
 
 # a provider having a moment: reads are tried again, and nothing shows

@@ -1,7 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.0.25 (2026-11-11)
 
+- `omacloud drive-code` prints one line that signs you in to Omacloud Drive in a browser
+  (omacloud.computer/drive/), for an account in a bucket. It has no spaces, so a terminal's
+  wrapping can't break a copy of it. The page still takes what `omacloud export` prints.
+- `omacloud export` says why its command names `AWS_` variables whoever your provider is:
+  restic reads any S3 storage's key from them.
 - The site serves Omacloud Drive at omacloud.computer/drive/: your files in a browser,
   read from your own bucket and decrypted there, under a policy that loads only the
   site's own code. The home and privacy pages say what it does with what you enter.

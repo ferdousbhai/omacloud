@@ -46,7 +46,7 @@ stand-in S3; with `S3_*` set it proves a real provider. `scripts/restic-compat.s
   fails with a `CliError` (`fail.rs`: code, exit 1-5, remediation in the
   hint); piped output is the JSON envelope, so scripts parsing text pass
   `--styled`. Commands that print a secret (a recovery code, join code,
-  shares, an invite, export's password) check `output::to_terminal` (stdin and
+  shares, an invite, a drive code, export's password) check `output::to_terminal` (stdin and
   stdout a terminal; `combine` stdout only) first and refuse otherwise;
   tests and scripts run them under a pty (`script`), the app on its own.
   `watch` keeps its exit codes (2 stopped, 75 upgraded): the systemd unit's

@@ -358,14 +358,14 @@ $("pasted").addEventListener("input", (event) => {
 	const form = $("connect");
 	const status = (words) => ($("signin-status").textContent = words);
 	if (!found) {
-		status(text ? "That doesn't read as what omacloud export prints for a bucket. Paste all of its lines, or enter it by hand." : "");
+		status(text ? "That doesn't read as a drive code. Paste all of what omacloud drive-code prints, or enter it by hand." : "");
 		return;
 	}
 	for (const [name, value] of Object.entries(found)) form.elements[name].value = value || "";
 	const missing = !found.key || !found.secret || !found.password;
 	status(
 		missing
-			? `Found ${found.bucket}, but not its key or the password: paste all the lines omacloud export prints.`
+			? `Found ${found.bucket}, but not its key or the password: paste the whole code.`
 			: `Found ${found.bucket} at ${new URL(found.endpoint).host}. Press Open.`,
 	);
 });

@@ -243,6 +243,14 @@ lists the files deleted in the last 30 days with the
 version to restore, and the app's Recently Deleted, under Overview, puts
 one back where it was.
 
+## In a browser
+
+[Omacloud Drive](https://omacloud.computer/drive/) opens your files from any browser: it reads them
+from your bucket and decrypts them there, so the site sees neither a file nor a key. `omacloud
+drive-code` prints the one-line code you paste to sign in. Keep the code private: it holds the key
+to your storage and the password to your files. The bucket needs one rule first
+([docs/providers.md](docs/providers.md#reading-in-a-browser)); Dropbox accounts aren't there yet.
+
 Leaving needs nothing from Omacloud: `omacloud export` prints the command that
 has plain restic or rustic restore everything from your storage, with the
 repository's password (and the bucket's key; Dropbox goes through rclone), and `omacloud export --to <folder>` copies the
@@ -320,7 +328,7 @@ from `--yes`.
 
 What prints a secret prints it only to your terminal, in text mode with
 stdin and stdout on it, and refuses (exit 2) as JSON or into a pipe: `init`
-when it creates an account (the recovery code), `join-code`, `invite`, `export`,
+when it creates an account (the recovery code), `join-code`, `invite`, `drive-code`, `export`,
 and `recovery split` and `combine`
 (`combine` reads its shares from stdin, so only its stdout must be a
 terminal). Joining with a join code or the recovery code prints no secret

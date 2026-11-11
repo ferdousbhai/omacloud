@@ -34,6 +34,15 @@ test("what omacloud export prints is read, however a terminal wrapped the copy",
 	assert.deepEqual(pasted(printed.replaceAll("\\\n", " ")), want);
 });
 
+test("a drive code is read, whole or wrapped", () => {
+	const code = `omacloud-drive-${Buffer.from(JSON.stringify({ v: 1, ...want })).toString("base64url")}`;
+	assert.deepEqual(pasted(code), want);
+	assert.deepEqual(pasted(`  ${code.match(/.{1,40}/g)!.join("\n")}\n`), want);
+	// a damaged one isn't half read
+	assert.equal(pasted(code.slice(0, 60)), null);
+	assert.equal(pasted("omacloud-drive-e30"), null);
+});
+
 test("anything else isn't taken for it", () => {
 	assert.equal(pasted(""), null);
 	assert.equal(pasted("hello"), null);
