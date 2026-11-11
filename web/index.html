@@ -3,18 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src *; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src blob:; media-src blob:; frame-src blob:; connect-src *; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
-<title>Omacloud files</title>
+<title>Omacloud Drive</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<main>
-<h1>Your files</h1>
-<p class="note">Read in this browser, straight from your own bucket. Your bucket's key and password stay in this tab and are gone when it closes.</p>
 
+<main id="signin">
 <form id="connect" autocomplete="off">
-<p class="note">Enter what <code>omacloud export</code> prints.</p>
+<svg class="mark" viewBox="0 0 64 44" aria-hidden="true"><path d="M50 44H16a14 14 0 0 1-2.6-27.8A19 19 0 0 1 50.6 14 15 15 0 0 1 50 44z"/></svg>
+<h1>Omacloud Drive</h1>
+<p class="note">Your files, read in this browser straight from your own storage. What you enter stays in this tab and is gone when it closes.</p>
+<label><span>Paste what <code>omacloud export</code> prints</span>
+<textarea id="pasted" rows="3" spellcheck="false" placeholder="AWS_ACCESS_KEY_ID='…' AWS_SECRET_ACCESS_KEY='…' …"></textarea></label>
+<details id="byhand">
+<summary>Or enter it by hand</summary>
 <label>Endpoint <input name="endpoint" type="url" required placeholder="https://&lt;account&gt;.r2.cloudflarestorage.com"></label>
 <label>Bucket <input name="bucket" required></label>
 <label>Folder in the bucket, if any <input name="root"></label>
@@ -22,16 +26,51 @@
 <label>Access key ID <input name="key" required></label>
 <label>Secret access key <input name="secret" type="password" required></label>
 <label>Repository password <input name="password" type="password" required></label>
-<button type="submit">Open</button>
+</details>
+<button type="submit" class="primary">Open</button>
+<p id="signin-status" class="note" role="status"></p>
 </form>
-
-<section id="files" hidden>
-<nav id="path" aria-label="Folder"></nav>
-<ul id="list"></ul>
-</section>
-
-<p id="status" role="status"></p>
 </main>
+
+<div id="drive" hidden>
+<header>
+<svg class="mark" viewBox="0 0 64 44" aria-hidden="true"><path d="M50 44H16a14 14 0 0 1-2.6-27.8A19 19 0 0 1 50.6 14 15 15 0 0 1 50 44z"/></svg>
+<strong>Omacloud Drive</strong>
+<span class="grow"></span>
+<button id="lock" type="button" title="Forget the keys and close your files">Lock</button>
+</header>
+<nav id="sidebar" aria-label="Folders"></nav>
+<section id="main">
+<div id="toolbar">
+<nav id="path" aria-label="Path"></nav>
+<span class="grow"></span>
+<input id="filter" type="search" placeholder="Search this folder" aria-label="Search this folder">
+<select id="sort" aria-label="Sort by">
+<option value="name">Name</option>
+<option value="date">Date</option>
+<option value="size">Size</option>
+</select>
+<div class="toggle" role="group" aria-label="View">
+<button id="as-grid" type="button" title="Icons" aria-label="Icons"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z"/></svg></button>
+<button id="as-list" type="button" title="List" aria-label="List"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h12v2H2zM2 7h12v2H2zM2 11h12v2H2z"/></svg></button>
+</div>
+<button id="download" type="button" disabled>Download</button>
+</div>
+<div id="items" tabindex="0"></div>
+<footer id="status" role="status"></footer>
+</section>
+</div>
+
+<dialog id="look">
+<header>
+<strong id="look-name"></strong>
+<span class="grow"></span>
+<button id="look-download" type="button">Download</button>
+<button id="look-close" type="button" aria-label="Close">Done</button>
+</header>
+<div id="look-body"></div>
+</dialog>
+
 <script type="module" src="app.js"></script>
 </body>
 </html>
