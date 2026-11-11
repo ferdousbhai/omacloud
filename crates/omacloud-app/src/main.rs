@@ -1230,9 +1230,6 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
             }
         });
         subtitle_with_size(&r, &path);
-        if state == "synced" {
-            r.add_prefix(&open_button(&ui.window, path.clone()));
-        }
         g.add(&r);
     }
     // every other folder of home, a switch each
