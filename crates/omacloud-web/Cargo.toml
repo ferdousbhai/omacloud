@@ -1,0 +1,29 @@
+[package]
+name = "omacloud-web"
+description = "Reads an Omacloud (restic) repository without touching storage: the decrypting half of the web app, compiled to WebAssembly"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# the versions rustic_core uses, so the web reader and the engine agree
+aes256ctr_poly1305aes = "0.2.1"
+scrypt = { version = "0.12.0", default-features = false }
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# zstd in plain Rust: the C library needs a C toolchain for WebAssembly
+ruzstd = "0.9"
+
+[dev-dependencies]
+omacloud-core.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
+tempfile.workspace = true

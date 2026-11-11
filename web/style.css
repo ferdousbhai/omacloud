@@ -1,0 +1,108 @@
+:root {
+	color-scheme: light dark;
+	--ink: #1c1d21;
+	--soft: #63666f;
+	--line: #d9dbe1;
+	--ground: #fafafb;
+	--accent: #2f5fd0;
+}
+@media (prefers-color-scheme: dark) {
+	:root {
+		--ink: #e8e9ee;
+		--soft: #9a9eab;
+		--line: #33353e;
+		--ground: #16171c;
+		--accent: #8aa9f7;
+	}
+}
+[hidden] {
+	display: none !important;
+}
+body {
+	margin: 0;
+	background: var(--ground);
+	color: var(--ink);
+	font: 16px/1.5 system-ui, sans-serif;
+}
+main {
+	max-width: 40rem;
+	margin: 0 auto;
+	padding: 2rem 1rem;
+}
+h1 {
+	margin: 0 0 0.25rem;
+	font-size: 1.5rem;
+}
+.note,
+#status {
+	color: var(--soft);
+}
+form {
+	display: grid;
+	gap: 0.75rem;
+	margin-top: 1.5rem;
+}
+label {
+	display: grid;
+	gap: 0.25rem;
+	font-size: 0.875rem;
+	color: var(--soft);
+}
+input {
+	font: inherit;
+	color: var(--ink);
+	background: transparent;
+	border: 1px solid var(--line);
+	border-radius: 0.375rem;
+	padding: 0.5rem 0.625rem;
+}
+button {
+	font: inherit;
+	color: var(--accent);
+	background: none;
+	border: 0;
+	padding: 0;
+	cursor: pointer;
+	text-align: left;
+}
+button:disabled {
+	color: var(--ink);
+	cursor: default;
+}
+form > button {
+	justify-self: start;
+	color: var(--ground);
+	background: var(--accent);
+	border-radius: 0.375rem;
+	padding: 0.5rem 1rem;
+}
+#path {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	margin: 1.5rem 0 0.5rem;
+}
+#path button:not(:last-child)::after {
+	content: " /";
+	color: var(--soft);
+}
+#list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	border-top: 1px solid var(--line);
+}
+#list li {
+	display: flex;
+	justify-content: space-between;
+	gap: 1rem;
+	padding: 0.5rem 0;
+	border-bottom: 1px solid var(--line);
+}
+#list span {
+	color: var(--soft);
+	white-space: nowrap;
+}
+#list button {
+	overflow-wrap: anywhere;
+}

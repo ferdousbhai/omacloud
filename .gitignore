@@ -4,3 +4,4 @@
 /pkgbuild/*.pkg.tar.*
 /dist/
 .cloudflare/
+/web/omacloud_web.wasm

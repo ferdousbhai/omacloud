@@ -6,11 +6,14 @@ ListObjectsV2. A key is good while it's a line of the keys file, read on each
 request, so a test can retire one. A line `flaky` there answers one read in 20
 with a 503, as a provider having a moment does.
 Signatures aren't checked: this proves how Omacloud uses S3, not that a
-provider accepts it.
+provider accepts it. A key may come in the query too (a presigned URL), as the
+web page sends it; with FAKE_S3_CORS set to that page's origin, answers allow
+it to read them, as a bucket's CORS rule does.
 
     fake-s3.py <port file> <keys file> <bucket>...
 """
 
+import os
 import re
 import sys
 import threading
@@ -23,6 +26,7 @@ LOCK = threading.Lock()
 BUCKETS: dict[str, dict[str, bytes]] = {}
 READS = [0]
 KEYS_FILE = ""
+CORS = os.environ.get("FAKE_S3_CORS", "")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -35,6 +39,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         for k, v in (headers or {}).items():
             self.send_header(k, v)
+        if CORS:
+            self.send_header("Access-Control-Allow-Origin", CORS)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         if self.command != "HEAD":
@@ -49,7 +55,9 @@ class Handler(BaseHTTPRequestHandler):
     def route(self):
         """The bucket, key and query; None when refused (answered already)."""
         length_read = self.command == "PUT"
-        found = re.search(r"Credential=([^/]+)/", self.headers.get("Authorization", ""))
+        found = re.search(r"Credential=([^/]+)/", self.headers.get("Authorization", "")) or re.search(
+            r"X-Amz-Credential=([^%/&]+)", urlsplit(self.path).query
+        )
         with open(KEYS_FILE) as f:
             good = f.read().split()
         if not found or found.group(1) not in good:
@@ -95,6 +103,10 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             BUCKETS[bucket].pop(key, None)
         self.answer(204)
+
+    def do_OPTIONS(self):
+        # a browser asking first: allowed when the bucket has the rule
+        self.answer(204 if CORS else 403, headers={"Access-Control-Allow-Headers": "range"} if CORS else None)
 
     def do_HEAD(self):
         self.do_GET()

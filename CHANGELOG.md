@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- A first slice of web access, not yet on omacloud.computer: a static page (`web/`)
+  that lists and downloads an account's files from its S3 bucket, decrypting in the
+  browser with `crates/omacloud-web` compiled to WebAssembly. It opens with what
+  `omacloud export` prints; the bucket needs a CORS rule allowing the page to read.
+
 ## 0.0.23 (2026-11-11)
 
 - **Storage is a bucket of your own again; the Omacloud network is gone.** The

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src *; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<title>Omacloud files</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<h1>Your files</h1>
+<p class="note">Read in this browser, straight from your own bucket. Your bucket's key and password stay in this tab and are gone when it closes.</p>
+
+<form id="connect" autocomplete="off">
+<p class="note">Enter what <code>omacloud export</code> prints.</p>
+<label>Endpoint <input name="endpoint" type="url" required placeholder="https://&lt;account&gt;.r2.cloudflarestorage.com"></label>
+<label>Bucket <input name="bucket" required></label>
+<label>Folder in the bucket, if any <input name="root"></label>
+<label>Region <input name="region" value="auto"></label>
+<label>Access key ID <input name="key" required></label>
+<label>Secret access key <input name="secret" type="password" required></label>
+<label>Repository password <input name="password" type="password" required></label>
+<button type="submit">Open</button>
+</form>
+
+<section id="files" hidden>
+<nav id="path" aria-label="Folder"></nav>
+<ul id="list"></ul>
+</section>
+
+<p id="status" role="status"></p>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>
