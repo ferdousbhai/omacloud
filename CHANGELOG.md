@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- One row for AI agents under What syncs: Codex's and pi's settings, which sync
-  without their machine-only parts, are said there instead of on a row of their own.
+- One row for AI agents under What syncs: Codex's and pi's settings no longer have
+  a row of their own, and are mentioned there only when something needs attention.
 - The app's Overview tells the folders apart: Omarchy folders (Documents, Pictures
   and the rest every Omarchy computer has), and Omacloud Drive, the folders of your
   own, with Add a folder from your home and Browse. Every File is now Omacloud Drive.

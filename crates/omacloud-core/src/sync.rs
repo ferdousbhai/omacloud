@@ -395,8 +395,8 @@ pub struct Engine {
 }
 
 /// One row for AI agents: the files of Codex and pi that sync without their
-/// machine-only parts are agents' settings too, so what's to say about them
-/// goes on the AI agents row instead of a row of their own.
+/// machine-only parts are agents' settings too, so they get no row of their
+/// own. In sync, nothing is said of them; trouble shows on the AI agents row.
 fn fold_agents(items: &mut Vec<Item>) {
     let own = |i: &Item| i.group == "agents" && !i.scope.is_empty();
     let Some(at) = items.iter().position(own) else {
@@ -412,12 +412,12 @@ fn fold_agents(items: &mut Vec<Item>) {
     if part.state == "unavailable" {
         return;
     }
-    // what was added to the part's words: a write that failed, edits settled
+    // only what needs saying: waiting, a write that failed, edits settled
     let (_, news) = part.detail.split_once("; ").unwrap_or_default();
     let said = match (part.state.as_str(), news) {
-        ("waiting", _) => "waiting to apply".to_string(),
-        (_, "") => "without what belongs to this computer (trusted projects, version notes)".to_string(),
-        (_, news) => news.to_string(),
+        ("waiting", _) => "waiting to apply",
+        (_, "") => return,
+        (_, news) => news,
     };
     row.detail.push_str(&format!("; {}: {said}", part.title));
     if row.state == "synced" {
