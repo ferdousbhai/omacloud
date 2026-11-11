@@ -12,7 +12,7 @@ function layout(title: string, body: string): Response {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
-<meta name="description" content="Your files and settings on every Omarchy computer, end to end encrypted.">
+<meta name="description" content="Sync for Omarchy computers: your files and your setup on every machine, encrypted before they leave it, kept in storage you own.">
 <style>
 :root { --bg: #fbfaf8; --fg: #1d1c1a; --muted: #6b6760; --line: #e6e2dc; --accent: #2f6f5e; }
 @media (prefers-color-scheme: dark) {
@@ -47,29 +47,44 @@ export const home = () =>
 	layout(
 		"Omacloud",
 		`<h1>Omacloud</h1>
-<p class="lead">Your files and settings on all your Omarchy computers. Only you can read them.</p>
-<p>Omacloud syncs:</p>
+<p class="lead">Sync for Omarchy computers. Your files and your setup on every machine, encrypted before
+they leave it, kept in storage you own.</p>
+<p>I have a few Omarchy computers and I wanted them to feel like one. iCloud does that for a Mac.
+Nothing did it for Omarchy, so I wrote this.</p>
+<h2>What it does</h2>
+<p>You pick the folders you want everywhere (Documents, Pictures, anything in your home) and they sync in
+place. Then it carries the things that make a computer feel like yours:</p>
 <ul>
-<li>The folders that you choose, such as Documents, Pictures or Music</li>
-<li>Your Omarchy settings, theme, web apps and package lists</li>
-<li>Your Chromium bookmarks, settings and extensions</li>
-<li>Your AI agent settings and skills, and your Wi-Fi networks</li>
-<li>Your SSH and GPG keys.</li>
+<li>Omarchy settings: keybindings, look and feel, terminals, your theme</li>
+<li>AI agent settings, instructions and skills, for Claude Code, Codex, pi and the rest</li>
+<li>Chromium bookmarks, settings and extensions</li>
+<li>Wi-Fi networks, web apps, and the list of packages you installed</li>
+<li>SSH and GPG keys, sealed so that only your recovery code opens them</li>
 </ul>
-<p>You can get back an earlier version of a file, or a file that you deleted.</p>
-<p>Away from your computers, <a href="/drive/">Omacloud Drive</a> opens your files in a browser. It reads them
-from your storage and decrypts them in the browser. For now it works with a storage bucket, and opens with
-what <code>omacloud export</code> prints.</p>
-<p>Omacloud encrypts your files on your computer, then keeps them in your own Dropbox, or a
-storage bucket that you choose, such as Cloudflare R2 or Hetzner. Your storage provider can't read them. Omacloud runs no
-storage and sees nothing of yours.</p>
-<p>Each person in your family can use their own Dropbox, or a bucket that you make for them. Each
-person gets a separate account that only they can read.</p>
-<p>Keep your recovery code in a safe location. If you lose all your computers, you need this code
-to get your data.</p>
+<p>What describes one machine stays on that machine: monitors, the touchpad, sign-ins, anything another
+program installed. And if you delete a file or wreck one, the old versions are there for 30 days.</p>
+<h2>How it works</h2>
+<p>There is no Omacloud server. That is the whole idea. Your computer encrypts everything, then writes it to
+storage that is yours: your Dropbox, or an S3 bucket at Cloudflare R2, Hetzner or anywhere else. The provider
+holds bytes it can't read. I hold nothing.</p>
+<p>Underneath it is plain <a href="https://restic.net">restic</a>. If Omacloud vanished tomorrow, restic by
+itself restores everything, and <code>omacloud export</code> prints the command to do it.</p>
+<p>The cost of nobody else holding your keys is that nobody else can reset them. Setup gives you a recovery
+code. Write it down and keep it somewhere that isn't a computer. Lose the code and all your computers, and
+the data is gone. If that worries you, you can split the code among people you trust.</p>
+<h2>In a browser</h2>
+<p><a href="/drive/">Omacloud Drive</a> opens your files from any browser. Same rule as everything else: the
+page fetches from your bucket and decrypts in the tab, so this site never sees a file or a key. It is early.
+Today it needs a bucket (no Dropbox yet), and you sign in by pasting what <code>omacloud export</code> prints,
+which is clunky. Approving a browser from one of your computers comes next.</p>
+<h2>Family</h2>
+<p>Each person gets an account of their own, in storage of their own. You can pay for someone's bucket and
+still not be able to read their files, which is how it should be.</p>
 <h2>Get it</h2>
 <pre>curl -fsSL https://omacloud.computer/install.sh | sudo bash</pre>
-<p>Then open Omacloud from the app launcher.</p>`,
+<p>Then open Omacloud from the app launcher. It is free, MIT licensed, and the
+<a href="https://github.com/ferdousbhai/omacloud">code is on GitHub</a>. It is also young. I run it on my own
+computers, but keep another copy of anything you can't afford to lose.</p>`,
 	);
 
 export const privacy = () =>
@@ -77,16 +92,16 @@ export const privacy = () =>
 		"Privacy · Omacloud",
 		`<h1>Privacy</h1>
 <p class="lead">Updated ${UPDATED}.</p>
-<p>Visiting this site collects nothing: it sets no cookies, has no accounts and keeps no logs. Requests
-pass through Cloudflare, which handles your IP address to deliver them.</p>
-<p>Omacloud itself has no accounts or sign-in, and runs no storage. Your files, their names, your
-settings and your keys are encrypted on your computer, with keys that never leave your computers
-and your recovery code, before they reach the storage provider you chose. That provider can't read
-them, and has its own terms and privacy policy. Nothing of yours reaches this site.</p>
-<p><a href="/drive/">Omacloud Drive</a> is a page that runs in your browser. What you enter there (your
-bucket's key and your password) stays in that browser tab: it goes into requests from your browser to your
-storage, and is gone when the tab closes. Your files travel between your browser and your storage. None of
-it comes to this site, which only serves the page.</p>
+<p>Short version: this site knows nothing about you. No cookies, no accounts, no logs, no analytics.
+Cloudflare delivers the pages and sees your IP address to do that. That is all.</p>
+<p>Omacloud itself has no accounts and runs no storage. Your files, their names, your settings and your
+keys are encrypted on your computer, with keys that stay on your computers and in your recovery code, before
+they go to the storage you chose. That provider can't read them. It has its own terms and privacy policy,
+and you deal with it directly. Nothing of yours comes here.</p>
+<p><a href="/drive/">Omacloud Drive</a> is a page that runs in your browser. What you type into it (your
+bucket's key, your password) stays in that tab. It goes into requests from your browser to your storage and
+is gone when you close the tab. Your files travel between your browser and your storage. This site serves
+the page and sees none of it.</p>
 <h2>Contact</h2>
 <p><a href="mailto:${PRIVACY}">${PRIVACY}</a></p>`,
 	);
@@ -97,13 +112,11 @@ export const terms = () =>
 		`<h1>Terms</h1>
 <p class="lead">Updated ${UPDATED}.</p>
 <h2>The software</h2>
-<p>Omacloud is free software under the MIT license, provided as it is, without warranty. Keep
-other copies of anything you can't afford to lose. To the extent the law allows, Omacloud isn't
-liable for lost data.</p>
+<p>Omacloud is free software under the MIT license. It comes as it is, with no warranty. Keep another copy
+of anything you can't afford to lose. As far as the law allows, Omacloud isn't liable for lost data.</p>
 <h2>Your recovery code</h2>
-<p>Only your computers and your recovery code can decrypt your data. If you lose the recovery
-code and all your computers, nobody, including Omacloud, can recover your files. Keep the code
-safe and offline.</p>
+<p>Only your computers and your recovery code can decrypt your data. If you lose the code and all your
+computers, nobody can get your files back, and that includes me. Keep the code safe and offline.</p>
 <h2>Contact</h2>
 <p><a href="mailto:${LEGAL}">${LEGAL}</a></p>`,
 	);
