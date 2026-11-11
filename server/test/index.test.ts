@@ -3,7 +3,17 @@ import { test } from "node:test";
 
 import worker from "../src/index.ts";
 
-const env = { PUBLIC_URL: "https://omacloud.computer" } as unknown as Env;
+// The assets as Cloudflare serves them: the Drive page and one of its scripts.
+const assets = {
+	fetch: async (req: Request) => {
+		const path = new URL(req.url).pathname;
+		if (path === "/drive") return Response.redirect("https://omacloud.computer/drive/", 307);
+		if (path === "/drive/") return new Response("<!doctype html>", { headers: { "content-type": "text/html; charset=utf-8" } });
+		if (path === "/drive/app.js") return new Response("//", { headers: { "content-type": "text/javascript" } });
+		return new Response("Not found", { status: 404 });
+	},
+};
+const env = { PUBLIC_URL: "https://omacloud.computer", ASSETS: assets } as unknown as Env;
 const get = (path: string, method = "GET") =>
 	worker.fetch(new Request(`https://omacloud.computer${path}`, { method }) as never, env);
 
@@ -34,4 +44,23 @@ test("no page mentions what was dropped", async () => {
 		const text = await (await get(path)).text();
 		assert.doesNotMatch(text, /google|waitlist|quota|turnstile|credit|holder|storage network|omacloud share|gateway/i, path);
 	}
+});
+
+test("Omacloud Drive is served under a policy that loads only this site's code", async () => {
+	const page = await get("/drive/");
+	assert.equal(page.status, 200);
+	const csp = page.headers.get("content-security-policy") ?? "";
+	for (const part of ["default-src 'none'", "script-src 'self' 'wasm-unsafe-eval'", "connect-src 'self' https:", "frame-ancestors 'none'"]) {
+		assert.ok(csp.includes(part), part);
+	}
+	assert.doesNotMatch(csp, /'unsafe-inline'|'unsafe-eval'|\*/);
+	assert.equal(page.headers.get("x-frame-options"), "DENY");
+	assert.equal(page.headers.get("cache-control"), "no-cache");
+	const script = await get("/drive/app.js");
+	assert.equal(script.status, 200);
+	assert.equal(script.headers.get("x-content-type-options"), "nosniff");
+	assert.equal((await get("/drive")).status, 307);
+	assert.equal((await get("/drive/nothing")).status, 404);
+	// only the Drive's own folder comes from the assets
+	assert.equal((await get("/drivel")).status, 404);
 });

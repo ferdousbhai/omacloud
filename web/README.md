@@ -15,8 +15,9 @@ No server of Omacloud's sees a file, a key or a request.
 
 Today it opens with what `omacloud export` prints, pasted in (the bucket, its key
 and the repository password), read-only. Still to come: a browser approved as
-a device instead of the password, Dropbox, uploading, Recently Deleted, and
-serving it from omacloud.computer.
+a device instead of the password, Dropbox, uploading and Recently Deleted.
+The site's Worker serves it at omacloud.computer/drive/ (`server/build-drive.sh`
+puts it in place at deploy).
 
 The bucket must allow the page's origin to read it (a CORS rule allowing `GET`
 from that origin); nothing else about the bucket changes.

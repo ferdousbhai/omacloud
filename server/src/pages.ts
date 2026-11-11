@@ -1,9 +1,9 @@
 // The public pages of omacloud.computer: home, privacy, terms and llms.txt.
-// index.ts also serves /install.sh.
+// index.ts also serves /install.sh and Omacloud Drive (/drive).
 
 const PRIVACY = "privacy@omacloud.computer";
 const LEGAL = "legal@omacloud.computer";
-const UPDATED = "4 November 2026";
+const UPDATED = "11 November 2026";
 
 function layout(title: string, body: string): Response {
 	return new Response(
@@ -51,12 +51,15 @@ export const home = () =>
 <p>Omacloud syncs:</p>
 <ul>
 <li>The folders that you choose, such as Documents, Pictures or Music</li>
-<li>Your Omarchy settings and package lists</li>
+<li>Your Omarchy settings, theme, web apps and package lists</li>
 <li>Your Chromium bookmarks, settings and extensions</li>
-<li>Your AI agent settings and your Wi-Fi networks</li>
+<li>Your AI agent settings and skills, and your Wi-Fi networks</li>
 <li>Your SSH and GPG keys.</li>
 </ul>
 <p>You can get back an earlier version of a file, or a file that you deleted.</p>
+<p>Away from your computers, <a href="/drive/">Omacloud Drive</a> opens your files in a browser. It reads them
+from your storage and decrypts them in the browser. For now it works with a storage bucket, and opens with
+what <code>omacloud export</code> prints.</p>
 <p>Omacloud encrypts your files on your computer, then keeps them in your own Dropbox, or a
 storage bucket that you choose, such as Cloudflare R2 or Hetzner. Your storage provider can't read them. Omacloud runs no
 storage and sees nothing of yours.</p>
@@ -80,6 +83,10 @@ pass through Cloudflare, which handles your IP address to deliver them.</p>
 settings and your keys are encrypted on your computer, with keys that never leave your computers
 and your recovery code, before they reach the storage provider you chose. That provider can't read
 them, and has its own terms and privacy policy. Nothing of yours reaches this site.</p>
+<p><a href="/drive/">Omacloud Drive</a> is a page that runs in your browser. What you enter there (your
+bucket's key and your password) stays in that browser tab: it goes into requests from your browser to your
+storage, and is gone when the tab closes. Your files travel between your browser and your storage. None of
+it comes to this site, which only serves the page.</p>
 <h2>Contact</h2>
 <p><a href="mailto:${PRIVACY}">${PRIVACY}</a></p>`,
 	);
@@ -132,6 +139,7 @@ it. Omacloud runs on Omarchy (Arch Linux, x86_64 and aarch64), as a GTK app and 
 ## Site
 
 - [Home](${site}/): what Omacloud is and how to install it
+- [Omacloud Drive](${site}/drive/): a person's files in a browser, read from their own bucket and decrypted there
 - [Privacy](${site}/privacy): visiting collects nothing; Omacloud has no accounts
 - [Terms](${site}/terms): terms
 

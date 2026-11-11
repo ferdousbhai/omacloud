@@ -13,3 +13,27 @@ export function secureDocument(response: Response): Response {
 	}
 	return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
+
+// Omacloud Drive's policy: this site's own scripts, styles and WebAssembly;
+// pictures, sound and documents only as the page itself decrypted them; and
+// requests only to storage over HTTPS. No inline code, no other site's code,
+// no framing.
+export const DRIVE_CSP = [
+	"default-src 'none'",
+	"script-src 'self' 'wasm-unsafe-eval'",
+	"style-src 'self'",
+	"img-src blob:",
+	"media-src blob:",
+	"frame-src blob:",
+	"connect-src 'self' https:",
+	"base-uri 'none'",
+	"form-action 'none'",
+	"frame-ancestors 'none'",
+].join("; ");
+
+// What the page loads (scripts, styles, WebAssembly): served as what it is.
+export function secureAsset(response: Response): Response {
+	const headers = new Headers(response.headers);
+	headers.set("X-Content-Type-Options", "nosniff");
+	return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}

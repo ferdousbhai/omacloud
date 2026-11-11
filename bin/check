@@ -37,7 +37,7 @@ step "server"
 step "packaging"
 # bash -n reads one script (the rest are its arguments), so one at a time
 for f in install.sh pkgbuild/PKGBUILD packaging/omarchy-pkgs/omacloud/PKGBUILD scripts/*.sh .githooks/pre-push \
-  server/deploy.sh; do
+  server/deploy.sh server/build-drive.sh; do
   bash -n "$f"
 done
 for t in scripts/tests/*.py; do python3 "$t"; done

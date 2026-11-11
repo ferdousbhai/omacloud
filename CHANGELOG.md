@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The site serves Omacloud Drive at omacloud.computer/drive/: your files in a browser,
+  read from your own bucket and decrypted there, under a policy that loads only the
+  site's own code. The home and privacy pages say what it does with what you enter.
+
 ## 0.0.24 (2026-11-11)
 
 - Settings sync takes only what's yours. Hooks and plugins other programs install
