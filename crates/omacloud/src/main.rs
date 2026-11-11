@@ -1004,6 +1004,9 @@ fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
                     .map(|c| Arc::new(c) as Arc<dyn omacloud_core::merged::Group>)
                     .collect();
             groups.push(Arc::new(omacloud_core::agents::Agents::new(&home)));
+            let omarchy =
+                std::env::var_os("OMARCHY_PATH").map_or_else(|| PathBuf::from("/usr/share/omarchy"), PathBuf::from);
+            groups.push(Arc::new(omacloud_core::theme::Theme::for_home(&home, &omarchy)));
             let user = std::env::var("USER").unwrap_or_default();
             groups.push(Arc::new(omacloud_core::wifi::Wifi::new(Box::new(
                 omacloud_core::wifi::Nmcli::new(&user),
@@ -2592,7 +2595,7 @@ fn home_dir() -> Result<PathBuf> {
 }
 
 /// The groups of settings a computer can leave out.
-const SETTINGS_GROUPS: &[&str] = &["shell", "agents", "apps", "chromium", "wifi"];
+const SETTINGS_GROUPS: &[&str] = &["shell", "agents", "apps", "theme", "chromium", "wifi"];
 
 fn settings(paths: &Paths, action: SettingsCmd) -> Out {
     let mut config = load(paths)?;

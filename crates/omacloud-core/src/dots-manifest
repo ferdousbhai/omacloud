@@ -46,45 +46,57 @@ shared .config/fastfetch/*.jsonc
 local .bash_history
 # herdr's settings, never its sockets, logs or sessions
 shared .config/herdr/config.toml
-# AI agents: their settings, instructions, skills, hooks and themes, never
-# their sign-ins, sessions, history, caches or databases (all outside
-# these entries; Omacloud also refuses any credential, auth or token file
-# by name). Skills and plugins their tools install and manage stay.
-# Codex's config.toml and pi's settings.json sync without their
-# machine-only parts (project trust, version notes): see agents.rs.
-shared .claude/settings.json
+# the night light's hours, and the words Omarchy shows about this computer's
+# owner. (The lock screen stays: a fingerprint reader is one computer's.)
+shared .config/hypr/hyprsunset.conf
+shared .config/omarchy/branding/*.txt
+# AI agents: what a person wrote or chose for them (settings, instructions,
+# skills, commands, themes), never their sign-ins, sessions, history, caches
+# or databases (all outside these entries; Omacloud also refuses any
+# credential, auth or token file by name).
+# What another program put there stays with the computer it's installed on:
+# hooks (herdr's, keep-going's, which name programs and paths of one
+# computer), a file that says it's managed by a program, and a folder with a
+# `.managed-by-<program>` marker (a product's own skill). So hook files
+# aren't listed, and Claude Code's and Gemini's settings.json, Codex's
+# config.toml and pi's settings.json sync without their machine-only parts
+# (hooks, project trust, version notes): see agents.rs.
+shared .agents/skills/**
 shared .claude/CLAUDE.md
 shared .claude/keybindings.json
 shared .claude/agents/**
 shared .claude/commands/**
 shared .claude/skills/**
 local .claude/skills/synced/**
-shared .claude/hooks/**
 shared .claude/themes/**
 local .claude/settings.local.json
 local .claude/.credentials.json
 shared .codex/AGENTS.md
-shared .codex/hooks.json
 shared .codex/rules/**
+shared .codex/prompts/**
 shared .codex/skills/**
 local .codex/skills/.system/**
 local .codex/auth.json
-shared .gemini/settings.json
 shared .gemini/GEMINI.md
+shared .gemini/commands/**
 shared .gemini/skills/**
 shared .config/opencode/opencode.json
+shared .config/opencode/AGENTS.md
 shared .config/opencode/tui.json
 shared .config/opencode/tui.jsonc
+shared .config/opencode/agent/**
+shared .config/opencode/agents/**
+shared .config/opencode/command/**
+shared .config/opencode/commands/**
 shared .config/opencode/skills/**
 shared .config/opencode/plugins/**
-shared .cursor/hooks.json
+shared .pi/agent/AGENTS.md
 shared .pi/agent/models.json
+shared .pi/agent/prompts/**
 shared .pi/agent/skills/**
 shared .pi/agent/themes/**
 shared .pi/agent/extensions/**
 local .pi/agent/auth.json
 shared .grok/config.toml
-shared .grok/hooks/**
 local .grok/auth.json
 shared .copilot/settings.json
-shared .copilot/hooks/**

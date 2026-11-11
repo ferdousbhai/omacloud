@@ -9,6 +9,9 @@
 //!   (`toml_edit`).
 //! - pi's `~/.pi/agent/settings.json` records `lastChangelogVersion`, which
 //!   moves with each computer's updates: kept on each computer likewise.
+//! - Claude Code's `~/.claude/settings.json` and Gemini's
+//!   `~/.gemini/settings.json` hold `hooks`: commands other programs put
+//!   there, naming programs and paths of that computer. Kept likewise.
 //!
 //! Everything else the agents keep goes through the dots manifest as plain
 //! settings files.
@@ -27,19 +30,34 @@ use crate::merged::{self, Concern, Group, Item, ME, Merged};
 /// Each file: its document, where it is under home, and its kind.
 const FILES: &[(&str, &str, Kind)] = &[
     ("codex/config.json", ".codex/config.toml", Kind::CodexToml),
-    ("pi/settings.json", ".pi/agent/settings.json", Kind::PiJson),
+    ("pi/settings.json", ".pi/agent/settings.json", Kind::Json(PI_LOCAL)),
+    ("claude/settings.json", ".claude/settings.json", Kind::Json(HOOKS)),
+    ("gemini/settings.json", ".gemini/settings.json", Kind::Json(HOOKS)),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     /// Without its `projects` tables.
     CodexToml,
-    /// Without `lastChangelogVersion`.
-    PiJson,
+    /// JSON, without these machine-only keys.
+    Json(&'static [&'static str]),
 }
 
 /// The machine-only keys of pi's settings.
 const PI_LOCAL: &[&str] = &["lastChangelogVersion"];
+
+/// The machine-only key of Claude Code's and Gemini's settings.
+const HOOKS: &[&str] = &["hooks"];
+
+/// The agent a document belongs to, as people call it.
+fn agent(doc: &str) -> &'static str {
+    match doc.split('/').next() {
+        Some("codex") => "Codex",
+        Some("claude") => "Claude Code",
+        Some("gemini") => "Gemini",
+        _ => "pi",
+    }
+}
 
 /// The files, as a [`Group`].
 #[derive(Debug, Clone)]
@@ -215,9 +233,9 @@ impl Group for Agents {
         // mid-write or damaged: look again next time
         Ok(match kind {
             Kind::CodexToml => codex_shared(&text).map(|t| json!({ "text": t })),
-            Kind::PiJson => serde_json::from_str::<Value>(&text).ok().map(|mut v| {
+            Kind::Json(local) => serde_json::from_str::<Value>(&text).ok().map(|mut v| {
                 if let Some(m) = v.as_object_mut() {
-                    for k in PI_LOCAL {
+                    for k in local {
                         _ = m.remove(*k);
                     }
                 }
@@ -244,11 +262,15 @@ impl Group for Agents {
                     .ok_or_else(|| anyhow!("synced Codex config has no text"))?,
                 here.as_deref(),
             )?,
-            Kind::PiJson => {
+            Kind::Json(local) => {
                 let mut v = value.clone();
                 let mine: Option<Value> = here.as_deref().and_then(|h| serde_json::from_str(h).ok());
                 if let (Some(m), Some(mine)) = (v.as_object_mut(), mine) {
-                    for k in PI_LOCAL {
+                    // whatever another computer's older version sent along
+                    for k in local {
+                        _ = m.remove(*k);
+                    }
+                    for k in local {
                         if let Some(x) = mine.get(*k) {
                             _ = m.insert((*k).to_string(), x.clone());
                         }
@@ -286,7 +308,7 @@ impl Group for Agents {
             }
             _ => {
                 let map = |v: &Value| v.as_object().cloned().unwrap_or_default();
-                let label = |k: &str| format!("pi setting {k}");
+                let label = |k: &str| format!("{} setting {k}", agent(doc));
                 let value = merged::merge_map(
                     base.and_then(Value::as_object),
                     &map(ours),
@@ -316,7 +338,7 @@ impl Group for Agents {
             } else {
                 vec![Item {
                     group: "agents".into(),
-                    title: "Codex and pi settings".into(),
+                    title: "Agents' settings".into(),
                     state: "unavailable".into(),
                     detail: "Linked in from elsewhere: left as they are".into(),
                     install: Vec::new(),
@@ -325,13 +347,10 @@ impl Group for Agents {
                 }]
             };
         }
-        let names: Vec<&str> = docs
-            .iter()
-            .map(|d| if d.starts_with("codex") { "Codex" } else { "pi" })
-            .collect();
+        let names: Vec<&str> = docs.iter().map(|d| agent(d)).collect();
         vec![Item {
             group: "agents".into(),
-            title: format!("{} settings", names.join(" and ")),
+            title: format!("{} settings", names.join(", ")),
             state: if waiting.is_empty() { "synced" } else { "waiting" }.into(),
             detail: "Synced without what belongs to this computer (trusted projects, version notes)".into(),
             install: Vec::new(),
@@ -479,6 +498,24 @@ trust_level = "trusted"
         assert_eq!(fs::read_to_string(h.join("dots/codex/config.toml"))?, "model = \"x\"\n");
         let items = g.status(h, &[]);
         assert_eq!(items[0].not_synced.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn claude_hooks_stay_on_each_computer() -> Result<()> {
+        let home = tempfile::tempdir()?;
+        let file = home.path().join(".claude/settings.json");
+        fs::create_dir_all(file.parent().unwrap())?;
+        fs::write(&file, r#"{"model":"opus","hooks":{"Stop":[{"command":"/here/only"}]}}"#)?;
+        let g = Agents::new(home.path());
+        let shared = g.capture("claude/settings.json", None)?.unwrap();
+        assert_eq!(shared, json!({ "model": "opus" }));
+        // another computer's model, and a hook an older version sent along
+        let theirs = json!({ "model": "sonnet", "hooks": { "Stop": [{ "command": "/there/only" }] } });
+        g.apply("claude/settings.json", &theirs, Some(&shared), home.path())?;
+        let here: Value = serde_json::from_str(&fs::read_to_string(&file)?)?;
+        assert_eq!(here["model"], "sonnet");
+        assert_eq!(here["hooks"]["Stop"][0]["command"], "/here/only");
         Ok(())
     }
 }

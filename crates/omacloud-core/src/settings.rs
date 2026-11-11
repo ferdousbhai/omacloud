@@ -185,9 +185,11 @@ impl Manifest {
 
     /// Whether a shared file at `full` (`rel` under home) can sync: one
     /// shared through `**` is text of at most [`DEEP`]'s size.
+    /// Nor does what another program installed and manages there: that
+    /// belongs to the computer the program is on (see [`managed`]).
     #[must_use]
     pub fn admits(&self, rel: &Path, full: &Path) -> bool {
-        !self.deep(rel) || plain_text(full)
+        !self.deep(rel) || (plain_text(full) && !managed(rel, full))
     }
 
     /// Whether a shared path under `home` passes through a symlink below a
@@ -218,7 +220,7 @@ impl Manifest {
             }
             expand(home, Path::new(""), &components(pattern), &mut out);
         }
-        out.retain(|p| self.is_shared(p));
+        out.retain(|p| self.is_shared(p) && self.admits(p, &home.join(p)));
         out.sort();
         out.dedup();
         out
@@ -289,7 +291,7 @@ fn additions() -> &'static str {
 pub fn group_of(rel: &Path) -> &'static str {
     let mut parts = rel.components().map(|c| c.as_os_str().to_string_lossy());
     match (parts.next().as_deref(), parts.next().as_deref()) {
-        (Some(".claude" | ".codex" | ".gemini" | ".cursor" | ".pi" | ".grok" | ".copilot"), _)
+        (Some(".claude" | ".codex" | ".gemini" | ".cursor" | ".pi" | ".grok" | ".copilot" | ".agents"), _)
         | (Some(".config"), Some("opencode")) => "agents",
         (Some(".config"), Some("fish" | "git" | "nvim" | "mise" | "starship.toml" | "tmux" | "herdr")) => "shell",
         (Some(".config"), _) => "apps",
@@ -317,6 +319,36 @@ fn plain_text(path: &Path) -> bool {
     fs::File::open(path)
         .and_then(|f| f.take(8192).read_to_end(&mut head))
         .is_ok_and(|_| !head.contains(&0))
+}
+
+/// How a program marks a folder as its own: `.managed-by-<program>` in it.
+const MANAGED_MARKER: &str = ".managed-by-";
+
+/// Whether another program installed the file at `full` (`rel` under home)
+/// and keeps it: a folder on the way to it holds a `.managed-by-<program>`
+/// marker (a product's skill), or its first lines say it's managed by a
+/// program (an integration's hook or plugin, overwritten on its updates).
+fn managed(rel: &Path, full: &Path) -> bool {
+    use std::io::{BufRead, BufReader};
+    let marked = |dir: &Path| {
+        fs::read_dir(dir).is_ok_and(|entries| {
+            entries
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy().starts_with(MANAGED_MARKER))
+        })
+    };
+    // the folders of `rel`, from the file's own up to home's
+    let depth = rel.components().count().saturating_sub(1);
+    if full.ancestors().skip(1).take(depth).any(marked) {
+        return true;
+    }
+    fs::File::open(full).is_ok_and(|f| {
+        BufReader::new(f)
+            .lines()
+            .take(5)
+            .map_while(Result::ok)
+            .any(|line| line.to_lowercase().contains("managed by "))
+    })
 }
 
 /// A file name that holds a sign-in, a token or a key: never synced as a
@@ -629,12 +661,25 @@ mod tests {
         put(".codex/auth.json", b"{}");
         put(".config/herdr/config.toml", b"x = 1\n");
         put(".config/herdr/session.json", b"{}");
+        // a person's own skill, and what programs put beside it
+        put(".agents/skills/mine/SKILL.md", b"# Mine\n");
+        put(".agents/skills/product/SKILL.md", b"# A product's\n");
+        put(".agents/skills/product/.managed-by-product", b"");
+        put(".agents/skills/product/scripts/run.sh", b"echo\n");
+        put(".claude/hooks/state.sh", b"#!/bin/sh\n# installed by herdr\n");
+        put(".codex/hooks.json", b"{}");
+        put(".pi/agent/extensions/mine.ts", b"// my own\nexport {}\n");
+        put(
+            ".pi/agent/extensions/state.ts",
+            b"// installed by herdr\n// managed by herdr; updating overwrites this file.\n",
+        );
         std::os::unix::fs::symlink("/etc", h.join(".claude/skills/outside"))?;
         let m = Manifest::parse(BUNDLED)?;
         let files = m.shared_files(h);
         let has = |p: &str| files.contains(&PathBuf::from(p));
-        assert!(has(".claude/settings.json"));
         assert!(has(".claude/skills/review/SKILL.md"));
+        assert!(has(".agents/skills/mine/SKILL.md"));
+        assert!(has(".pi/agent/extensions/mine.ts"));
         assert!(has(".claude/skills/review/scripts/run.sh"));
         assert!(has(".config/herdr/config.toml"));
         for p in [
@@ -648,6 +693,14 @@ mod tests {
             ".claude/projects/x/session.jsonl",
             ".codex/auth.json",
             ".config/herdr/session.json",
+            // merged without its hooks instead (agents.rs)
+            ".claude/settings.json",
+            // another program's: hooks, a marked folder, a file that says so
+            ".claude/hooks/state.sh",
+            ".codex/hooks.json",
+            ".agents/skills/product/SKILL.md",
+            ".agents/skills/product/scripts/run.sh",
+            ".pi/agent/extensions/state.ts",
         ] {
             assert!(!has(p), "{p} must not sync");
         }
@@ -672,6 +725,7 @@ mod tests {
         assert!(Manifest::parse("shared a/**/b\n").is_err());
         assert_eq!(group_of(Path::new(".claude/skills/review/SKILL.md")), "agents");
         assert_eq!(group_of(Path::new(".config/opencode/opencode.json")), "agents");
+        assert_eq!(group_of(Path::new(".agents/skills/mine/SKILL.md")), "agents");
         assert_eq!(group_of(Path::new(".config/herdr/config.toml")), "shell");
         Ok(())
     }

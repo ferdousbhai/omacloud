@@ -159,21 +159,26 @@ project of their own ([docs/providers.md](docs/providers.md)).
   `shell.json`, and your shell's: `.bash_aliases`, `.inputrc`,
   git's settings, fish's `config.fish` and functions, Neovim, mise,
   lazygit, mpv and fastfetch (not `.bash_profile`, `.profile` or fish's
-  `conf.d`, where installers add lines for one machine), and herdr's
-  config.
-- **AI agents:** the settings, instructions (`CLAUDE.md`, `AGENTS.md`),
-  skills, hooks and themes of Claude Code, Codex, Gemini, opencode,
-  Cursor, pi, Grok and Copilot. Never their sign-ins, sessions, history,
-  caches or databases: any credential, auth or token file is refused by
-  name. API keys written into these settings files (a provider's
-  `apiKey`, an MCP server's env or headers) sync with them, end-to-end
-  encrypted; every computer of yours can read them. In skill and hook
-  folders only text files up to 2 MiB sync, without `node_modules`,
-  `.git` or caches. A file or folder linked in from elsewhere (a
-  `CLAUDE.md` pointing at your notes, say) is left as it is, and
-  `omacloud settings` lists it. Codex's trusted projects and pi's version
-  note stay with each computer while the rest of those files syncs. Edits on
-  two machines merge; when they can't, the app asks which to keep.
+  `conf.d`, where installers add lines for one machine), herdr's
+  config, the night light's hours and Omarchy's About and screensaver text.
+- **Theme:** the Omarchy theme you chose. Changed on one computer, it's set on
+  the others, as choosing it in the menu does; one not installed there waits.
+- **AI agents:** what you wrote or chose for them: the settings, instructions
+  (`CLAUDE.md`, `AGENTS.md`), skills (theirs and `~/.agents/skills`), commands
+  and themes of Claude Code, Codex, Gemini, opencode, pi, Grok and Copilot.
+  Never their sign-ins, sessions, history, caches or databases: any credential,
+  auth or token file is refused by name. API keys written into these settings
+  files (a provider's `apiKey`, an MCP server's env or headers) sync with them,
+  end-to-end encrypted; every computer of yours can read them. In skill folders
+  only text files up to 2 MiB sync, without `node_modules`, `.git` or caches.
+  What another program put there stays with the computer it's installed on:
+  hooks, a file that says it's managed by a program, and a skill a product
+  installed (its folder holds a `.managed-by-<program>` file). So hooks you
+  write yourself stay too, for now. A file or folder linked in from elsewhere
+  (a `CLAUDE.md` pointing at your notes, say) is left as it is, and `omacloud
+  settings` lists it. Codex's trusted projects and pi's version note stay with
+  each computer while the rest of those files syncs. Edits on two machines
+  merge; when they can't, the app asks which to keep.
 - **Chromium:** bookmarks, search engines, browser settings and the
   extensions you added from the Web Store, for each profile (matched by
   name). Edits on two computers merge; the same bookmark or setting

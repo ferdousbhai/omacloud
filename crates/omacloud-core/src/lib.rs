@@ -21,6 +21,7 @@ pub mod secrets;
 pub mod settings;
 pub mod shamir;
 pub mod sync;
+pub mod theme;
 pub mod throttle;
 pub mod wifi;
 

@@ -2495,7 +2495,8 @@ fn agent_settings_and_skills_travel_but_never_their_sign_ins() -> Result<()> {
         .into_iter()
         .find(|g| g.group == "agents")
         .unwrap();
-    assert!(agents.detail.starts_with("3 files"), "{}", agents.detail);
+    // settings.json isn't one of them: it merges without its hooks (agents.rs)
+    assert!(agents.detail.starts_with("2 files"), "{}", agents.detail);
     Ok(())
 }
 

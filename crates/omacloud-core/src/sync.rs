@@ -1231,7 +1231,7 @@ impl Engine {
             (
                 "agents",
                 "AI agents",
-                "Claude Code, Codex, opencode and others: settings, skills, hooks",
+                "Claude Code, Codex, opencode and others: settings, instructions, skills",
             ),
             (
                 "apps",
