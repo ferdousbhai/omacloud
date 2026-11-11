@@ -9,5 +9,5 @@ export PATH="$HOME/.cargo/bin:$PATH"
 out=public/drive
 rm -rf "${out:?}"
 mkdir -p "$out"
-cp ../web/index.html ../web/style.css ../web/app.js ../web/s3.js ../web/reader.js "$out/"
+cp ../web/index.html ../web/style.css ../web/*.js "$out/"
 cp "../${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/omacloud_web.wasm" "$out/"

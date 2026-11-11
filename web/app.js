@@ -3,6 +3,7 @@
 // repository's password stay in this page's memory: they go nowhere but into
 // requests to your bucket, and are gone when the tab closes or you lock it.
 
+import { pasted } from "./paste.js";
 import * as reader from "./reader.js";
 import { Bucket } from "./s3.js";
 
@@ -99,24 +100,6 @@ async function readFile(node, progress) {
 		parts.push(await readBlob(id));
 	}
 	return new Blob(parts, { type: kindOf(node.name).type });
-}
-
-// what `omacloud export` prints, taken apart
-function pasted(words) {
-	const quoted = (name) => words.match(new RegExp(`${name}='([^']*)'`))?.[1];
-	const repo = words.match(/-r\s+s3:(\S+)/)?.[1];
-	if (!repo) return null;
-	const url = new URL(repo);
-	const [bucketName, ...root] = url.pathname.split("/").filter(Boolean);
-	return {
-		endpoint: url.origin,
-		bucket: bucketName,
-		root: root.join("/"),
-		region: quoted("AWS_DEFAULT_REGION") || "auto",
-		key: quoted("AWS_ACCESS_KEY_ID"),
-		secret: quoted("AWS_SECRET_ACCESS_KEY"),
-		password: quoted("RESTIC_PASSWORD"),
-	};
 }
 
 async function connect(form) {
@@ -370,10 +353,21 @@ async function act(work) {
 }
 
 $("pasted").addEventListener("input", (event) => {
-	const found = pasted(event.target.value);
-	if (!found) return;
+	const text = event.target.value.trim();
+	const found = pasted(text);
 	const form = $("connect");
+	const status = (words) => ($("signin-status").textContent = words);
+	if (!found) {
+		status(text ? "That doesn't read as what omacloud export prints for a bucket. Paste all of its lines, or enter it by hand." : "");
+		return;
+	}
 	for (const [name, value] of Object.entries(found)) form.elements[name].value = value || "";
+	const missing = !found.key || !found.secret || !found.password;
+	status(
+		missing
+			? `Found ${found.bucket}, but not its key or the password: paste all the lines omacloud export prints.`
+			: `Found ${found.bucket} at ${new URL(found.endpoint).host}. Press Open.`,
+	);
 });
 // a field left empty while they're folded away: show them
 $("connect").addEventListener("invalid", () => ($("byhand").open = true), true);
