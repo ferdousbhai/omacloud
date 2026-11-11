@@ -2512,7 +2512,7 @@ dependencies = [
 
 [[package]]
 name = "omacloud"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "anyhow",
  "base64",
@@ -2535,7 +2535,7 @@ dependencies = [
 
 [[package]]
 name = "omacloud-app"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "gtk4",
  "libadwaita",
@@ -2545,7 +2545,7 @@ dependencies = [
 
 [[package]]
 name = "omacloud-core"
-version = "0.0.22"
+version = "0.0.23"
 dependencies = [
  "anyhow",
  "bytes",

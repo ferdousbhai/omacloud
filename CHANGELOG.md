@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.23 (2026-11-11)
 
 - **Storage is a bucket of your own again; the Omacloud network is gone.** The
   network had too few computers to keep a backup safely, and a household on one
