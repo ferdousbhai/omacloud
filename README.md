@@ -133,8 +133,9 @@ project of their own ([docs/providers.md](docs/providers.md)).
 - **Folders:** you choose, as on iCloud: setup shows switches for Desktop,
   Documents, Pictures, Music, Videos and Downloads with their sizes
   (Desktop, Documents and Pictures start on), and Overview has the same switches
-  later, with a switch for every other folder in your home under Other folders
-  in your home. Make a new folder in your home and a notification offers to
+  later: the folders every Omarchy computer has under Omarchy folders, and
+  folders of your own under Omacloud Drive, where Add a folder from your home has
+  a switch for every other folder in your home. Make a new folder in your home and a notification offers to
   sync it: click it. Switching one
   off on a computer keeps its files there and stops syncing it there only.
   Folders match by what they are, so a German computer's `Dokumente` is
@@ -143,8 +144,8 @@ project of their own ([docs/providers.md](docs/providers.md)).
   a subfolder. Change these at any time: what comes back loses nothing. Skipping
   keeps the cloud's copy; `omacloud folders remove Documents` takes it out, and no
   computer deletes its files.
-- **Every file, not kept here:** `omacloud mount` (or Every File in the
-  app's Overview) shows all your folders in `~/Omacloud`, read-only,
+- **Omacloud Drive, every file, kept here or not:** `omacloud mount` (or Browse
+  under Omacloud Drive in the app's Overview) shows all your folders in `~/Omacloud`, read-only,
   including those skipped on this computer; each file is downloaded when
   it's opened, as iCloud's online-only files are. So a small laptop can
   skip Pictures and still open any photo. It needs `fuse3` (Omarchy has

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The app's Overview tells the folders apart: Omarchy folders (Documents, Pictures
+  and the rest every Omarchy computer has), and Omacloud Drive, the folders of your
+  own, with Add a folder from your home and Browse. Every File is now Omacloud Drive.
 - A first slice of web access, not yet on omacloud.computer: a static page (`web/`)
   that lists and downloads an account's files from its S3 bucket, decrypting in the
   browser with `crates/omacloud-web` compiled to WebAssembly. It opens with what

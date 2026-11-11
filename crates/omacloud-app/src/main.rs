@@ -877,10 +877,10 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     });
     search.add_suffix(&launch);
     let folders = &s["folders"];
-    let mut folders_group = None;
+    let mut folder_groups = Vec::new();
     let mut folder_group_row = None;
     if folders.is_object() {
-        folders_group = Some(what_syncs(ui, s));
+        folder_groups = what_syncs(ui, s);
     } else {
         let folder = text(&s["folder"]);
         let folder_row = row("Folder", &folder);
@@ -931,25 +931,26 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     if let Some(r) = folder_group_row {
         sync.add(&r);
     }
-    let online = row(
-        "Every File",
-        "All your folders in ~/Omacloud, those not kept here too, each downloaded when opened",
-    );
-    let browse = button("Browse…", None);
-    let ui2 = ui.clone();
-    browse.connect_clicked(move |_| browse_online(&ui2));
-    online.add_suffix(&browse);
     let deleted = row("Recently Deleted", "Files deleted in the last 30 days, to put back");
     let show = button("Show…", None);
     let ui2 = ui.clone();
     show.connect_clicked(move |_| show_deleted(&ui2));
     deleted.add_suffix(&show);
     page.add(&sync);
-    if let Some(g) = folders_group {
-        page.add(&g);
+    let whole_folder = folder_groups.is_empty();
+    for g in &folder_groups {
+        page.add(g);
     }
-    let files = group("Your files", "");
-    files.add(&online);
+    let files = group(
+        "Your files",
+        "Anything named like name.nosync stays on this computer only.",
+    );
+    // syncing one whole folder, there are no folder groups to browse from
+    if whole_folder {
+        let online = row("Omacloud Drive", DRIVE_BROWSE);
+        online.add_suffix(&browse_button(ui));
+        files.add(&online);
+    }
     files.add(&deleted);
     files.add(&search);
     page.add(&files);
@@ -1171,16 +1172,25 @@ fn switch_row(title: &str, on: bool, flip: impl Fn(bool) + 'static) -> adw::Acti
     row
 }
 
-/// What syncs on this computer: the usual folders of home, the ones the
-/// account added, and Omarchy settings, each with a switch, as iCloud lists
-/// what it keeps in step.
-fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
-    let g = group(
-        "On this computer",
-        "Switch a folder off to keep its files here and stop syncing it on this computer; \
-         your other computers keep it. Anything named like name.nosync stays on this \
-         computer only.",
-    );
+/// What Browse shows.
+const DRIVE_BROWSE: &str = "Every folder in ~/Omacloud, to read, each file downloaded when opened";
+
+/// Opens the drive: every folder of the account, kept here or not.
+fn browse_button(ui: &Rc<Ui>) -> gtk::Button {
+    let browse = button("Browse…", Some("flat"));
+    let ui = ui.clone();
+    browse.connect_clicked(move |_| browse_online(&ui));
+    browse
+}
+
+/// The folders every Omarchy computer has, in their usual order.
+const OMARCHY_FOLDERS: [&str; 6] = ["Desktop", "Documents", "Pictures", "Music", "Videos", "Downloads"];
+
+/// What syncs on this computer, each with a switch, as iCloud lists what it
+/// keeps in step: the folders Omarchy gives every computer, which a person
+/// may or may not sync; Omacloud Drive, the folders of their own; and
+/// Omarchy settings.
+fn what_syncs(ui: &Rc<Ui>, s: &Value) -> Vec<adw::PreferencesGroup> {
     let empty = Vec::new();
     let folders = &s["folders"];
     let mut rows: Vec<(String, String, &'static str)> = Vec::new();
@@ -1193,15 +1203,9 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
     for f in folders["others"].as_array().unwrap_or(&empty) {
         rows.push((text(&f["name"]), text(&f["path"]), "off"));
     }
-    // the usual order, then the account's own additions
-    let order = |n: &str| {
-        ["Desktop", "Documents", "Pictures", "Music", "Videos", "Downloads"]
-            .iter()
-            .position(|u| *u == n)
-            .unwrap_or(99)
-    };
+    let order = |n: &str| OMARCHY_FOLDERS.iter().position(|u| *u == n);
     rows.sort_by(|a, b| order(&a.0).cmp(&order(&b.0)).then(a.0.cmp(&b.0)));
-    for (name, path, state) in rows {
+    let folder_row = |(name, path, state): (String, String, &'static str)| {
         let (ui2, name2) = (ui.clone(), name.clone());
         let r = switch_row(&name, state == "synced", move |want| {
             let name = name2.clone();
@@ -1230,14 +1234,32 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
             }
         });
         subtitle_with_size(&r, &path);
-        g.add(&r);
+        r
+    };
+    let (usual, own): (Vec<_>, Vec<_>) = rows.into_iter().partition(|r| order(&r.0).is_some());
+
+    let omarchy = group(
+        "Omarchy folders",
+        "The folders every Omarchy computer has. Switch on the ones you want on all your computers.",
+    );
+    for r in usual {
+        omarchy.add(&folder_row(r));
+    }
+
+    let drive = group(
+        "Omacloud Drive",
+        "Folders of your own, on all your computers. Browse opens every folder in ~/Omacloud, to read.",
+    );
+    drive.set_header_suffix(Some(&browse_button(ui)));
+    for r in own {
+        drive.add(&folder_row(r));
     }
     // every other folder of home, a switch each
     let more = folders["more"].as_array().unwrap_or(&empty);
     if !more.is_empty() {
         let x = adw::ExpanderRow::builder()
-            .title("Other folders in your home")
-            .subtitle("Switch one on to sync it on all your computers")
+            .title("Add a folder from your home")
+            .subtitle("Switch one on to put it on all your computers")
             .build();
         for f in more {
             let (name, ui2) = (text(&f["name"]), ui.clone());
@@ -1248,9 +1270,11 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
             r.set_subtitle(&short_path(&text(&f["path"])));
             x.add_row(&r);
         }
-        g.add(&x);
+        drive.add(&x);
     }
+
     // Omarchy settings, beside the folders, as iCloud lists more than files
+    let settings_group = group("Settings", "");
     let settings_on = s["settings"]["on"].as_bool().unwrap_or(false);
     let ui2 = ui.clone();
     let settings = switch_row("Omarchy settings", settings_on, move |want| {
@@ -1265,9 +1289,9 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
         );
     });
     settings.set_subtitle(SETTINGS_SYNCED);
-    g.add(&settings);
+    settings_group.add(&settings);
 
-    g
+    vec![omarchy, drive, settings_group]
 }
 
 /// The setup page's choice of what syncs, as iCloud asks on a new Mac:
