@@ -187,8 +187,12 @@ impl Manifest {
     /// shared through `**` is text of at most [`DEEP`]'s size.
     /// Nor does what another program installed and manages there: that
     /// belongs to the computer the program is on (see [`managed`]).
+    /// Of launchers and their icons, only a web app's sync (see [`web_app`]).
     #[must_use]
     pub fn admits(&self, rel: &Path, full: &Path) -> bool {
+        if let Some(ours) = web_app(rel, full) {
+            return ours;
+        }
         !self.deep(rel) || (plain_text(full) && !managed(rel, full))
     }
 
@@ -294,7 +298,7 @@ pub fn group_of(rel: &Path) -> &'static str {
         (Some(".claude" | ".codex" | ".gemini" | ".cursor" | ".pi" | ".grok" | ".copilot" | ".agents"), _)
         | (Some(".config"), Some("opencode")) => "agents",
         (Some(".config"), Some("fish" | "git" | "nvim" | "mise" | "starship.toml" | "tmux" | "herdr")) => "shell",
-        (Some(".config"), _) => "apps",
+        (Some(".config" | ".local"), _) => "apps",
         _ => "shell",
     }
 }
@@ -319,6 +323,50 @@ fn plain_text(path: &Path) -> bool {
     fs::File::open(path)
         .and_then(|f| f.take(8192).read_to_end(&mut head))
         .is_ok_and(|_| !head.contains(&0))
+}
+
+/// Where launchers and their icons are, under home.
+const LAUNCHERS: &str = ".local/share/applications";
+const ICONS: &str = ".local/share/icons/hicolor/256x256/apps";
+
+/// How Omarchy starts the web apps it installs: a launcher that runs one of
+/// these is a web app's.
+const WEB_APP_COMMANDS: [&str; 2] = ["omarchy-launch-webapp", "omarchy-webapp-handler"];
+
+/// The icon a web app's launcher names, `None` for any other launcher.
+fn web_app_icon(launcher: &Path) -> Option<String> {
+    let text = fs::read_to_string(launcher).ok()?;
+    let field = |name: &str| text.lines().find_map(|l| l.strip_prefix(name)).map(str::trim);
+    let runs = field("Exec=")?;
+    WEB_APP_COMMANDS
+        .iter()
+        .any(|c| {
+            runs.split_whitespace()
+                .next()
+                .is_some_and(|program| program.starts_with(c))
+        })
+        .then(|| field("Icon=").unwrap_or_default().to_string())
+}
+
+/// For a launcher or an icon at `full` (`rel` under home): whether it's a web
+/// app's, installed through Omarchy. Other programs put launchers and icons
+/// in the same folders, and those stay. `None` for any other file.
+fn web_app(rel: &Path, full: &Path) -> Option<bool> {
+    if rel.parent() == Some(Path::new(LAUNCHERS)) {
+        return Some(web_app_icon(full).is_some());
+    }
+    if rel.parent() != Some(Path::new(ICONS)) {
+        return None;
+    }
+    // an icon is a web app's when a web app's launcher here names it
+    let name = rel.file_stem()?.to_string_lossy().into_owned();
+    let home = full.ancestors().nth(rel.components().count())?;
+    let named = fs::read_dir(home.join(LAUNCHERS)).is_ok_and(|launchers| {
+        launchers
+            .flatten()
+            .any(|l| web_app_icon(&l.path()).is_some_and(|icon| icon == name))
+    });
+    Some(named)
 }
 
 /// How a program marks a folder as its own: `.managed-by-<program>` in it.
@@ -661,12 +709,31 @@ mod tests {
         put(".codex/auth.json", b"{}");
         put(".config/herdr/config.toml", b"x = 1\n");
         put(".config/herdr/session.json", b"{}");
+        // a web app's launcher and icon, and other programs' beside them
+        put(
+            ".local/share/applications/Maps.desktop",
+            b"[Desktop Entry]\nName=Maps\nExec=omarchy-launch-webapp https://maps.example\nIcon=maps\n",
+        );
+        put(
+            ".local/share/applications/Mail.desktop",
+            b"[Desktop Entry]\nName=Mail\nExec=omarchy-webapp-handler-mail %u\nIcon=mail\n",
+        );
+        put(
+            ".local/share/applications/editor.desktop",
+            b"[Desktop Entry]\nName=Editor\nExec=editor %F\nIcon=editor\n",
+        );
+        put(".local/share/icons/hicolor/256x256/apps/maps.png", b"\x89PNG\0\0");
+        put(".local/share/icons/hicolor/256x256/apps/editor.png", b"\x89PNG\0\0");
         // a person's own skill, and what programs put beside it
         put(".agents/skills/mine/SKILL.md", b"# Mine\n");
         put(".agents/skills/product/SKILL.md", b"# A product's\n");
         put(".agents/skills/product/.managed-by-product", b"");
         put(".agents/skills/product/scripts/run.sh", b"echo\n");
-        put(".claude/hooks/state.sh", b"#!/bin/sh\n# installed by herdr\n");
+        put(".claude/hooks/mine.sh", b"#!/bin/sh\necho mine\n");
+        put(
+            ".claude/hooks/state.sh",
+            b"#!/bin/sh\n# installed by herdr\n# managed by herdr; updating overwrites this file.\n",
+        );
         put(".codex/hooks.json", b"{}");
         put(".pi/agent/extensions/mine.ts", b"// my own\nexport {}\n");
         put(
@@ -680,6 +747,10 @@ mod tests {
         assert!(has(".claude/skills/review/SKILL.md"));
         assert!(has(".agents/skills/mine/SKILL.md"));
         assert!(has(".pi/agent/extensions/mine.ts"));
+        assert!(has(".claude/hooks/mine.sh"));
+        assert!(has(".local/share/applications/Maps.desktop"));
+        assert!(has(".local/share/applications/Mail.desktop"));
+        assert!(has(".local/share/icons/hicolor/256x256/apps/maps.png"));
         assert!(has(".claude/skills/review/scripts/run.sh"));
         assert!(has(".config/herdr/config.toml"));
         for p in [
@@ -695,9 +766,12 @@ mod tests {
             ".config/herdr/session.json",
             // merged without its hooks instead (agents.rs)
             ".claude/settings.json",
-            // another program's: hooks, a marked folder, a file that says so
-            ".claude/hooks/state.sh",
+            // another program's: a launcher and its icon, hooks, a marked
+            // folder, a file that says so
+            ".local/share/applications/editor.desktop",
+            ".local/share/icons/hicolor/256x256/apps/editor.png",
             ".codex/hooks.json",
+            ".claude/hooks/state.sh",
             ".agents/skills/product/SKILL.md",
             ".agents/skills/product/scripts/run.sh",
             ".pi/agent/extensions/state.ts",

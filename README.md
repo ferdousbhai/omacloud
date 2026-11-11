@@ -161,6 +161,9 @@ project of their own ([docs/providers.md](docs/providers.md)).
   lazygit, mpv and fastfetch (not `.bash_profile`, `.profile` or fish's
   `conf.d`, where installers add lines for one machine), herdr's
   config, the night light's hours and Omarchy's About and screensaver text.
+- **Web apps:** the ones you installed through Omarchy (Install > Web App), with
+  their icons: added or removed on one computer, they are on the others. Other
+  programs' launchers stay.
 - **Theme:** the Omarchy theme you chose. Changed on one computer, it's set on
   the others, as choosing it in the menu does; one not installed there waits.
 - **AI agents:** what you wrote or chose for them: the settings, instructions
@@ -172,9 +175,14 @@ project of their own ([docs/providers.md](docs/providers.md)).
   end-to-end encrypted; every computer of yours can read them. In skill folders
   only text files up to 2 MiB sync, without `node_modules`, `.git` or caches.
   What another program put there stays with the computer it's installed on:
-  hooks, a file that says it's managed by a program, and a skill a product
-  installed (its folder holds a `.managed-by-<program>` file). So hooks you
-  write yourself stay too, for now. A file or folder linked in from elsewhere
+  a file that says it's managed by a program, a skill a product installed
+  (its folder holds a `.managed-by-<program>` file), and hooks that run
+  something of that computer. In Claude Code's and Gemini's settings a hook
+  travels when what it runs does: its command names no file, or only files
+  that sync here, like a script of yours in `~/.claude/hooks` (write its path
+  with `~` or `$HOME` if your user name differs between computers). One that
+  runs a program's install or a checkout stays; so do the other agents' hook
+  files. A file or folder linked in from elsewhere
   (a `CLAUDE.md` pointing at your notes, say) is left as it is, and `omacloud
   settings` lists it. Codex's trusted projects and pi's version note stay with
   each computer while the rest of those files syncs. Edits on two machines

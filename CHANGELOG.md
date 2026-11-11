@@ -4,10 +4,14 @@
 
 - Settings sync takes only what's yours. Hooks and plugins other programs install
   into AI agents (herdr's, keep-going's) stay with the computer they're installed
-  on, as does a skill a product manages; Claude Code's and Gemini's settings sync
-  without their hooks. Your own skills in `~/.agents/skills` now sync, with opencode's
+  on, as does a skill a product manages. Your own skills in `~/.agents/skills` now sync, with opencode's
   and pi's instructions, commands and prompts, the night light's hours and Omarchy's
   About text. What stopped syncing stays where it is on every computer.
+- A hook you wrote for Claude Code or Gemini syncs when what it runs does: its
+  command names no file, or only files that sync, like a script in `~/.claude/hooks`.
+  Hooks that run a program's install or a checkout stay on their computer.
+- Web apps installed through Omarchy follow you, with their icons; removing one
+  removes it everywhere. Other programs' launchers stay.
 - Your Omarchy theme follows you: changed on one computer, it's set on the others
   (`omacloud settings skip theme` keeps a computer on its own).
 - One row for AI agents under What syncs: Codex's and pi's settings no longer have

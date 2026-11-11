@@ -1003,7 +1003,10 @@ fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
                     .into_iter()
                     .map(|c| Arc::new(c) as Arc<dyn omacloud_core::merged::Group>)
                     .collect();
-            groups.push(Arc::new(omacloud_core::agents::Agents::new(&home)));
+            let manifest = Manifest::load()?.skipping(&config.settings_skip);
+            groups.push(Arc::new(
+                omacloud_core::agents::Agents::new(&home).with_manifest(manifest.clone()),
+            ));
             let omarchy =
                 std::env::var_os("OMARCHY_PATH").map_or_else(|| PathBuf::from("/usr/share/omarchy"), PathBuf::from);
             groups.push(Arc::new(omacloud_core::theme::Theme::for_home(&home, &omarchy)));
@@ -1014,7 +1017,7 @@ fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
             groups.retain(|g| !config.settings_skip.contains(g.name()));
             Some(SettingsSetup {
                 home,
-                manifest: Manifest::load()?.skipping(&config.settings_skip),
+                manifest,
                 backups: paths.data.join("settings"),
                 packages: paths.data.join("packages"),
                 secrets: paths.data.join("secrets"),

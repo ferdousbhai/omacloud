@@ -10,8 +10,12 @@
 //! - pi's `~/.pi/agent/settings.json` records `lastChangelogVersion`, which
 //!   moves with each computer's updates: kept on each computer likewise.
 //! - Claude Code's `~/.claude/settings.json` and Gemini's
-//!   `~/.gemini/settings.json` hold `hooks`: commands other programs put
-//!   there, naming programs and paths of that computer. Kept likewise.
+//!   `~/.gemini/settings.json` hold `hooks`, a person's own beside those
+//!   other programs put there, with nothing to say whose each is. A hook
+//!   travels when everything it runs travels with it: its command names no
+//!   file, or only files that sync as settings (a script in
+//!   `~/.claude/hooks`). One naming a program's install, a checkout or a
+//!   script a program manages stays on its computer.
 //!
 //! Everything else the agents keep goes through the dots manifest as plain
 //! settings files.
@@ -25,14 +29,17 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 
-use crate::merged::{self, Concern, Group, Item, ME, Merged};
+use crate::{
+    merged::{self, Concern, Group, Item, ME, Merged},
+    settings::Manifest,
+};
 
 /// Each file: its document, where it is under home, and its kind.
 const FILES: &[(&str, &str, Kind)] = &[
     ("codex/config.json", ".codex/config.toml", Kind::CodexToml),
     ("pi/settings.json", ".pi/agent/settings.json", Kind::Json(PI_LOCAL)),
-    ("claude/settings.json", ".claude/settings.json", Kind::Json(HOOKS)),
-    ("gemini/settings.json", ".gemini/settings.json", Kind::Json(HOOKS)),
+    ("claude/settings.json", ".claude/settings.json", Kind::Hooked),
+    ("gemini/settings.json", ".gemini/settings.json", Kind::Hooked),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,13 +48,70 @@ enum Kind {
     CodexToml,
     /// JSON, without these machine-only keys.
     Json(&'static [&'static str]),
+    /// JSON whose `hooks` travel only in part (see [`Agents::travels`]).
+    Hooked,
 }
 
 /// The machine-only keys of pi's settings.
 const PI_LOCAL: &[&str] = &["lastChangelogVersion"];
 
-/// The machine-only key of Claude Code's and Gemini's settings.
-const HOOKS: &[&str] = &["hooks"];
+/// Where Claude Code's and Gemini's settings keep their hooks.
+const HOOKS: &str = "hooks";
+
+/// `hooks` (each event's groups, each group's handlers) as two: the handlers
+/// `travels` passes, and the rest. A part with nothing in it is `None`;
+/// hooks laid out any other way all stay.
+fn split_hooks(hooks: &Value, travels: &dyn Fn(&Value) -> bool) -> (Option<Value>, Option<Value>) {
+    let Some(events) = hooks.as_object() else {
+        return (None, Some(hooks.clone()));
+    };
+    let (mut shared, mut local) = (serde_json::Map::new(), serde_json::Map::new());
+    for (event, groups) in events {
+        let Some(groups) = groups.as_array() else {
+            _ = local.insert(event.clone(), groups.clone());
+            continue;
+        };
+        let (mut go, mut stay) = (Vec::new(), Vec::new());
+        for group in groups {
+            let Some(handlers) = group.get(HOOKS).and_then(Value::as_array) else {
+                stay.push(group.clone());
+                continue;
+            };
+            let (a, b): (Vec<Value>, Vec<Value>) = handlers.iter().cloned().partition(|h| travels(h));
+            for (part, into) in [(a, &mut go), (b, &mut stay)] {
+                if !part.is_empty() {
+                    let mut g = group.clone();
+                    g[HOOKS] = Value::Array(part);
+                    into.push(g);
+                }
+            }
+        }
+        for (part, into) in [(go, &mut shared), (stay, &mut local)] {
+            if !part.is_empty() {
+                _ = into.insert(event.clone(), Value::Array(part));
+            }
+        }
+    }
+    let some = |m: serde_json::Map<String, Value>| (!m.is_empty()).then_some(Value::Object(m));
+    (some(shared), some(local))
+}
+
+/// The hooks that travel with this computer's own after them.
+fn join_hooks(shared: Option<Value>, local: Option<Value>) -> Option<Value> {
+    let (Some(mut all), Some(local)) = (shared.clone(), local.clone()) else {
+        return shared.or(local);
+    };
+    let (Some(events), Some(mine)) = (all.as_object_mut(), local.as_object()) else {
+        return Some(local);
+    };
+    for (event, groups) in mine {
+        match (events.get_mut(event).and_then(Value::as_array_mut), groups.as_array()) {
+            (Some(there), Some(groups)) => there.extend(groups.iter().cloned()),
+            _ => _ = events.insert(event.clone(), groups.clone()),
+        }
+    }
+    Some(all)
+}
 
 /// The agent a document belongs to, as people call it.
 fn agent(doc: &str) -> &'static str {
@@ -63,6 +127,8 @@ fn agent(doc: &str) -> &'static str {
 #[derive(Debug, Clone)]
 pub struct Agents {
     home: PathBuf,
+    /// Which files of home sync as settings: a hook travels with those.
+    manifest: Manifest,
 }
 
 impl Agents {
@@ -70,7 +136,46 @@ impl Agents {
     pub fn new(home: &Path) -> Self {
         Self {
             home: home.to_path_buf(),
+            manifest: Manifest::bundled(),
         }
+    }
+
+    /// With the manifest in use here, instead of the bundled one.
+    #[must_use]
+    pub fn with_manifest(mut self, manifest: Manifest) -> Self {
+        self.manifest = manifest;
+        self
+    }
+
+    /// Whether a hook's handler travels: one with no command to run (a
+    /// prompt), or whose command names no file but ones that sync as
+    /// settings. Any other path (a program's install, a checkout, a script a
+    /// program manages) belongs to this computer, and so does the hook.
+    /// Whether a file is here yet doesn't count: a script may arrive after
+    /// the hook that runs it.
+    fn travels(&self, handler: &Value) -> bool {
+        let Some(command) = handler.get("command").and_then(Value::as_str) else {
+            return true;
+        };
+        let home = self.home.to_string_lossy();
+        command
+            .split(|c: char| c.is_whitespace() || "'\"`;|&<>()=".contains(c))
+            .filter_map(|word| {
+                let rest = ["~/", "$HOME/", "${HOME}/"].iter().find_map(|p| word.strip_prefix(p));
+                match rest {
+                    Some(rest) => Some(format!("{home}/{rest}")),
+                    None => word.starts_with('/').then(|| word.to_string()),
+                }
+            })
+            .filter(|path| !["/dev/null", "/dev/stdout", "/dev/stderr"].contains(&path.as_str()))
+            .all(|path| {
+                let full = Path::new(&path);
+                full.strip_prefix(&self.home).is_ok_and(|rel| {
+                    self.manifest.is_shared(rel)
+                        && !self.manifest.through_link(&self.home, rel)
+                        && (!full.exists() || self.manifest.admits(rel, full))
+                })
+            })
     }
 
     fn file(doc: &str) -> Option<(&'static str, Kind)> {
@@ -241,6 +346,15 @@ impl Group for Agents {
                 }
                 v
             }),
+            Kind::Hooked => serde_json::from_str::<Value>(&text).ok().map(|mut v| {
+                if let Some(m) = v.as_object_mut()
+                    && let Some(hooks) = m.remove(HOOKS)
+                    && let (Some(shared), _) = split_hooks(&hooks, &|h| self.travels(h))
+                {
+                    _ = m.insert(HOOKS.to_string(), shared);
+                }
+                v
+            }),
         })
     }
 
@@ -274,6 +388,25 @@ impl Group for Agents {
                         if let Some(x) = mine.get(*k) {
                             _ = m.insert((*k).to_string(), x.clone());
                         }
+                    }
+                }
+                let mut t = serde_json::to_string_pretty(&v)?;
+                t.push('\n');
+                t
+            }
+            Kind::Hooked => {
+                let mut v = value.clone();
+                let mine: Option<Value> = here.as_deref().and_then(|h| serde_json::from_str(h).ok());
+                if let Some(m) = v.as_object_mut() {
+                    // this computer's own hooks stay, after the ones that travel
+                    let travels = |h: &Value| self.travels(h);
+                    let shared = m.remove(HOOKS).and_then(|h| split_hooks(&h, &travels).0);
+                    let local = mine
+                        .as_ref()
+                        .and_then(|mine| mine.get(HOOKS))
+                        .and_then(|h| split_hooks(h, &travels).1);
+                    if let Some(hooks) = join_hooks(shared, local) {
+                        _ = m.insert(HOOKS.to_string(), hooks);
                     }
                 }
                 let mut t = serde_json::to_string_pretty(&v)?;
@@ -502,20 +635,65 @@ trust_level = "trusted"
     }
 
     #[test]
-    fn claude_hooks_stay_on_each_computer() -> Result<()> {
+    fn a_hook_travels_when_what_it_runs_does() -> Result<()> {
         let home = tempfile::tempdir()?;
+        let h = home.path().to_string_lossy().into_owned();
         let file = home.path().join(".claude/settings.json");
-        fs::create_dir_all(file.parent().unwrap())?;
-        fs::write(&file, r#"{"model":"opus","hooks":{"Stop":[{"command":"/here/only"}]}}"#)?;
+        fs::create_dir_all(home.path().join(".claude/hooks"))?;
+        fs::write(home.path().join(".claude/hooks/mine.sh"), "#!/bin/sh\necho mine\n")?;
+        fs::write(
+            home.path().join(".claude/hooks/theirs.sh"),
+            "#!/bin/sh\n# managed by a program; updating overwrites this file.\n",
+        )?;
+        let hook = |command: &str| json!({ "type": "command", "command": command });
+        let mine = hook(&format!("bash '{h}/.claude/hooks/mine.sh' stop"));
+        let bare = hook("notify-send done > /dev/null");
+        let prompt = json!({ "type": "prompt", "prompt": "Check the work." });
+        let managed = hook(&format!("bash '{h}/.claude/hooks/theirs.sh' session"));
+        let installed = hook("node '/usr/lib/a-program/hook.mjs' claude");
+        let checkout = hook(&format!("LOG='{h}/.local/state/x.log' node {h}/code/tool/hook.mjs"));
+        let here = json!({
+            "model": "opus",
+            "hooks": {
+                "Stop": [
+                    { "hooks": [installed.clone(), mine.clone()] },
+                    { "matcher": "x", "hooks": [bare.clone(), prompt.clone()] },
+                ],
+                "SessionStart": [{ "hooks": [managed.clone(), checkout.clone()] }],
+            },
+        });
+        fs::write(&file, serde_json::to_string(&here)?)?;
         let g = Agents::new(home.path());
         let shared = g.capture("claude/settings.json", None)?.unwrap();
-        assert_eq!(shared, json!({ "model": "opus" }));
-        // another computer's model, and a hook an older version sent along
-        let theirs = json!({ "model": "sonnet", "hooks": { "Stop": [{ "command": "/there/only" }] } });
+        assert_eq!(
+            shared,
+            json!({
+                "model": "opus",
+                "hooks": { "Stop": [{ "hooks": [mine] }, { "matcher": "x", "hooks": [bare, prompt] }] },
+            })
+        );
+        // another computer's model and a hook of its person's own arrive:
+        // this computer's own hooks stay, and nothing is taken for a change
+        let theirs_own = hook("notify-send started");
+        let mut theirs = shared.clone();
+        theirs["model"] = json!("sonnet");
+        theirs["hooks"]["SessionStart"] = json!([{ "hooks": [theirs_own] }]);
         g.apply("claude/settings.json", &theirs, Some(&shared), home.path())?;
-        let here: Value = serde_json::from_str(&fs::read_to_string(&file)?)?;
-        assert_eq!(here["model"], "sonnet");
-        assert_eq!(here["hooks"]["Stop"][0]["command"], "/here/only");
+        let now: Value = serde_json::from_str(&fs::read_to_string(&file)?)?;
+        assert_eq!(now["model"], "sonnet");
+        let text = now["hooks"].to_string();
+        for kept in [
+            "/usr/lib/a-program/hook.mjs",
+            "theirs.sh",
+            "code/tool/hook.mjs",
+            "notify-send started",
+        ] {
+            assert!(text.contains(kept), "{kept} missing from {text}");
+        }
+        assert_eq!(g.capture("claude/settings.json", None)?.unwrap(), theirs);
+        // hooks laid out some other way all stay
+        fs::write(&file, r#"{"hooks":["odd"]}"#)?;
+        assert_eq!(g.capture("claude/settings.json", None)?.unwrap(), json!({}));
         Ok(())
     }
 }
