@@ -94,3 +94,29 @@ and are tried again.
 - **Hetzner:** create the bucket with object lock, and a second, plain bucket
   for the records, as Hetzner can't do create-only writes with object lock on:
   `--coordination-bucket <name>`. Both take the same key.
+
+## Reading in a browser
+
+Not on omacloud.computer yet; [web/README.md](../web/README.md) has where it stands.
+The page reads your files straight from your storage and decrypts them in the
+browser, so no server of Omacloud's carries them. Dropbox needs nothing for that.
+A bucket needs one rule, set once: let pages from `https://omacloud.computer`
+read it (CORS). It lets a browser on that site show what it fetched; it opens
+nothing to anyone without the bucket's key. With a second bucket for the records,
+set it on both.
+
+The key your computers hold can't change a bucket's settings, so set it at the
+provider:
+
+- **R2:** in the bucket's Settings, under CORS Policy, add:
+
+  ```json
+  [{ "AllowedOrigins": ["https://omacloud.computer"], "AllowedMethods": ["GET", "HEAD"], "AllowedHeaders": ["range"], "MaxAgeSeconds": 3600 }]
+  ```
+
+- **Other S3 storage:** the same rule through the provider's console or its
+  `PutBucketCors`: origin `https://omacloud.computer`, methods `GET` and `HEAD`,
+  header `range`.
+
+Without the rule, requests to an R2 bucket still succeed but carry no
+`Access-Control-Allow-Origin`, so a browser refuses to hand the page what came back.
