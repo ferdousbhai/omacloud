@@ -61,11 +61,13 @@ shared .local/share/icons/hicolor/256x256/apps/*
 # What another program put there stays with the computer it's installed on:
 # a file that says it's managed by a program (herdr's hook scripts), a folder
 # with a `.managed-by-<program>` marker (a product's own skill), and hooks
-# that run something of one computer. Claude Code's and Gemini's
-# settings.json sync with the hooks whose commands name only files that sync
-# here (a person's script in ~/.claude/hooks); the other agents' hook files
-# aren't listed. Codex's config.toml and pi's settings.json sync without
-# their machine-only parts (project trust, version notes): see agents.rs.
+# that run something of one computer. Hooks sync when their commands name
+# only files that sync here (a person's script in ~/.claude/hooks) or no file
+# at all: in Claude Code's and Gemini's settings.json, and in Antigravity's,
+# Codex's and Cursor's hooks.json, none of which are listed here (agents.rs
+# merges them). Grok's and Copilot's hook files stay. Codex's config.toml and
+# pi's settings.json sync without their machine-only parts (project trust,
+# version notes, the device's id): see agents.rs.
 shared .agents/skills/**
 shared .claude/CLAUDE.md
 shared .claude/keybindings.json

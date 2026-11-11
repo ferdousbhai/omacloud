@@ -177,15 +177,15 @@ project of their own ([docs/providers.md](docs/providers.md)).
   What another program put there stays with the computer it's installed on:
   a file that says it's managed by a program, a skill a product installed
   (its folder holds a `.managed-by-<program>` file), and hooks that run
-  something of that computer. In Claude Code's and Gemini's settings a hook
-  travels when what it runs does: its command names no file, or only files
-  that sync here, like a script of yours in `~/.claude/hooks` (write its path
-  with `~` or `$HOME` if your user name differs between computers). One that
-  runs a program's install or a checkout stays; so do the other agents' hook
-  files. A file or folder linked in from elsewhere
+  something of that computer. A hook travels when what it runs does: its
+  command names no file (`keep-going hook claude`), or only files that sync
+  here, like a script of yours in `~/.claude/hooks` (write its path with `~`
+  or `$HOME` if your user name differs between computers). One that runs a
+  program's install or a checkout stays. That holds for Claude Code, Gemini,
+  Antigravity, Codex and Cursor; Grok's and Copilot's hook files stay. A file or folder linked in from elsewhere
   (a `CLAUDE.md` pointing at your notes, say) is left as it is, and `omacloud
-  settings` lists it. Codex's trusted projects and pi's version note stay with
-  each computer while the rest of those files syncs. Edits on two machines
+  settings` lists it. Codex's trusted projects and pi's version note and device
+  id stay with each computer while the rest of those files syncs. Edits on two machines
   merge; when they can't, the app asks which to keep.
 - **Chromium:** bookmarks, search engines, browser settings and the
   extensions you added from the Web Store, for each profile (matched by

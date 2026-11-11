@@ -7,9 +7,11 @@
   on, as does a skill a product manages. Your own skills in `~/.agents/skills` now sync, with opencode's
   and pi's instructions, commands and prompts, the night light's hours and Omarchy's
   About text. What stopped syncing stays where it is on every computer.
-- A hook you wrote for Claude Code or Gemini syncs when what it runs does: its
-  command names no file, or only files that sync, like a script in `~/.claude/hooks`.
-  Hooks that run a program's install or a checkout stay on their computer.
+- A hook syncs when what it runs does: its command names no file (as keep-going's
+  package now registers, `keep-going hook <host>`), or only files that sync, like a
+  script of yours in `~/.claude/hooks`. Hooks that run a program's install or a
+  checkout stay on their computer. For Claude Code, Gemini, Antigravity, Codex and
+  Cursor. pi's device id stays on each computer too.
 - Web apps installed through Omarchy follow you, with their icons; removing one
   removes it everywhere. Other programs' launchers stay.
 - Your Omarchy theme follows you: changed on one computer, it's set on the others

@@ -8,14 +8,17 @@
 //!   from elsewhere is written in. The rest keeps its comments and order
 //!   (`toml_edit`).
 //! - pi's `~/.pi/agent/settings.json` records `lastChangelogVersion`, which
-//!   moves with each computer's updates: kept on each computer likewise.
+//!   moves with each computer's updates, and `deviceId`, which names the
+//!   computer: kept on each computer likewise.
 //! - Claude Code's `~/.claude/settings.json` and Gemini's
 //!   `~/.gemini/settings.json` hold `hooks`, a person's own beside those
 //!   other programs put there, with nothing to say whose each is. A hook
 //!   travels when everything it runs travels with it: its command names no
 //!   file, or only files that sync as settings (a script in
 //!   `~/.claude/hooks`). One naming a program's install, a checkout or a
-//!   script a program manages stays on its computer.
+//!   script a program manages stays on its computer. The same goes for the
+//!   files that hold nothing but hooks: Antigravity's
+//!   `~/.gemini/config/hooks.json`, Codex's and Cursor's `hooks.json`.
 //!
 //! Everything else the agents keep goes through the dots manifest as plain
 //! settings files.
@@ -40,6 +43,9 @@ const FILES: &[(&str, &str, Kind)] = &[
     ("pi/settings.json", ".pi/agent/settings.json", Kind::Json(PI_LOCAL)),
     ("claude/settings.json", ".claude/settings.json", Kind::Hooked),
     ("gemini/settings.json", ".gemini/settings.json", Kind::Hooked),
+    ("agy/hooks.json", ".gemini/config/hooks.json", Kind::Hooks),
+    ("codex/hooks.json", ".codex/hooks.json", Kind::Hooks),
+    ("cursor/hooks.json", ".cursor/hooks.json", Kind::Hooks),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,67 +56,108 @@ enum Kind {
     Json(&'static [&'static str]),
     /// JSON whose `hooks` travel only in part (see [`Agents::travels`]).
     Hooked,
+    /// A file of nothing but hooks, which travel only in part likewise.
+    Hooks,
 }
 
 /// The machine-only keys of pi's settings.
-const PI_LOCAL: &[&str] = &["lastChangelogVersion"];
+const PI_LOCAL: &[&str] = &["lastChangelogVersion", "deviceId"];
 
 /// Where Claude Code's and Gemini's settings keep their hooks.
 const HOOKS: &str = "hooks";
 
-/// `hooks` (each event's groups, each group's handlers) as two: the handlers
-/// `travels` passes, and the rest. A part with nothing in it is `None`;
-/// hooks laid out any other way all stay.
-fn split_hooks(hooks: &Value, travels: &dyn Fn(&Value) -> bool) -> (Option<Value>, Option<Value>) {
-    let Some(events) = hooks.as_object() else {
-        return (None, Some(hooks.clone()));
-    };
-    let (mut shared, mut local) = (serde_json::Map::new(), serde_json::Map::new());
-    for (event, groups) in events {
-        let Some(groups) = groups.as_array() else {
-            _ = local.insert(event.clone(), groups.clone());
-            continue;
-        };
-        let (mut go, mut stay) = (Vec::new(), Vec::new());
-        for group in groups {
-            let Some(handlers) = group.get(HOOKS).and_then(Value::as_array) else {
-                stay.push(group.clone());
-                continue;
-            };
-            let (a, b): (Vec<Value>, Vec<Value>) = handlers.iter().cloned().partition(|h| travels(h));
-            for (part, into) in [(a, &mut go), (b, &mut stay)] {
-                if !part.is_empty() {
-                    let mut g = group.clone();
-                    g[HOOKS] = Value::Array(part);
-                    into.push(g);
-                }
-            }
-        }
-        for (part, into) in [(go, &mut shared), (stay, &mut local)] {
-            if !part.is_empty() {
-                _ = into.insert(event.clone(), Value::Array(part));
-            }
-        }
-    }
-    let some = |m: serde_json::Map<String, Value>| (!m.is_empty()).then_some(Value::Object(m));
-    (some(shared), some(local))
+/// What a hook runs, if `v` is a hook's handler: its command, as the
+/// agents spell it.
+fn command(v: &Value) -> Option<&str> {
+    ["command", "bash"]
+        .iter()
+        .find_map(|k| v.get(*k).and_then(Value::as_str))
 }
 
-/// The hooks that travel with this computer's own after them.
+/// Hooks as two: what travels, and what stays on this computer. A handler
+/// (see [`command`]) goes whole to one side, by `travels`; what holds
+/// handlers (an event's list, a group with its matcher, a file keyed by
+/// program) is on each side that got any of them, with its plain fields on
+/// both; anything that runs nothing travels. A side with nothing is `None`.
+/// The agents lay hooks out differently, so this follows no one layout.
+fn split_hooks(v: &Value, travels: &dyn Fn(&Value) -> bool) -> (Option<Value>, Option<Value>) {
+    let holds = |c: &Value| match c {
+        Value::Object(m) => !m.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        _ => false,
+    };
+    match v {
+        Value::Object(_) if command(v).is_some() => {
+            if travels(v) {
+                (Some(v.clone()), None)
+            } else {
+                (None, Some(v.clone()))
+            }
+        }
+        Value::Object(m) if m.values().any(holds) => {
+            let plain: serde_json::Map<String, Value> = m
+                .iter()
+                .filter(|(_, c)| !holds(c))
+                .map(|(k, c)| (k.clone(), c.clone()))
+                .collect();
+            let (mut go, mut stay) = (plain.clone(), plain);
+            let (mut any_go, mut any_stay) = (false, false);
+            for (k, c) in m.iter().filter(|(_, c)| holds(c)) {
+                let (a, b) = split_hooks(c, travels);
+                if let Some(a) = a {
+                    _ = go.insert(k.clone(), a);
+                    any_go = true;
+                }
+                if let Some(b) = b {
+                    _ = stay.insert(k.clone(), b);
+                    any_stay = true;
+                }
+            }
+            (
+                any_go.then_some(Value::Object(go)),
+                any_stay.then_some(Value::Object(stay)),
+            )
+        }
+        Value::Array(items) if !items.is_empty() => {
+            let (mut go, mut stay) = (Vec::new(), Vec::new());
+            for item in items {
+                let (a, b) = split_hooks(item, travels);
+                go.extend(a);
+                stay.extend(b);
+            }
+            let some = |part: Vec<Value>| (!part.is_empty()).then_some(Value::Array(part));
+            (some(go), some(stay))
+        }
+        _ => (Some(v.clone()), None),
+    }
+}
+
+/// The hooks that travel with this computer's own after them: the reverse
+/// of [`split_hooks`].
 fn join_hooks(shared: Option<Value>, local: Option<Value>) -> Option<Value> {
-    let (Some(mut all), Some(local)) = (shared.clone(), local.clone()) else {
-        return shared.or(local);
-    };
-    let (Some(events), Some(mine)) = (all.as_object_mut(), local.as_object()) else {
-        return Some(local);
-    };
-    for (event, groups) in mine {
-        match (events.get_mut(event).and_then(Value::as_array_mut), groups.as_array()) {
-            (Some(there), Some(groups)) => there.extend(groups.iter().cloned()),
-            _ => _ = events.insert(event.clone(), groups.clone()),
+    fn merge(a: Value, b: Value) -> Value {
+        match (a, b) {
+            (Value::Object(mut a), Value::Object(b)) => {
+                for (k, theirs) in b {
+                    let both = match a.remove(&k) {
+                        Some(ours) => merge(ours, theirs),
+                        None => theirs,
+                    };
+                    _ = a.insert(k, both);
+                }
+                Value::Object(a)
+            }
+            (Value::Array(mut a), Value::Array(b)) => {
+                a.extend(b);
+                Value::Array(a)
+            }
+            (a, _) => a,
         }
     }
-    Some(all)
+    match (shared, local) {
+        (Some(a), Some(b)) => Some(merge(a, b)),
+        (a, b) => a.or(b),
+    }
 }
 
 /// The agent a document belongs to, as people call it.
@@ -119,6 +166,8 @@ fn agent(doc: &str) -> &'static str {
         Some("codex") => "Codex",
         Some("claude") => "Claude Code",
         Some("gemini") => "Gemini",
+        Some("agy") => "Antigravity",
+        Some("cursor") => "Cursor",
         _ => "pi",
     }
 }
@@ -154,7 +203,7 @@ impl Agents {
     /// Whether a file is here yet doesn't count: a script may arrive after
     /// the hook that runs it.
     fn travels(&self, handler: &Value) -> bool {
-        let Some(command) = handler.get("command").and_then(Value::as_str) else {
+        let Some(command) = command(handler) else {
             return true;
         };
         let home = self.home.to_string_lossy();
@@ -355,6 +404,9 @@ impl Group for Agents {
                 }
                 v
             }),
+            Kind::Hooks => serde_json::from_str::<Value>(&text)
+                .ok()
+                .map(|v| split_hooks(&v, &|h| self.travels(h)).0.unwrap_or_else(|| json!({}))),
         })
     }
 
@@ -413,6 +465,15 @@ impl Group for Agents {
                 t.push('\n');
                 t
             }
+            Kind::Hooks => {
+                let travels = |h: &Value| self.travels(h);
+                let mine: Option<Value> = here.as_deref().and_then(|h| serde_json::from_str(h).ok());
+                let local = mine.as_ref().and_then(|mine| split_hooks(mine, &travels).1);
+                let all = join_hooks(split_hooks(value, &travels).0, local).unwrap_or_else(|| json!({}));
+                let mut t = serde_json::to_string_pretty(&all)?;
+                t.push('\n');
+                t
+            }
         };
         if here.as_deref() == Some(new.as_str()) {
             return Ok(());
@@ -462,7 +523,7 @@ impl Group for Agents {
         let docs = self.docs();
         let linked: Vec<String> = FILES
             .iter()
-            .filter(|(_, f, _)| self.linked(f))
+            .filter(|(_, f, _)| self.linked(f) && self.home.join(f).exists())
             .map(|(_, f, _)| format!("~/{f}: a link, left as it is"))
             .collect();
         if docs.is_empty() {
@@ -691,9 +752,53 @@ trust_level = "trusted"
             assert!(text.contains(kept), "{kept} missing from {text}");
         }
         assert_eq!(g.capture("claude/settings.json", None)?.unwrap(), theirs);
-        // hooks laid out some other way all stay
+        // what runs nothing travels, however it's laid out
         fs::write(&file, r#"{"hooks":["odd"]}"#)?;
-        assert_eq!(g.capture("claude/settings.json", None)?.unwrap(), json!({}));
+        assert_eq!(
+            g.capture("claude/settings.json", None)?.unwrap(),
+            json!({ "hooks": ["odd"] })
+        );
+
+        // a file of hooks keyed by program, flat under each event (Antigravity)
+        let file = home.path().join(".gemini/config/hooks.json");
+        fs::create_dir_all(file.parent().unwrap())?;
+        let path_free =
+            json!({ "type": "command", "command": "command -v tool >/dev/null || exit 0; LOG=1 tool hook agy" });
+        let script =
+            json!({ "type": "command", "command": format!("bash '{h}/.gemini/config/hooks/state.sh' session") });
+        fs::write(
+            &file,
+            serde_json::to_string(&json!({
+                "other": { "PreInvocation": [script.clone()] },
+                "tool": { "Stop": [path_free.clone()] },
+            }))?,
+        )?;
+        let shared = g.capture("agy/hooks.json", None)?.unwrap();
+        assert_eq!(shared, json!({ "tool": { "Stop": [path_free] } }));
+        // on a computer with hooks of its own, both are there afterwards
+        fs::write(
+            &file,
+            serde_json::to_string(&json!({ "other": { "PreInvocation": [script.clone()] } }))?,
+        )?;
+        g.apply("agy/hooks.json", &shared, None, home.path())?;
+        let now: Value = serde_json::from_str(&fs::read_to_string(&file)?)?;
+        assert_eq!(now["other"]["PreInvocation"][0], script);
+        assert_eq!(g.capture("agy/hooks.json", None)?.unwrap(), shared);
+        // Cursor's: a version beside the events, and `command` alone
+        let cursor = json!({ "version": 1, "hooks": { "stop": [{ "command": "tool hook cursor" }, { "command": "/opt/x/run" }] } });
+        let (go, stay) = split_hooks(&cursor, &|h| g.travels(h));
+        assert_eq!(
+            go.unwrap(),
+            json!({ "version": 1, "hooks": { "stop": [{ "command": "tool hook cursor" }] } })
+        );
+        assert_eq!(
+            stay.clone().unwrap(),
+            json!({ "version": 1, "hooks": { "stop": [{ "command": "/opt/x/run" }] } })
+        );
+        assert_eq!(
+            join_hooks(split_hooks(&cursor, &|h| g.travels(h)).0, stay).unwrap(),
+            cursor
+        );
         Ok(())
     }
 }
