@@ -176,6 +176,8 @@ impl Alerts {
         }
     }
 
+    /// Clicking the notification is its `default` action: the only one
+    /// Omarchy's shell runs, as it shows no buttons.
     fn offer_folder(&self, home: &Path, name: &str) {
         let (name, path) = (name.to_string(), home.join(name));
         let config = self.config.clone();
@@ -184,16 +186,18 @@ impl Alerts {
                 .args([
                     "--app-name=Omacloud",
                     "--icon=folder-remote",
-                    &format!("--action=sync=Sync {name}"),
+                    // as long as Omarchy's shell shows one
+                    "--expire-time=30000",
+                    &format!("--action=default=Sync {name}"),
                     &format!("Sync {name}?"),
-                    &format!("~/{name} is new on this computer. Syncing it puts it on all your computers."),
+                    &format!("~/{name} is new on this computer. Click to sync it on all your computers."),
                 ])
                 .stderr(Stdio::null())
                 .output()
             else {
                 return;
             };
-            if String::from_utf8_lossy(&out.stdout).trim() != "sync" {
+            if String::from_utf8_lossy(&out.stdout).trim() != "default" {
                 return;
             }
             let mut add = Command::new("omacloud");
@@ -222,7 +226,7 @@ impl Alerts {
                 .args([
                     "--app-name=Omacloud",
                     "--icon=folder-remote",
-                    "--action=open=Open",
+                    "--action=default=Open",
                     &summary,
                     &body,
                 ])
@@ -231,7 +235,7 @@ impl Alerts {
             else {
                 return;
             };
-            if String::from_utf8_lossy(&out.stdout).trim() == "open" {
+            if String::from_utf8_lossy(&out.stdout).trim() == "default" {
                 let mut app = Command::new("omacloud-app");
                 app.arg(&page);
                 if let Some(config) = config {

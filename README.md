@@ -135,7 +135,7 @@ project of their own ([docs/providers.md](docs/providers.md)).
   (Desktop, Documents and Pictures start on), and Overview has the same switches
   later, with a switch for every other folder in your home under Other folders
   in your home. Make a new folder in your home and a notification offers to
-  sync it: one click on Sync. Switching one
+  sync it: click it. Switching one
   off on a computer keeps its files there and stops syncing it there only.
   Folders match by what they are, so a German computer's `Dokumente` is
   another's `Documents`. From the terminal: `omacloud folders add Music` (or its path, `~/Music`),
