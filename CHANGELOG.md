@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.24 (2026-11-11)
 
 - Settings sync takes only what's yours. Hooks and plugins other programs install
   into AI agents (herdr's, keep-going's) stay with the computer they're installed
