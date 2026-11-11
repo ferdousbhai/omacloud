@@ -394,6 +394,37 @@ pub struct Engine {
     synced: BTreeSet<String>,
 }
 
+/// One row for AI agents: the files of Codex and pi that sync without their
+/// machine-only parts are agents' settings too, so what's to say about them
+/// goes on the AI agents row instead of a row of their own.
+fn fold_agents(items: &mut Vec<Item>) {
+    let own = |i: &Item| i.group == "agents" && !i.scope.is_empty();
+    let Some(at) = items.iter().position(own) else {
+        return;
+    };
+    let Some(row) = items.iter().position(|i| i.group == "agents" && i.scope.is_empty()) else {
+        return;
+    };
+    let part = items.remove(at);
+    let row = &mut items[if at < row { row - 1 } else { row }];
+    row.not_synced.extend(part.not_synced);
+    // only links, left as they are: nothing more to say
+    if part.state == "unavailable" {
+        return;
+    }
+    // what was added to the part's words: a write that failed, edits settled
+    let (_, news) = part.detail.split_once("; ").unwrap_or_default();
+    let said = match (part.state.as_str(), news) {
+        ("waiting", _) => "waiting to apply".to_string(),
+        (_, "") => "without what belongs to this computer (trusted projects, version notes)".to_string(),
+        (_, news) => news.to_string(),
+    };
+    row.detail.push_str(&format!("; {}: {said}", part.title));
+    if row.state == "synced" {
+        row.state = part.state;
+    }
+}
+
 impl Engine {
     /// Set up a device. State is loaded from `setup.state_path` when it
     /// exists and saved there after every sync.
@@ -1279,6 +1310,7 @@ impl Engine {
                 latest.text
             ));
         }
+        fold_agents(&mut out);
         // nothing has synced yet: nothing is in sync
         if self.state.synced_at == 0 {
             for i in out.iter_mut().filter(|i| i.state == "synced") {

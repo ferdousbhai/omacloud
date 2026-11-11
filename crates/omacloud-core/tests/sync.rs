@@ -2559,6 +2559,18 @@ fn codex_trust_stays_put_while_its_settings_travel() -> Result<()> {
     assert!(cb.contains("/home/b/play") && cb.contains("/home/b/two") && !cb.contains("/home/a/"));
     assert!(ca.contains("/home/a/two") && !ca.contains("/home/b/"));
     assert!(b.settings_status().held.is_empty());
+    // one row says it all: Codex's settings are AI agents' settings
+    let rows: Vec<_> = b
+        .settings_status()
+        .groups
+        .into_iter()
+        .filter(|g| g.group == "agents")
+        .collect();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(
+        rows[0].title == "AI agents" && rows[0].detail.contains("Codex settings"),
+        "{rows:?}"
+    );
     Ok(())
 }
 
