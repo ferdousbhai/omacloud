@@ -532,7 +532,28 @@ fn versions_find_a_folder_another_computer_added() {
     let cat = h.path("home/Bilder/cat.txt");
     std::fs::create_dir_all(cat.parent().unwrap()).unwrap();
     std::fs::write(&cat, "meow").unwrap();
-    assert_eq!(code(&h.run("a", &["folders", "add", "Notes"])), 0);
+    // any other folder of home is offered, and added by its path too
+    let list = json(&h.run("a", &["folders", "list"]));
+    let more = |list: &Value| -> Vec<String> {
+        list["data"]["more"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(more(&list), ["Notes"], "{list}");
+    let notes = format!("{}/", h.path("home/Notes").display());
+    let list = json(&h.run("a", &["folders", "add", &notes]));
+    assert!(more(&list).is_empty(), "{list}");
+    assert!(
+        list["data"]["synced"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["name"] == "Notes"),
+        "{list}"
+    );
     assert_eq!(code(&h.run("a", &["sync"])), 0);
 
     let out = init("b", "Documents")

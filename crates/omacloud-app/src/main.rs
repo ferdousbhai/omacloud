@@ -1235,6 +1235,24 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
         }
         g.add(&r);
     }
+    // every other folder of home, a switch each
+    let more = folders["more"].as_array().unwrap_or(&empty);
+    if !more.is_empty() {
+        let x = adw::ExpanderRow::builder()
+            .title("Other folders in your home")
+            .subtitle("Switch one on to sync it on all your computers")
+            .build();
+        for f in more {
+            let (name, ui2) = (text(&f["name"]), ui.clone());
+            let name2 = name.clone();
+            let r = switch_row(&name, false, move |_| {
+                ui2.act(&["omacloud", "folders", "add", &name2], "Syncing");
+            });
+            r.set_subtitle(&short_path(&text(&f["path"])));
+            x.add_row(&r);
+        }
+        g.add(&x);
+    }
     // Omarchy settings, beside the folders, as iCloud lists more than files
     let settings_on = s["settings"]["on"].as_bool().unwrap_or(false);
     let ui2 = ui.clone();
@@ -1252,30 +1270,6 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesGroup {
     settings.set_subtitle(SETTINGS_SYNCED);
     g.add(&settings);
 
-    let add = button("Add Folder…", Some("flat"));
-    let ui2 = ui.clone();
-    add.connect_clicked(move |_| {
-        let dialog = gtk::FileDialog::builder()
-            .title("Choose a folder in your home")
-            .modal(true)
-            .build();
-        let home = std::env::var("HOME").unwrap_or_default();
-        dialog.set_initial_folder(Some(&gio::File::for_path(&home)));
-        let ui3 = ui2.clone();
-        dialog.select_folder(Some(&ui2.window), None::<&gio::Cancellable>, move |r| {
-            let Some(path) = r.ok().and_then(|f| f.path()) else {
-                return;
-            };
-            match (path.parent(), path.file_name()) {
-                (Some(parent), Some(name)) if parent == std::path::Path::new(&home) => {
-                    let name = name.to_string_lossy().to_string();
-                    ui3.act(&["omacloud", "folders", "add", &name], "Syncing");
-                }
-                _ => ui3.toast("Choose a folder directly in your home, like ~/Projects"),
-            }
-        });
-    });
-    g.set_header_suffix(Some(&add));
     g
 }
 

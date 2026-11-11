@@ -666,7 +666,14 @@ fn user_dirs(home: &Path) -> Vec<(&'static str, String)> {
 /// (`Bilder` is `Pictures` when that's where Pictures lives here), or a
 /// usage error when it isn't a folder directly in home.
 fn folder_name(home: &Path, name: &str) -> Result<String> {
-    let name = name.trim();
+    // by its path too, as a file manager or a shell's completion gives it
+    let name = name.trim().trim_end_matches('/');
+    let name = name.strip_prefix("~/").unwrap_or(name);
+    let name = Path::new(name)
+        .strip_prefix(home)
+        .ok()
+        .and_then(Path::to_str)
+        .unwrap_or(name);
     if name.is_empty() || name.contains('/') || name.starts_with('.') {
         return Err(fail::usage(format!("{name:?} isn't a folder directly in home"))
             .hint("give one like Music")
@@ -1408,6 +1415,11 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             if let Some(a) = alerts.as_mut() {
                 a.check(&mut engine);
             }
+        }
+        // a folder made in home: offer to sync it, once
+        if let (Some(a), true) = (alerts.as_mut(), config.folders.is_some()) {
+            let synced: Vec<String> = engine.folder_list().into_iter().map(|(name, _)| name).collect();
+            a.new_folders(&config.folder, &paths.data, &home_folders(&config.folder), &synced);
         }
         let mut notice = |changed: Option<Vec<PathBuf>>| match changed {
             // what matters is pending now; the rest needs nothing
@@ -3165,6 +3177,10 @@ fn status(paths: &Paths) -> Out {
                     .collect::<Vec<_>>(),
                 "skipped": skipped,
                 "others": others,
+                "more": more_folders(&config.folder, &synced, &f.skip)
+                    .iter()
+                    .map(|n| here(n))
+                    .collect::<Vec<_>>(),
             })
         }),
         "repo": {
@@ -3305,6 +3321,11 @@ fn folders(paths: &Paths, action: FoldersCmd) -> Out {
         "synced": synced.iter().map(|(name, path)| json!({ "name": name, "path": path, "size": size(path) })).collect::<Vec<_>>(),
         "skipped": skipped.iter().map(|s| sized(s)).collect::<Vec<_>>(),
         "others": others.iter().map(|n| sized(n)).collect::<Vec<_>>(),
+        // not weighed: these can be most of home
+        "more": more_folders(home, &synced, skipped)
+            .iter()
+            .map(|n| json!({ "name": n, "path": e.on_disk(Path::new(n)) }))
+            .collect::<Vec<_>>(),
         "excluded": excluded.iter().map(|p| json!({ "path": p, "size": size(&e.on_disk(Path::new(p))) })).collect::<Vec<_>>(),
         "removed_from_cloud": e.dropped_folders(),
         "changed": changed,
@@ -3330,6 +3351,31 @@ fn other_folders(
         .filter(|u| !synced.iter().any(|(n, _)| n == *u) && !skip.contains(**u))
         .filter(|u| !at_home.iter().any(|h| h == *u))
         .copied()
+        .collect()
+}
+
+/// The folders directly in home, hidden ones aside, by their names here.
+fn home_folders(home: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(home)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| !n.starts_with('.'))
+        .collect();
+    names.sort();
+    names
+}
+
+/// Every other folder of home this computer could sync, past the usual
+/// ones: `~/Projects`, by the account's names.
+fn more_folders(home: &Path, synced: &[(String, PathBuf)], skip: &std::collections::BTreeSet<String>) -> Vec<String> {
+    home_folders(home)
+        .into_iter()
+        .filter_map(|n| folder_name(home, &n).ok())
+        .filter(|n| !USUAL_FOLDERS.contains(&n.as_str()))
+        .filter(|n| !synced.iter().any(|(s, _)| s == n) && !skip.contains(n))
         .collect()
 }
 

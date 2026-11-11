@@ -6,6 +6,7 @@
 
 use std::{
     collections::BTreeSet,
+    fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -17,6 +18,53 @@ use omacloud_core::{Engine, fingerprint};
 /// daemon for new versions.
 const REQUESTS_EVERY: Duration = Duration::from_secs(60);
 
+/// How often to look for new folders in home: one directory listing.
+const FOLDERS_EVERY: Duration = Duration::from_secs(10);
+
+/// How long a new folder keeps its name before it's offered.
+const NAME_SETTLES: Duration = Duration::from_secs(20);
+
+/// The folders of home already seen, one name a line, in the data directory.
+const HOME_FOLDERS_FILE: &str = "home-folders";
+
+/// The folders of home seen from now on, and the ones to offer: those in
+/// `now` that `seen` lacks and `settled` passes. One not settled yet is left
+/// unseen, for a later look. With nothing seen before, all are seen and none
+/// offered.
+fn new_in_home(
+    seen: Option<&BTreeSet<String>>,
+    now: &[String],
+    settled: impl Fn(&str) -> bool,
+) -> (BTreeSet<String>, Vec<String>) {
+    let Some(seen) = seen else {
+        return (now.iter().cloned().collect(), Vec::new());
+    };
+    let mut all = seen.clone();
+    let mut fresh = Vec::new();
+    for name in now {
+        if !seen.contains(name) && settled(name) && all.insert(name.clone()) {
+            fresh.push(name.clone());
+        }
+    }
+    (all, fresh)
+}
+
+/// How long ago the folder last changed: renamed, or a file put in it.
+fn changed_since(path: &Path) -> Option<Duration> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::symlink_metadata(path).ok()?;
+    let then = std::time::UNIX_EPOCH + Duration::from_secs(u64::try_from(meta.ctime()).ok()?);
+    then.elapsed().ok()
+}
+
+/// The message of a failed command's JSON envelope.
+fn failure(stdout: &[u8]) -> String {
+    serde_json::from_slice::<serde_json::Value>(stdout)
+        .ok()
+        .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
 pub struct Alerts {
     /// The config to open the Omacloud app with, when it isn't the default.
     config: Option<PathBuf>,
@@ -24,6 +72,7 @@ pub struct Alerts {
     held: BTreeSet<PathBuf>,
     requests_at: Option<Instant>,
     key_refused: bool,
+    folders_at: Option<Instant>,
 }
 
 impl Alerts {
@@ -34,6 +83,7 @@ impl Alerts {
             held: BTreeSet::new(),
             requests_at: None,
             key_refused: false,
+            folders_at: None,
         }
     }
 
@@ -100,6 +150,69 @@ impl Alerts {
         }
     }
 
+    /// Offer to sync a folder that's new directly in home (`now`: its
+    /// folders, by name), once each. The folders already seen are kept in
+    /// `data`, so the first look only notes what's there.
+    pub fn new_folders(&mut self, home: &Path, data: &Path, now: &[String], synced: &[String]) {
+        if self.folders_at.is_some_and(|t| t.elapsed() < FOLDERS_EVERY) {
+            return;
+        }
+        self.folders_at = Some(Instant::now());
+        let file = data.join(HOME_FOLDERS_FILE);
+        let seen: Option<BTreeSet<String>> = fs::read_to_string(&file)
+            .ok()
+            .map(|s| s.lines().map(str::to_string).collect());
+        let (settled, fresh) = new_in_home(seen.as_ref(), now, |name| {
+            // a file manager makes "New Folder" and renames it: wait until
+            // the name has stood a while
+            changed_since(&home.join(name)).is_none_or(|age| age >= NAME_SETTLES)
+        });
+        if seen.as_ref() != Some(&settled) {
+            let list: Vec<&str> = settled.iter().map(String::as_str).collect();
+            _ = fs::write(&file, list.join("\n"));
+        }
+        for name in fresh.into_iter().filter(|n| !synced.contains(n)) {
+            self.offer_folder(home, &name);
+        }
+    }
+
+    fn offer_folder(&self, home: &Path, name: &str) {
+        let (name, path) = (name.to_string(), home.join(name));
+        let config = self.config.clone();
+        std::thread::spawn(move || {
+            let Ok(out) = Command::new("notify-send")
+                .args([
+                    "--app-name=Omacloud",
+                    "--icon=folder-remote",
+                    &format!("--action=sync=Sync {name}"),
+                    &format!("Sync {name}?"),
+                    &format!("~/{name} is new on this computer. Syncing it puts it on all your computers."),
+                ])
+                .stderr(Stdio::null())
+                .output()
+            else {
+                return;
+            };
+            if String::from_utf8_lossy(&out.stdout).trim() != "sync" {
+                return;
+            }
+            let mut add = Command::new("omacloud");
+            add.args(["folders", "add", "--json"]).arg(&path);
+            if let Some(config) = config {
+                add.env("OMACLOUD_CONFIG", config);
+            }
+            let (summary, body) = match add.stdin(Stdio::null()).stderr(Stdio::null()).output() {
+                Ok(out) if out.status.success() => (format!("{name} now syncs"), String::new()),
+                Ok(out) => (format!("{name} couldn't be added"), failure(&out.stdout)),
+                Err(e) => (format!("{name} couldn't be added"), e.to_string()),
+            };
+            _ = Command::new("notify-send")
+                .args(["--app-name=Omacloud", "--icon=folder-remote", &summary, &body])
+                .stderr(Stdio::null())
+                .status();
+        });
+    }
+
     fn show(&self, summary: &str, body: &str, page: &str) {
         let (summary, body, page) = (summary.to_string(), body.to_string(), page.to_string());
         let config = self.config.clone();
@@ -127,5 +240,40 @@ impl Alerts {
                 _ = app.spawn();
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn a_new_folder_of_home_is_offered_once() {
+        // the first look only notes what's there
+        let (seen, fresh) = new_in_home(None, &names(&["Documents", "go"]), |_| true);
+        assert!(fresh.is_empty());
+        // one made since is offered, then seen
+        let now = names(&["Documents", "Works", "go"]);
+        let (seen, fresh) = new_in_home(Some(&seen), &now, |_| true);
+        assert_eq!(fresh, names(&["Works"]));
+        assert!(new_in_home(Some(&seen), &now, |_| true).1.is_empty());
+        // deleted and made again, it isn't asked about twice
+        let (seen, _) = new_in_home(Some(&seen), &names(&["Documents", "go"]), |_| true);
+        assert!(new_in_home(Some(&seen), &now, |_| true).1.is_empty());
+    }
+
+    #[test]
+    fn a_folder_still_being_named_waits() {
+        let (seen, _) = new_in_home(None, &names(&["Documents"]), |_| true);
+        let now = names(&["Documents", "New Folder"]);
+        let (seen, fresh) = new_in_home(Some(&seen), &now, |_| false);
+        assert!(fresh.is_empty());
+        assert!(!seen.contains("New Folder"));
+        let now = names(&["Documents", "Works"]);
+        assert_eq!(new_in_home(Some(&seen), &now, |_| true).1, names(&["Works"]));
     }
 }

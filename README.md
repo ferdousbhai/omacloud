@@ -133,10 +133,12 @@ project of their own ([docs/providers.md](docs/providers.md)).
 - **Folders:** you choose, as on iCloud: setup shows switches for Desktop,
   Documents, Pictures, Music, Videos and Downloads with their sizes
   (Desktop, Documents and Pictures start on), and Overview has the same switches
-  later, plus Add Folder for any other folder in your home. Switching one
+  later, with a switch for every other folder in your home under Other folders
+  in your home. Make a new folder in your home and a notification offers to
+  sync it: one click on Sync. Switching one
   off on a computer keeps its files there and stops syncing it there only.
   Folders match by what they are, so a German computer's `Dokumente` is
-  another's `Documents`. From the terminal: `omacloud folders add Music`,
+  another's `Documents`. From the terminal: `omacloud folders add Music` (or its path, `~/Music`),
   `omacloud folders skip Pictures`, `omacloud folders exclude Documents/Notes` for
   a subfolder. Change these at any time: what comes back loses nothing. Skipping
   keeps the cloud's copy; `omacloud folders remove Documents` takes it out, and no
@@ -333,8 +335,8 @@ repository = "opendal:s3"
 ```
 
 `notifications = false` turns off the desktop notifications (a computer
-asking to join, a setting that needs a choice, this computer removed, your
-storage refusing its key).
+asking to join, a setting that needs a choice, a new folder in your home to sync,
+this computer removed, your storage refusing its key).
 
 Ignore rules use gitignore syntax, from three places: built-in defaults
 (editor swap files, desktop junk), `~/.config/omacloud/ignore` for this

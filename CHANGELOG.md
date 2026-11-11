@@ -20,6 +20,10 @@
 - Change what syncs at any time, and a running `watch` follows. A folder that comes
   back loses nothing: before, what changed while it was off could overwrite the
   cloud, delete others' new files or undo their deletes.
+- Adding a folder takes one click: a new folder in your home brings a notification
+  offering to sync it, the app lists every other folder of home with a switch, and
+  `omacloud folders add` takes a path (`~/Work`) as well as a name. `folders list`
+  and `status` report those folders as `more`.
 - `omacloud folders exclude` and `include` choose subfolders; `folders remove` takes a
   folder out of the cloud, leaving every computer's files alone; `settings skip` and
   `unskip` choose groups of settings; `folders list` reports sizes.

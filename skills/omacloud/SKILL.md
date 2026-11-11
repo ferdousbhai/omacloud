@@ -98,8 +98,9 @@ Sync is bidirectional and can change local and remote files. Do not start
 separate destination first; `restore` over an existing file, `devices revoke`
 and `rotate` need `--yes`, which needs the owner's authority.
 
-Folder controls: `folders add Music`, `folders skip Pictures`, `folders unskip
-Pictures`. Adding affects the shared folder set; skipping leaves this device's
+Folder controls: `folders add Music` (a name or a path directly in home, like
+`~/Work`; `folders list` gives the ones not syncing yet as `more`), `folders skip
+Pictures`, `folders unskip Pictures`. Adding affects the shared folder set; skipping leaves this device's
 files in place and stops syncing them here. Explain scope before changing it.
 
 Choices can change at any time, and a running `watch` follows them. A folder or
