@@ -68,6 +68,11 @@ export class Bucket {
 
 	// the names directly under a folder of the repository, like "index"
 	async list(folder) {
+		return (await this.listed(folder)).map((file) => file.name);
+	}
+
+	// the same, each with when it was last written
+	async listed(folder) {
 		const prefix = `${this.root}${folder}/`;
 		const names = [];
 		let token;
@@ -76,10 +81,11 @@ export class Bucket {
 			if (token) query["continuation-token"] = token;
 			const response = await this.fetch(await this.url("", query));
 			const xml = new DOMParser().parseFromString(await response.text(), "application/xml");
-			for (const key of xml.querySelectorAll("Contents > Key")) {
+			for (const entry of xml.querySelectorAll("Contents")) {
 				// the folder's own marker comes back too
-				const name = key.textContent.slice(prefix.length);
-				if (name && !name.endsWith("/")) names.push(name);
+				const name = (entry.querySelector("Key")?.textContent ?? "").slice(prefix.length);
+				const modified = entry.querySelector("LastModified")?.textContent ?? "";
+				if (name && !name.endsWith("/")) names.push({ name, modified });
 			}
 			token = xml.querySelector("NextContinuationToken")?.textContent;
 		} while (token);

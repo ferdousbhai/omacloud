@@ -39,6 +39,9 @@ function kindOf(name) {
 	return { kind: "other", type: "application/octet-stream" };
 }
 
+// how many of the snapshots written last are looked at for the newest
+const NEWEST = 5;
+
 // more than this isn't read just to show it
 const LOOK_LIMIT = 200e6;
 const THUMB_LIMIT = 8e6;
@@ -134,8 +137,13 @@ async function connect(form) {
 	status("Reading the index…");
 	await each(indexes, async (name) => reader.addIndex(await bucket.read(`index/${name}`)));
 
-	// the newest snapshot is the account as it stands
-	const names = await bucket.list("snapshots");
+	// The newest snapshot is the account as it stands. An account keeps a
+	// month of them, so only the few written last are read: the newest by
+	// what each says is among them. (Any written at the same moment as the
+	// last of those are read too, since the listing can't order them.)
+	const written = (await bucket.listed("snapshots")).sort((a, b) => b.modified.localeCompare(a.modified));
+	const cut = written[Math.min(NEWEST, written.length) - 1]?.modified;
+	const names = written.filter((file, i) => i < NEWEST || file.modified === cut).map((file) => file.name);
 	status("Finding your files…");
 	const snapshots = await each(names, async (name) => reader.file(await bucket.read(`snapshots/${name}`)));
 	const latest = snapshots.reduce((a, b) => (a && a.time > b.time ? a : b), null);
