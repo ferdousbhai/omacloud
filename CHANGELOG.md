@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.26 (2026-11-13)
 
 - A drive link opens Omacloud Drive in a browser with nothing typed or pasted. In the app,
   Open on a Phone shows a code for the phone's camera; `omacloud drive-link` draws the same
