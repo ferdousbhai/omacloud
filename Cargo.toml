@@ -10,6 +10,9 @@ repository = "https://github.com/ferdousbhai/omacloud"
 
 [workspace.dependencies]
 omacloud-core = { path = "crates/omacloud-core" }
+omacloud-web = { path = "crates/omacloud-web" }
+# a drive link as a code a phone's camera reads; no image formats
+qrcode = { version = "0.14", default-features = false }
 rustic_core = "0.13"
 rustic_backend = { version = "0.7", default-features = false, features = ["opendal"] }
 opendal = { version = "0.58", default-features = false, features = ["blocking", "services-s3", "services-dropbox", "layers-retry"] }

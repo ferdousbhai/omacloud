@@ -97,7 +97,7 @@ and are tried again.
 
 ## Reading in a browser
 
-Not on omacloud.computer yet; [web/README.md](../web/README.md) has where it stands.
+Omacloud Drive, at omacloud.computer/drive/ ([web/README.md](../web/README.md)).
 The page reads your files straight from your storage and decrypts them in the
 browser, so no server of Omacloud's carries them. Dropbox needs nothing for that.
 A bucket needs one rule, set once: let pages from `https://omacloud.computer`

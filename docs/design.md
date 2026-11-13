@@ -92,6 +92,22 @@ when it moves, with a full sync every ten minutes regardless. So an idle compute
 costs one read most of the time, and a small sync's worth of requests every ten
 minutes.
 
+## In a browser
+
+Omacloud Drive (omacloud.computer/drive/) is a static page: it reads the
+repository from the person's bucket and decrypts it in the tab (`web/`,
+`crates/omacloud-web`), so it needs what a computer has, the bucket's key and
+the repository password. A computer hands them over with a drive link
+(`omacloud drive-link`): it seals them under a random seed, leaves that in the
+bucket under `omacloud-links/`, and shows a link to the page with the seed and
+a presigned address of the object, good for five minutes, after the `#`, which
+a browser sends to no server. So the storage holds only what it can't read, the
+site sees nothing, and the link opens nothing once the object is removed (when
+the command ends, or by the next link). For those five minutes the link is as
+good as the keys, so it's shown as a code for a camera and only to a terminal.
+The page runs whatever the site serves, so using it trusts the site's code that
+day, as any web app does; the computers' sync never depends on it.
+
 ## Accounts and people
 
 One person is one account: a recovery code, a device chain, a repository. Every
@@ -203,5 +219,5 @@ names, settings or keys.
   every file read-only, fetched on open, but a folder is either kept here
   in full or skipped, not freed file by file.
 - Sharing with other people (#8, #15).
-- Reaching files from a phone or a browser (#35).
+- Writing from a browser, and a phone app (#35); reading is Omacloud Drive, above.
 - An outside review of this design (#18).

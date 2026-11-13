@@ -62,6 +62,13 @@ Open http://127.0.0.1:$port and paste this, what \`omacloud drive-code\` prints:
 
 $printed
 
-(a throwaway account; Ctrl-C ends it)
+Or follow a drive link, what \`omacloud drive-link\` shows (good for five minutes):
+
 END
+# the link's command waits for Enter, so it keeps a terminal of its own going
+OMACLOUD_DRIVE_URL=http://127.0.0.1:$port/ SHELL=/bin/bash script -qefc \
+  "$(printf '%q ' "$OMACLOUD" --config "$work/a.toml" drive-link)" /dev/null < <(sleep 290) | stdbuf -oL tr -d '\r' | grep --line-buffered '#link=' &
+pids+=($!)
+echo
+echo "(a throwaway account; Ctrl-C ends it)"
 wait

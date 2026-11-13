@@ -55,6 +55,84 @@ fn nonce() -> Vec<u8> {
     hex::encode(rand::random::<[u8; 16]>()).into_bytes()
 }
 
+/// Where a computer leaves what a drive link opens: beside the repository,
+/// in its bucket, because that's the one place a browser is already allowed
+/// to read (the bucket's CORS rule) and the account already pays for.
+const LINKS: &str = "omacloud-links";
+
+/// What drive links were left in an account's bucket, each sealed (the bucket
+/// can't read it) and reachable for a few minutes through an address that
+/// needs no key.
+pub struct Links {
+    op: opendal::Operator,
+}
+
+impl Links {
+    /// # Errors
+    ///
+    /// If `repo` isn't in a bucket, or its options don't make an operator.
+    pub fn beside(repo: &RepoSpec) -> Result<Self> {
+        let scheme = repo
+            .repository
+            .strip_prefix("opendal:")
+            .context("a drive link needs the repository in a bucket")?;
+        let mut options = repo.options.clone();
+        _ = options.insert("root".into(), repo.under_root(LINKS));
+        let _guard = runtime().enter();
+        let op = opendal::Operator::via_iter(scheme, options)
+            .with_context(|| format!("opening the {scheme} location for a drive link"))?
+            .layer(RetryLayer::new().with_jitter());
+        Ok(Self { op })
+    }
+
+    /// Leave `sealed` under a new name and say where a browser reads it,
+    /// for `valid` and no longer: `(name, address)`.
+    ///
+    /// # Errors
+    ///
+    /// If the storage refuses the write or can't sign an address.
+    pub fn leave(&self, sealed: Vec<u8>, valid: Duration) -> Result<(String, String)> {
+        let name = hex::encode(rand::random::<[u8; 8]>());
+        runtime().block_on(async {
+            _ = self.op.write(&name, sealed).await.context("leaving the drive link")?;
+            let signed = self
+                .op
+                .presign_read(&name, valid)
+                .await
+                .context("this storage can't make an address a browser reads without the key")?;
+            Ok((name, signed.uri().to_string()))
+        })
+    }
+
+    /// Take one back. One that's already gone is no error.
+    ///
+    /// # Errors
+    ///
+    /// If the storage can't be reached.
+    pub fn remove(&self, name: &str) -> Result<()> {
+        runtime()
+            .block_on(self.op.delete(name))
+            .context("removing the drive link")
+    }
+
+    /// Take back every link left here: a command that was killed couldn't
+    /// remove its own. Only one is ever wanted at a time.
+    ///
+    /// # Errors
+    ///
+    /// If the storage can't be reached.
+    pub fn clear(&self) -> Result<()> {
+        runtime().block_on(async {
+            for entry in self.op.list("/").await.context("listing drive links")? {
+                if !entry.path().ends_with('/') {
+                    self.op.delete(entry.path()).await.context("removing a drive link")?;
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
 /// Parallel reads when catching up on a long history.
 const READERS: usize = 16;
 

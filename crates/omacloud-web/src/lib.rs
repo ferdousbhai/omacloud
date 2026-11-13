@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 
 #[cfg(target_arch = "wasm32")]
 mod abi;
+pub mod link;
 
 pub type Result<T> = std::result::Result<T, String>;
 

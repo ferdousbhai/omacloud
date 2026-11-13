@@ -26,8 +26,8 @@ use clap::{Parser, Subcommand};
 use log::{info, warn};
 use notify::{RecursiveMode, Watcher};
 use omacloud_core::{
-    BucketCoordinator, Coordinator, DirCoordinator, Engine, KeyChange, Membership, RepoSpec, SettingsSetup, Setup,
-    account,
+    BucketCoordinator, Coordinator, DirCoordinator, Engine, KeyChange, Links, Membership, RepoSpec, SettingsSetup,
+    Setup, account,
     bucket::key_refused,
     bucket_key::Credentials,
     devices::{fingerprint, public_hex},
@@ -248,6 +248,17 @@ enum Cmd {
     /// omacloud.computer/drive (a bucket's account; it holds the key to your
     /// storage and the password to your files)
     DriveCode,
+    /// Show a link, and its code for a phone's camera, that opens your files
+    /// in a browser at omacloud.computer/drive. It works for five minutes;
+    /// nothing is typed or pasted (a bucket's account)
+    DriveLink {
+        /// Leave it open for its five minutes instead of waiting for Enter
+        #[arg(long, conflicts_with = "close")]
+        keep: bool,
+        /// Close the link that's open, if one is
+        #[arg(long)]
+        close: bool,
+    },
     /// Print everything needed to restore without omacloud; with `--to`,
     /// first copy the repository somewhere of your own
     Export {
@@ -986,6 +997,31 @@ struct DriveCode {
 impl DriveCode {
     const PREFIX: &str = "omacloud-drive-";
 
+    /// This account's, with the configuration it was read from.
+    fn of(paths: &Paths) -> Result<(Config, Self)> {
+        let config = load(paths)?;
+        let mut e = engine(paths, &config)?;
+        e.sync()?; // pick up any key rotation first
+        let (spec, secret, _) = e.repository()?;
+        if spec.is_dropbox() || !spec.is_remote() {
+            return Err(fail::unsupported("Omacloud Drive in a browser reads a bucket for now")
+                .hint("this account's files aren't in one; `omacloud mount` shows them on a computer")
+                .into());
+        }
+        let opt = |k: &str| spec.options.get(k).cloned().unwrap_or_default();
+        let code = Self {
+            v: 1,
+            endpoint: opt("endpoint"),
+            bucket: opt("bucket"),
+            root: opt("root").trim_matches('/').to_string(),
+            region: opt("region"),
+            key: opt("access_key_id"),
+            secret: opt("secret_access_key"),
+            password: secret.password,
+        };
+        Ok((config, code))
+    }
+
     fn encode(&self) -> Result<String> {
         use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
         Ok(format!(
@@ -994,6 +1030,76 @@ impl DriveCode {
             URL_SAFE_NO_PAD.encode(serde_json::to_vec(self)?)
         ))
     }
+}
+
+/// How long a drive link opens anything.
+const DRIVE_LINK_VALID: Duration = Duration::from_secs(300);
+
+/// The address a drive link is: Omacloud Drive's page, and after the `#`,
+/// which a browser keeps to itself, the seed and where the sealed drive code
+/// waits. `OMACLOUD_DRIVE_URL` names another copy of the page, for trying one.
+fn drive_link(seed: &[u8], address: &str) -> String {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let page = std::env::var("OMACLOUD_DRIVE_URL").unwrap_or_else(|_| "https://omacloud.computer/drive/".into());
+    // the address in base64 too: whatever passes the link along (a camera
+    // app, a chat) then has nothing in it to re-encode, which would break
+    // the address's signature
+    format!(
+        "{page}#link={}.{}",
+        URL_SAFE_NO_PAD.encode(seed),
+        URL_SAFE_NO_PAD.encode(address)
+    )
+}
+
+/// `text` as a QR code in half-height blocks, black on white whatever the
+/// terminal's colours, or `None` if this terminal is too narrow for it: a
+/// wrapped code reads as nothing.
+fn qr_for_terminal(text: &str) -> Option<String> {
+    const MARGIN: usize = 2;
+    let code = qrcode::QrCode::with_error_correction_level(text, qrcode::EcLevel::L).ok()?;
+    let width = code.width();
+    let mut size: libc::winsize = unsafe { std::mem::zeroed() };
+    // stderr is where it's drawn
+    let columns = if unsafe { libc::ioctl(2, libc::TIOCGWINSZ, &raw mut size) } == 0 && size.ws_col > 0 {
+        usize::from(size.ws_col)
+    } else {
+        80
+    };
+    if width + 2 * MARGIN > columns {
+        return None;
+    }
+    let colors = code.to_colors();
+    let side = width + 2 * MARGIN;
+    let dark = |x: usize, y: usize| {
+        (MARGIN..MARGIN + width).contains(&x)
+            && (MARGIN..MARGIN + width).contains(&y)
+            && colors[(y - MARGIN) * width + (x - MARGIN)] == qrcode::Color::Dark
+    };
+    let mut out = String::new();
+    for y in (0..side).step_by(2) {
+        out.push_str("\x1b[30;107m");
+        for x in 0..side {
+            out.push(match (dark(x, y), dark(x, y + 1)) {
+                (true, true) => '█',
+                (true, false) => '▀',
+                (false, true) => '▄',
+                (false, false) => ' ',
+            });
+        }
+        out.push_str("\x1b[0m\n");
+    }
+    Some(out)
+}
+
+/// Until Enter (or the terminal going away), or `at_most`.
+fn wait_for_enter(at_most: Duration) {
+    let (done, wait) = std::sync::mpsc::channel();
+    _ = std::thread::spawn(move || {
+        let mut line = String::new();
+        _ = std::io::stdin().read_line(&mut line);
+        _ = done.send(());
+    });
+    _ = wait.recv_timeout(at_most);
 }
 
 /// Switch this device to a newer bucket key, if one was published. A daemon
@@ -2207,33 +2313,51 @@ fn run(cli: Cli) -> Out {
             if !output::to_terminal(mode()) {
                 return Err(fail::terminal_required("a drive code (it opens your files)").into());
             }
-            let config = load(&paths)?;
-            let mut e = engine(&paths, &config)?;
-            e.sync()?; // pick up any key rotation first
-            let (spec, secret, _) = e.repository()?;
-            if spec.is_dropbox() || !spec.is_remote() {
-                return Err(fail::unsupported("Omacloud Drive in a browser reads a bucket for now")
-                    .hint("this account's files aren't in one; `omacloud mount` shows them on a computer")
-                    .into());
-            }
-            let opt = |k: &str| spec.options.get(k).cloned().unwrap_or_default();
-            let code = DriveCode {
-                v: 1,
-                endpoint: opt("endpoint"),
-                bucket: opt("bucket"),
-                root: opt("root").trim_matches('/').to_string(),
-                region: opt("region"),
-                key: opt("access_key_id"),
-                secret: opt("secret_access_key"),
-                password: secret.password,
-            }
-            .encode()?;
+            let code = DriveCode::of(&paths)?.1.encode()?;
             eprintln!(
                 "Paste it at https://omacloud.computer/drive/ to open your files in a browser. Keep it\n\
                  private: it holds the key to your storage and the password to your files, so whoever has\n\
                  it can read them. It stops working when the bucket's key is changed."
             );
             Ok(Response::new(Value::Null, "drive code").human(code))
+        }
+        Cmd::DriveLink { close: true, .. } => {
+            Links::beside(&load(&paths)?.repo)?.clear()?;
+            Ok(Response::new(Value::Null, "drive link closed"))
+        }
+        Cmd::DriveLink { keep, .. } => {
+            if !output::to_terminal(mode()) {
+                return Err(fail::terminal_required("a drive link (it opens your files)").into());
+            }
+            let (config, code) = DriveCode::of(&paths)?;
+            let seed: [u8; omacloud_web::link::SEED] = rand::random();
+            let sealed = omacloud_web::link::seal(&seed, rand::random(), &serde_json::to_vec(&code)?)
+                .map_err(anyhow::Error::msg)?;
+            let links = Links::beside(&config.repo)?;
+            // one a killed command left behind, and any still open: only the newest works
+            links.clear()?;
+            let (name, address) = links.leave(sealed, DRIVE_LINK_VALID)?;
+            let link = drive_link(&seed, &address);
+            match qr_for_terminal(&link) {
+                Some(qr) => eprintln!("{qr}\nPoint a phone's camera at this, or open the link below in any browser."),
+                None => eprintln!(
+                    "(This window is too narrow to draw the code a phone's camera reads: widen it and run this again, or open the link below.)"
+                ),
+            }
+            println!("{link}");
+            let warning = format!(
+                "\nIt opens your files for the next {} minutes, to whoever has it: don't send it through\n\
+                 anything you don't trust.",
+                DRIVE_LINK_VALID.as_secs() / 60
+            );
+            if keep {
+                eprintln!("{warning} `omacloud drive-link --close` closes it sooner.");
+                return Ok(Response::new(Value::Null, "drive link open"));
+            }
+            eprintln!("{warning} Press Enter to close it now.");
+            wait_for_enter(DRIVE_LINK_VALID);
+            links.remove(&name)?;
+            Ok(Response::new(Value::Null, "drive link closed"))
         }
         Cmd::Export { to } => {
             if !output::to_terminal(mode()) {

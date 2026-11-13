@@ -6,7 +6,7 @@ const words = new TextDecoder();
 let wasm;
 
 export async function load(url) {
-	wasm = (await WebAssembly.instantiateStreaming(fetch(url))).instance.exports;
+	wasm ??= (await WebAssembly.instantiateStreaming(fetch(url))).instance.exports;
 }
 
 function call(name, ...args) {
@@ -40,3 +40,5 @@ export const addIndex = (stored) => Number(words.decode(call("add_index", stored
 export const locate = (id) => json(call("locate", id));
 // a blob's content from its bytes in the pack, checked against its id
 export const blob = (id, stored) => call("blob", id, stored);
+// what a drive link's computer left in the bucket, opened with the link's seed
+export const unseal = (seed, sealed) => json(call("unseal", seed, sealed));

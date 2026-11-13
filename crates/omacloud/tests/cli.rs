@@ -337,6 +337,8 @@ fn commands_that_print_a_secret_refuse_anywhere_but_a_terminal() {
     for args in [
         &["export"][..],
         &["drive-code"],
+        &["drive-link"],
+        &["drive-link", "--keep"],
         &["recovery", "split", "--threshold", "2", "--shares", "3"],
         &["recovery", "combine"],
     ] {

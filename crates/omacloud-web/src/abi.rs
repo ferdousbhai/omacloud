@@ -107,3 +107,15 @@ pub unsafe extern "C" fn blob(blob: *const u8, len: usize, stored: *const u8, st
         r.blob(unsafe { text(blob, len) }?, unsafe { bytes(stored, stored_len) })
     }))
 }
+
+/// Open what a drive link's computer left for it; needs no open repository.
+///
+/// # Safety
+///
+/// As [`open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn unseal(seed: *const u8, seed_len: usize, sealed: *const u8, sealed_len: usize) -> *mut u8 {
+    answer(crate::link::unseal(unsafe { bytes(seed, seed_len) }, unsafe {
+        bytes(sealed, sealed_len)
+    }))
+}

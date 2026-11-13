@@ -3,7 +3,7 @@
 
 const PRIVACY = "privacy@omacloud.computer";
 const LEGAL = "legal@omacloud.computer";
-const UPDATED = "11 November 2026";
+const UPDATED = "13 November 2026";
 
 function layout(title: string, body: string): Response {
 	return new Response(
@@ -75,8 +75,9 @@ the data is gone. If that worries you, you can split the code among people you t
 <h2>In a browser</h2>
 <p><a href="/drive/">Omacloud Drive</a> opens your files from any browser. Same rule as everything else: the
 page fetches from your bucket and decrypts in the tab, so this site never sees a file or a key. It is early.
-Today it needs a bucket (no Dropbox yet), and you sign in by pasting a code that
-<code>omacloud drive-code</code> prints. Approving a browser from one of your computers comes next.</p>
+Today it needs a bucket (no Dropbox yet). To sign in on a phone, press Open on a Phone in the app and point
+the camera at the code. One of your computers leaves the keys in your bucket for five minutes, sealed, and
+the code carries what opens them. Nothing passes through here.</p>
 <h2>Family</h2>
 <p>Each person gets an account of their own, in storage of their own. You can pay for someone's bucket and
 still not be able to read their files, which is how it should be.</p>
@@ -98,8 +99,8 @@ Cloudflare delivers the pages and sees your IP address to do that. That is all.<
 keys are encrypted on your computer, with keys that stay on your computers and in your recovery code, before
 they go to the storage you chose. That provider can't read them. It has its own terms and privacy policy,
 and you deal with it directly. Nothing of yours comes here.</p>
-<p><a href="/drive/">Omacloud Drive</a> is a page that runs in your browser. What you type into it (your
-bucket's key, your password) stays in that tab. It goes into requests from your browser to your storage and
+<p><a href="/drive/">Omacloud Drive</a> is a page that runs in your browser. What you give it (a link from one of
+your computers, or your bucket's key and your password) stays in that tab. It goes into requests from your browser to your storage and
 is gone when you close the tab. Your files travel between your browser and your storage. This site serves
 the page and sees none of it.</p>
 <h2>Contact</h2>

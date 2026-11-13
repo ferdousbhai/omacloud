@@ -3,7 +3,7 @@
 // repository's password stay in this page's memory: they go nowhere but into
 // requests to your bucket, and are gone when the tab closes or you lock it.
 
-import { pasted } from "./paste.js";
+import { account, linked, pasted } from "./paste.js";
 import * as reader from "./reader.js";
 import { Bucket } from "./s3.js";
 
@@ -360,6 +360,34 @@ async function act(work) {
 	}
 }
 
+const fill = (form, found) => {
+	for (const [name, value] of Object.entries(found)) form.elements[name].value = value || "";
+};
+
+// A drive link: one of the person's computers left the drive code in their
+// bucket, sealed, for a few minutes, and the link says where and carries
+// what opens it. Nothing is typed, and the address alone opens nothing later.
+async function follow({ seed, address }) {
+	const status = (words) => ($("signin-status").textContent = words);
+	const again = "Make a new one on your computer: Open on a Phone in Omacloud, or omacloud drive-link.";
+	status("Opening your link…");
+	await reader.load("omacloud_web.wasm");
+	let response;
+	try {
+		response = await fetch(address, { cache: "no-store" });
+	} catch {
+		throw new Error("The bucket didn't answer this page. Check that it allows this site to read it (its CORS rule).");
+	}
+	if (!response.ok) throw new Error(`This link has run out, or was closed. ${again}`);
+	let found;
+	try {
+		found = account(reader.unseal(seed, new Uint8Array(await response.arrayBuffer())));
+	} catch {}
+	if (!found) throw new Error(`This link is damaged. ${again}`);
+	fill($("connect"), found);
+	await connect($("connect"));
+}
+
 $("pasted").addEventListener("input", (event) => {
 	const text = event.target.value.trim();
 	const found = pasted(text);
@@ -369,7 +397,7 @@ $("pasted").addEventListener("input", (event) => {
 		status(text ? "That doesn't read as a drive code. Paste all of what omacloud drive-code prints, or enter it by hand." : "");
 		return;
 	}
-	for (const [name, value] of Object.entries(found)) form.elements[name].value = value || "";
+	fill(form, found);
 	const missing = !found.key || !found.secret || !found.password;
 	status(
 		missing
@@ -394,3 +422,11 @@ $("items").addEventListener("keydown", (event) => {
 	if (event.key === "Enter" && selected) act(() => activate(selected));
 	if (event.key === "Backspace" && trail.length > 1) (trail.pop(), act(open));
 });
+
+// The link is taken out of the address at once, so it isn't left on show or
+// kept as this page's address in the tab's history.
+const link = linked(location.hash);
+if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+if (link) act(() => follow(link));
+// another link followed in this same tab: start afresh with it
+addEventListener("hashchange", () => linked(location.hash) && location.reload());

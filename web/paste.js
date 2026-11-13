@@ -11,14 +11,12 @@ const loose = (text) =>
 		.map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
 		.join("\\s*");
 
-// `omacloud-drive-` and base64url of JSON: { endpoint, bucket, root, region,
-// key, secret, password }.
-function driveCode(words) {
-	const code = words.replace(/\s+/g, "").match(/omacloud-drive-([A-Za-z0-9_-]+)/)?.[1];
-	if (!code) return null;
+const bytesOf = (base64url) => Uint8Array.from(atob(base64url.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+
+// What a drive code says, as the page uses it: { endpoint, bucket, root,
+// region, key, secret, password }, or null if it names no bucket.
+export function account(said) {
 	try {
-		const bytes = Uint8Array.from(atob(code.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
-		const said = JSON.parse(new TextDecoder().decode(bytes));
 		const text = (name) => (typeof said[name] === "string" ? said[name] : "");
 		if (!text("bucket") || !new URL(text("endpoint")).host) return null;
 		return {
@@ -30,6 +28,34 @@ function driveCode(words) {
 			secret: text("secret"),
 			password: text("password"),
 		};
+	} catch {
+		return null;
+	}
+}
+
+// `omacloud-drive-` and base64url of that JSON.
+function driveCode(words) {
+	const code = words.replace(/\s+/g, "").match(/omacloud-drive-([A-Za-z0-9_-]+)/)?.[1];
+	if (!code) return null;
+	try {
+		return account(JSON.parse(new TextDecoder().decode(bytesOf(code))));
+	} catch {
+		return null;
+	}
+}
+
+// What `omacloud drive-link` put after the page's `#`: the seed, and the
+// address in the person's bucket where the drive code waits, sealed under
+// it, both in base64url. { seed, address }, or null if that isn't what's there.
+export function linked(hash) {
+	const found = hash.match(/^#link=([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]+)$/);
+	if (!found) return null;
+	try {
+		const address = new URL(new TextDecoder().decode(bytesOf(found[2])));
+		// a bucket is reached over https; plain http only on this computer, for trying it
+		const here = ["127.0.0.1", "localhost"].includes(address.hostname);
+		if (address.protocol !== "https:" && !(address.protocol === "http:" && here)) return null;
+		return { seed: bytesOf(found[1]), address: address.href };
 	} catch {
 		return null;
 	}

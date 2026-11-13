@@ -1175,12 +1175,91 @@ fn switch_row(title: &str, on: bool, flip: impl Fn(bool) + 'static) -> adw::Acti
 /// What Browse shows.
 const DRIVE_BROWSE: &str = "Every folder in ~/Omacloud, to read, each file downloaded when opened";
 
-/// Opens the drive: every folder of the account, kept here or not.
-fn browse_button(ui: &Rc<Ui>) -> gtk::Button {
+/// The drive's two ways in: on this computer (every folder of the account,
+/// kept here or not), and in a browser on another device.
+fn browse_button(ui: &Rc<Ui>) -> gtk::Box {
     let browse = button("Browse…", Some("flat"));
-    let ui = ui.clone();
-    browse.connect_clicked(move |_| browse_online(&ui));
-    browse
+    let ui2 = ui.clone();
+    browse.connect_clicked(move |_| browse_online(&ui2));
+    let phone = button("Open on a Phone…", Some("flat"));
+    phone.set_tooltip_text(Some(
+        "Your files in a browser on another device, at omacloud.computer/drive",
+    ));
+    let ui2 = ui.clone();
+    phone.connect_clicked(move |_| show_drive_link(&ui2));
+    let both = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    both.append(&phone);
+    both.append(&browse);
+    both
+}
+
+/// A drive link as the code a phone's camera reads: Omacloud Drive opens in
+/// its browser with nothing typed. The link works for five minutes, and
+/// closes with this dialog.
+fn show_drive_link(ui: &Rc<Ui>) {
+    let ui2 = ui.clone();
+    // it opens the account's files: printed only to a terminal
+    tty_then(&["omacloud", "drive-link", "--keep"], Vec::new(), move |r| {
+        let link = match r {
+            Err(e) => return ui2.toast(&e.shown()),
+            Ok(out) => out
+                .lines()
+                .find(|l| l.contains("#link="))
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
+        };
+        let Ok(code) = qrcode::QrCode::with_error_correction_level(&link, qrcode::EcLevel::L) else {
+            return ui2.toast("Couldn't draw the link");
+        };
+        let picture = gtk::DrawingArea::builder()
+            .content_width(300)
+            .content_height(300)
+            .halign(gtk::Align::Center)
+            .build();
+        picture.set_draw_func(move |_, cr, width, height| {
+            // black on white whatever the theme: that's what a camera reads
+            const MARGIN: usize = 3;
+            let side = code.width() + 2 * MARGIN;
+            let cell = (f64::from(width.min(height)) / side as f64).floor().max(1.0);
+            let left = (f64::from(width) - cell * side as f64) / 2.0;
+            let top = (f64::from(height) - cell * side as f64) / 2.0;
+            cr.set_source_rgb(1.0, 1.0, 1.0);
+            cr.rectangle(left, top, cell * side as f64, cell * side as f64);
+            _ = cr.fill();
+            cr.set_source_rgb(0.0, 0.0, 0.0);
+            for (i, color) in code.to_colors().into_iter().enumerate() {
+                if color == qrcode::Color::Dark {
+                    let (x, y) = (i % code.width() + MARGIN, i / code.width() + MARGIN);
+                    cr.rectangle(left + cell * x as f64, top + cell * y as f64, cell, cell);
+                }
+            }
+            _ = cr.fill();
+        });
+        let dialog = adw::AlertDialog::new(
+            Some("Open on a phone"),
+            Some(
+                "Point your phone's camera at this. Your files open in its browser, read straight \
+                 from your storage. It works for five minutes, or until you close this.",
+            ),
+        );
+        dialog.set_extra_child(Some(&picture));
+        dialog.add_response("copy", "Copy Link");
+        dialog.add_response("close", "Done");
+        dialog.set_response_appearance("close", adw::ResponseAppearance::Suggested);
+        dialog.set_close_response("close");
+        let ui3 = ui2.clone();
+        dialog.connect_response(None, move |_, id| {
+            if id == "copy" {
+                // it stays good for its five minutes, to be pasted elsewhere
+                ui3.window.clipboard().set_text(&link);
+                ui3.toast("Link copied: it works for five minutes");
+            } else {
+                cli_then(&["omacloud", "drive-link", "--close"], Vec::new(), |_| {});
+            }
+        });
+        dialog.present(Some(&ui2.window));
+    });
 }
 
 /// The folders every Omarchy computer has, in their usual order.

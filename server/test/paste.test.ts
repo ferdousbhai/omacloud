@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 // @ts-ignore: the Drive page's own script, plain JavaScript
-import { pasted } from "../../web/paste.js";
+import { linked, pasted } from "../../web/paste.js";
 
 const printed = `# restore without omacloud: restic or rustic, this bucket and password
 # (repository epoch 0)
@@ -41,6 +41,22 @@ test("a drive code is read, whole or wrapped", () => {
 	// a damaged one isn't half read
 	assert.equal(pasted(code.slice(0, 60)), null);
 	assert.equal(pasted("omacloud-drive-e30"), null);
+});
+
+test("a drive link is read from after the #", () => {
+	const b64 = (text: string | Uint8Array) => Buffer.from(text).toString("base64url");
+	const seed = new Uint8Array(32).map((_, i) => i);
+	const address = "https://account.r2.cloudflarestorage.com/files/omacloud-links/ab12?X-Amz-Credential=key%2F20261113%2Fauto&X-Amz-Signature=00ff";
+	assert.deepEqual(linked(`#link=${b64(seed)}.${b64(address)}`), { seed, address });
+	assert.equal(linked(`#link=${b64("http://127.0.0.1:9000/files/x")}`), null);
+	assert.ok(linked(`#link=${b64(seed)}.${b64("http://127.0.0.1:9000/files/x")}`));
+	// only a bucket over https, a whole seed, and nothing that isn't an address
+	for (const bad of ["http://example.com/x", "javascript:alert(1)", "file:///etc/passwd", "not an address"]) {
+		assert.equal(linked(`#link=${b64(seed)}.${b64(bad)}`), null, bad);
+	}
+	assert.equal(linked(`#link=${b64(seed.slice(1))}.${b64(address)}`), null);
+	assert.equal(linked(""), null);
+	assert.equal(linked("#section"), null);
 });
 
 test("anything else isn't taken for it", () => {

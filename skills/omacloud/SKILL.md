@@ -71,7 +71,7 @@ With a bucket, also make a new key at the provider, run `bucket set-key`, then d
 the old key once `bucket status` says every computer switched. Each step needs the owner.
 
 The owner must retain the recovery code privately. Commands that print a
-secret (`init` creating an account, `join-code`, `invite`, `drive-code`, `export`,
+secret (`init` creating an account, `join-code`, `invite`, `drive-code`, `drive-link`, `export`,
 `recovery split|combine`) refuse with `terminal_required`
 off a terminal: have the owner run them in their own terminal. Never work
 around that refusal (no pseudo-terminals, no `script`), and never run them

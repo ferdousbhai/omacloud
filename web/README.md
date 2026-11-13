@@ -13,10 +13,16 @@ No server of Omacloud's sees a file, a key or a request.
 - `reader.js`: calls `omacloud_web.wasm`, built from `crates/omacloud-web`,
   which decrypts what the page fetched.
 
-Today it opens with the code `omacloud drive-code` prints, pasted in (the bucket,
-its key and the repository password in one line; what `omacloud export` prints
-works too), read-only. Still to come: a browser approved as
-a device instead of the password, Dropbox, uploading and Recently Deleted.
+It opens with a drive link (`omacloud drive-link`, or Open on a Phone in the
+app): a computer seals the drive code, leaves it in the bucket under
+`omacloud-links/` for five minutes, and shows a link, as a QR code too, to this
+page with the seed and a presigned address of that object after the `#`. The
+page takes the link out of its address at once, fetches the object, and opens it
+with the seed (`link.rs` in the crate). The bucket holds only what it can't read,
+and the link alone opens nothing once the object is gone. Or paste the code
+`omacloud drive-code` prints (the bucket, its key and the repository password in
+one line; what `omacloud export` prints works too). Read-only. Still to come:
+Dropbox, uploading and Recently Deleted.
 The site's Worker serves it at omacloud.computer/drive/ (`server/build-drive.sh`
 puts it in place at deploy).
 

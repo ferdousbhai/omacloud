@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- A drive link opens Omacloud Drive in a browser with nothing typed or pasted. In the app,
+  Open on a Phone shows a code for the phone's camera; `omacloud drive-link` draws the same
+  code in a terminal and prints the link. A computer leaves the drive code in your bucket,
+  sealed, for five minutes, and the link carries what opens it in the part of an address no
+  server is sent. Closing the dialog, pressing Enter or `omacloud drive-link --close` ends it
+  sooner. For an account in a bucket.
+
 ## 0.0.25 (2026-11-11)
 
 - `omacloud drive-code` prints one line that signs you in to Omacloud Drive in a browser
