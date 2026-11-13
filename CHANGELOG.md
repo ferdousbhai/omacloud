@@ -4,6 +4,9 @@
 
 - A notification says when files arrive from another computer: how many, from which one,
   and where. A click opens the folder.
+- Omacloud Drive in a browser opens on a home page, as iCloud's site does, with Drive, Photos
+  (every picture in your synced folders), Recents (what changed last, from any folder) and
+  Recently Deleted (files deleted in the last 30 days, to look at or download).
 - Omacloud shows in Omarchy's bar: a cloud that's ticked when everything is in step, turning
   while it syncs, dimmed when paused or not running, and red when something needs you. A
   click opens Omacloud. The daemon puts it there once; `omacloud bar off` takes it out and

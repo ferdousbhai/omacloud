@@ -160,14 +160,98 @@ button {
 	padding: 0.625rem 1rem;
 	border-bottom: 1px solid var(--line);
 }
-#drive > header .mark {
+#drive > header .mark,
+#home > header .mark {
 	width: 1.75rem;
 }
-#drive > header strong {
+#drive > header strong,
+#home > header strong {
 	font-size: 1.0625rem;
 	font-weight: 600;
 }
+#go-home {
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	border-radius: 0.5rem;
+}
+
+/* home: what there is to open, as tiles */
+#home {
+	min-height: 100%;
+	background: var(--side);
+}
+#home > header {
+	display: flex;
+	align-items: center;
+	gap: 0.6rem;
+	padding: 0.625rem 1rem;
+}
+#tiles {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(11rem, 14rem));
+	justify-content: center;
+	gap: 1rem;
+	padding: 3rem 1rem;
+	max-width: 64rem;
+	margin: 0 auto;
+}
+.tile {
+	display: grid;
+	justify-items: start;
+	gap: 0.25rem;
+	padding: 1.25rem;
+	background: var(--raised);
+	border: 1px solid var(--line);
+	border-radius: 1.125rem;
+	text-align: left;
+	transition: transform 0.12s;
+}
+.tile:hover {
+	transform: translateY(-2px);
+}
+.tile svg {
+	width: 3.5rem;
+	margin-bottom: 0.75rem;
+}
+.tile strong {
+	font-size: 1.125rem;
+	font-weight: 600;
+}
+.tile span {
+	font-size: 0.8125rem;
+	color: var(--soft);
+}
+.tile-photo {
+	fill: #9ad0f5;
+}
+.tile-sun {
+	fill: #ffd60a;
+}
+.tile-hill {
+	fill: #34c759;
+}
+.tile-face {
+	fill: var(--paper);
+	stroke: var(--paper-line);
+	stroke-width: 2;
+}
+.tile-hands,
+.tile-lid {
+	fill: none;
+	stroke: var(--soft);
+	stroke-width: 3.5;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+.tile-bin {
+	fill: var(--paper);
+	stroke: var(--soft);
+	stroke-width: 3;
+	stroke-linejoin: round;
+}
 #lock,
+#home-lock,
 #download,
 #look header button {
 	color: var(--accent);
@@ -175,6 +259,7 @@ button {
 	border-radius: 0.5rem;
 }
 #lock:hover,
+#home-lock:hover,
 #download:hover:enabled,
 #look header button:hover {
 	background: var(--chosen);
@@ -215,6 +300,13 @@ button {
 #sidebar button svg {
 	width: 1.125rem;
 	flex: none;
+}
+svg.line {
+	fill: none;
+	stroke: currentColor;
+	stroke-width: 1.8;
+	stroke-linecap: round;
+	stroke-linejoin: round;
 }
 #sidebar button:hover {
 	background: var(--line);
@@ -327,6 +419,23 @@ button {
 	border-radius: 0.375rem;
 	box-shadow: 0 0 0 1px var(--line);
 }
+/* pictures: bigger, and without their names */
+#items.photos {
+	grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+	gap: 0.25rem;
+}
+.photos .item {
+	padding: 0.2rem;
+}
+.photos .item .art {
+	width: 100%;
+	height: auto;
+	aspect-ratio: 1;
+}
+.photos .item .name,
+.photos .item .detail {
+	display: none;
+}
 .item .name {
 	overflow-wrap: anywhere;
 	line-height: 1.25;
@@ -366,6 +475,9 @@ button {
 .list .item .detail {
 	text-align: right;
 	font-variant-numeric: tabular-nums;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .empty {
 	grid-column: 1 / -1;

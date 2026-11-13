@@ -53,6 +53,9 @@ export OMACLOUD_SECRET_ACCESS_KEY=secret-one
 on_tty "$OMACLOUD" --config "$work/a.toml" init --folder "$work/A" --provider s3 --endpoint "$endpoint" \
   --region us-east-1 --bucket files --access-key-id key-one --device a >/dev/null
 "$OMACLOUD" --config "$work/a.toml" --styled sync >/dev/null 2>&1
+# something deleted since, for Recently Deleted
+rm "$work/A/Work/Reports/sales.csv" "$work/A/Photos/forest.png"
+"$OMACLOUD" --config "$work/a.toml" --styled sync >/dev/null 2>&1
 printed=$(on_tty "$OMACLOUD" --config "$work/a.toml" drive-code | grep '^omacloud-drive-')
 
 (cd "$work/site" && python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) &

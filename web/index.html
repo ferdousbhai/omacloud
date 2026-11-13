@@ -33,10 +33,25 @@
 </form>
 </main>
 
-<div id="drive" hidden>
+<main id="home" hidden>
 <header>
 <svg class="mark" viewBox="0 0 64 44" aria-hidden="true"><path d="M50 44H16a14 14 0 0 1-2.6-27.8A19 19 0 0 1 50.6 14 15 15 0 0 1 50 44z"/></svg>
-<strong>Omacloud Drive</strong>
+<strong>Omacloud</strong>
+<span class="grow"></span>
+<button id="home-lock" type="button" title="Forget the keys and close your files">Lock</button>
+</header>
+<div id="tiles">
+<button id="home-drive" type="button" class="tile"><svg viewBox="0 0 64 64" aria-hidden="true"><path class="folder-back" d="M6 14a4 4 0 0 1 4-4h14l6 6h24a4 4 0 0 1 4 4v6H6z"/><path class="folder-front" d="M6 22h52v26a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4z"/></svg><strong>Drive</strong><span>Every folder you sync</span></button>
+<button id="home-photos" type="button" class="tile"><svg viewBox="0 0 64 64" aria-hidden="true"><rect class="tile-photo" x="8" y="12" width="48" height="40" rx="5"/><circle class="tile-sun" cx="23" cy="26" r="5"/><path class="tile-hill" d="M8 46l14-13 10 9 9-8 15 13v0a5 5 0 0 1-5 5H13a5 5 0 0 1-5-5z"/></svg><strong>Photos</strong><span>The pictures in them</span></button>
+<button id="home-recents" type="button" class="tile"><svg viewBox="0 0 64 64" aria-hidden="true"><circle class="tile-face" cx="32" cy="32" r="23"/><path class="tile-hands" d="M32 18v15l10 6"/></svg><strong>Recents</strong><span>What changed last</span></button>
+<button id="home-deleted" type="button" class="tile"><svg viewBox="0 0 64 64" aria-hidden="true"><path class="tile-bin" d="M17 20h30l-3 34H20z"/><path class="tile-lid" d="M13 20h38M26 20v-7h12v7"/></svg><strong>Recently Deleted</strong><span>Kept for 30 days</span></button>
+</div>
+</main>
+
+<div id="drive" hidden>
+<header>
+<button id="go-home" type="button" title="Home"><svg class="mark" viewBox="0 0 64 44" aria-hidden="true"><path d="M50 44H16a14 14 0 0 1-2.6-27.8A19 19 0 0 1 50.6 14 15 15 0 0 1 50 44z"/></svg>
+<strong>Omacloud Drive</strong></button>
 <span class="grow"></span>
 <button id="lock" type="button" title="Forget the keys and close your files">Lock</button>
 </header>

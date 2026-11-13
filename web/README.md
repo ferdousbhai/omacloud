@@ -4,10 +4,14 @@ A first slice of web access: a static page that reads an account's files
 straight from the person's own S3 bucket and decrypts them in the browser.
 No server of Omacloud's sees a file, a key or a request.
 
-- `index.html`, `style.css`, `app.js`: the page, laid out as iCloud Drive is on
-  the web: a sign-in card, then a bar on top, the account's folders on the left,
+- `index.html`, `style.css`, `app.js`: the page, laid out as iCloud is on the
+  web: a sign-in card, a home of tiles (Drive, Photos, Recents, Recently
+  Deleted), then a bar on top, places and the account's folders on the left,
   the open folder as icons or a list (search, sort), and a look at a file over
-  it (pictures, PDFs, text, audio and video) with a download.
+  it (pictures, PDFs, text, audio and video) with a download. Photos and
+  Recents walk every folder of the newest version once; Recently Deleted
+  compares each kept version with the next, opening only the folders that
+  differ.
 - `s3.js`: listing and reading the bucket with presigned URLs, signed with the
   browser's own crypto.
 - `reader.js`: calls `omacloud_web.wasm`, built from `crates/omacloud-web`,
@@ -22,7 +26,7 @@ with the seed (`link.rs` in the crate). The bucket holds only what it can't read
 and the link alone opens nothing once the object is gone. Or paste the code
 `omacloud drive-code` prints (the bucket, its key and the repository password in
 one line; what `omacloud export` prints works too). Read-only. Still to come:
-Dropbox, uploading and Recently Deleted.
+Dropbox, uploading, and putting a deleted file back.
 The site's Worker serves it at omacloud.computer/drive/ (`server/build-drive.sh`
 puts it in place at deploy).
 

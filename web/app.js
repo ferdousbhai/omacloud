@@ -22,6 +22,11 @@ const FOLDER =
 const sheet = (kind) =>
 	`<svg viewBox="0 0 64 64" aria-hidden="true"><path class="sheet" d="M16 6h22l12 12v36a4 4 0 0 1-4 4H16a4 4 0 0 1-4-4V10a4 4 0 0 1 4-4z"/><path class="sheet" d="M38 6v12h12"/><text class="sheet-kind" x="31" y="45">${kind}</text></svg>`;
 
+const icon = (path) => `<svg viewBox="0 0 24 24" aria-hidden="true" class="line"><path d="${path}"/></svg>`;
+const CLOCK = icon("M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 4v5l3.5 2");
+const PHOTO = icon("M4 5h16v14H4zM4 16l4.5-4.5 3.5 3.5 3-3 5 5M9 9.5a1 1 0 1 0 0-.01");
+const TRASH = icon("M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13M10 11v6M14 11v6");
+
 // how a file can be looked at here, by its name's ending
 const KINDS = {
 	image: { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", avif: "image/avif", svg: "image/svg+xml" },
@@ -48,8 +53,12 @@ const THUMB_LIMIT = 8e6;
 const TEXT_LIMIT = 1e6;
 
 let bucket;
+// every snapshot the bucket lists, newest written first: [{ name, modified }]
+let written = [];
 // the folders opened so far, from the top: [{ name, tree }]
 let trail = [];
+// what's open instead of a folder, if anything: "recents", "photos" or "deleted"
+let place = null;
 let nodes = [];
 let selected = null;
 const trees = new Map();
@@ -69,6 +78,8 @@ const keep = (name, value) => {
 };
 let view = kept("view", "grid");
 let sort = kept("sort", "name");
+// a place lists files from everywhere: newest first until asked otherwise
+let placeSort = "date";
 
 // a few at once: a bucket answers many small reads faster side by side
 async function each(items, work, atOnce = 8) {
@@ -141,7 +152,7 @@ async function connect(form) {
 	// month of them, so only the few written last are read: the newest by
 	// what each says is among them. (Any written at the same moment as the
 	// last of those are read too, since the listing can't order them.)
-	const written = (await bucket.listed("snapshots")).sort((a, b) => b.modified.localeCompare(a.modified));
+	written = (await bucket.listed("snapshots")).sort((a, b) => b.modified.localeCompare(a.modified));
 	const cut = written[Math.min(NEWEST, written.length) - 1]?.modified;
 	const names = written.filter((file, i) => i < NEWEST || file.modified === cut).map((file) => file.name);
 	status("Finding your files…");
@@ -153,9 +164,114 @@ async function connect(form) {
 	$("pasted").value = "";
 	status("");
 	$("signin").hidden = true;
-	$("drive").hidden = false;
 	await sidebar();
-	await open();
+	home();
+}
+
+// Where signing in lands, as iCloud's site does: what there is to open.
+function home() {
+	$("drive").hidden = true;
+	$("home").hidden = false;
+}
+function leaveHome() {
+	$("home").hidden = true;
+	$("drive").hidden = false;
+}
+$("home-drive").addEventListener("click", () => (leaveHome(), act(() => ((trail = trail.slice(0, 1)), open()))));
+$("home-photos").addEventListener("click", () => (leaveHome(), act(() => openPlace("photos"))));
+$("home-recents").addEventListener("click", () => (leaveHome(), act(() => openPlace("recents"))));
+$("home-deleted").addEventListener("click", () => (leaveHome(), act(() => openPlace("deleted"))));
+$("go-home").addEventListener("click", home);
+
+// Every file of the account, each with the folder it's in (`where`): read
+// once, when a place that shows files from everywhere is first opened.
+let everything;
+function allFiles() {
+	everything ??= filesUnder(trail[0].tree, "", true);
+	return everything;
+}
+async function filesUnder(tree, where, top = false) {
+	const list = await readTree(tree);
+	const here = top ? visible(list) : list;
+	const files = here.filter((n) => n.type === "file").map((n) => ({ ...n, where }));
+	const inside = await each(
+		here.filter((n) => n.type === "dir"),
+		(n) => filesUnder(n.subtree, where ? `${where}/${n.name}` : n.name),
+		4,
+	);
+	return files.concat(...inside);
+}
+
+// What `was` holds that `is` doesn't, by name all the way down: the files
+// deleted between two versions. A folder that's the same in both (the same
+// tree) is never opened.
+async function gone(was, is, where, top, out) {
+	if (was === is) return;
+	const before = await readTree(was);
+	const after = new Map((is ? await readTree(is) : []).map((n) => [n.name, n]));
+	for (const node of top ? visible(before) : before) {
+		const now = after.get(node.name);
+		const path = where ? `${where}/${node.name}` : node.name;
+		if (node.type === "dir") {
+			if (now?.type === "dir") await gone(node.subtree, now.subtree, path, false, out);
+			else for (const file of await filesUnder(node.subtree, path)) out.push(file);
+		} else if (node.type === "file" && !now) out.push({ ...node, where });
+	}
+}
+
+// Whether the newest version still has a file at this path.
+async function stillThere(where, name) {
+	let tree = trail[0].tree;
+	for (const part of where ? where.split("/") : []) {
+		tree = (await readTree(tree)).find((n) => n.name === part && n.type === "dir")?.subtree;
+		if (!tree) return false;
+	}
+	return (await readTree(tree)).some((n) => n.name === name);
+}
+
+// Files deleted in the time the account keeps versions for (a month): each
+// from the last version that had it, with when the next one came without it.
+let deletedFiles;
+function allDeleted() {
+	deletedFiles ??= (async () => {
+		const snapshots = await each(written, async (file) => reader.file(await bucket.read(`snapshots/${file.name}`)));
+		snapshots.sort((a, b) => a.time.localeCompare(b.time));
+		const found = new Map();
+		for (let i = 0; i + 1 < snapshots.length; i++) {
+			const out = [];
+			await gone(snapshots[i].tree, snapshots[i + 1].tree, "", true, out);
+			for (const file of out) found.set(`${file.where}/${file.name}`, { ...file, deleted: snapshots[i + 1].time });
+		}
+		const kept = [];
+		for (const file of found.values()) if (!(await stillThere(file.where, file.name))) kept.push(file);
+		return kept;
+	})();
+	return deletedFiles;
+}
+
+const PLACES = {
+	recents: { title: "Recents", empty: "Nothing here yet.", files: async () => (await allFiles()).toSorted(orders.date).slice(0, 200) },
+	photos: {
+		title: "Photos",
+		empty: "No pictures in your synced folders.",
+		files: async () => (await allFiles()).filter((n) => kindOf(n.name).kind === "image"),
+	},
+	deleted: { title: "Recently Deleted", empty: "Nothing was deleted in the last 30 days.", files: allDeleted },
+};
+
+async function openPlace(name) {
+	place = name;
+	placeSort = "date";
+	say("Loading…");
+	mark(`place:${name}`);
+	$("path").replaceChildren(el("span", { textContent: PLACES[name].title }));
+	$("items").replaceChildren();
+	const files = await PLACES[name].files();
+	if (place !== name) return;
+	nodes = files;
+	selected = null;
+	$("filter").value = "";
+	show();
 }
 
 // Omacloud's own files (settings, package lists) stay out of sight
@@ -172,20 +288,36 @@ async function sidebar() {
 		button.addEventListener("click", () => act(go));
 		return button;
 	};
+	const special = (name, drawing) => {
+		const button = place(PLACES[name].title, () => openPlace(name));
+		button.querySelector("svg").outerHTML = drawing;
+		// a folder may be called Photos too
+		button.dataset.name = `place:${name}`;
+		return button;
+	};
 	$("sidebar").replaceChildren(
+		special("recents", CLOCK),
 		place("Browse", () => ((trail = trail.slice(0, 1)), open())),
+		special("photos", PHOTO),
 		el("h2", { textContent: "Folders" }),
 		...top.map((n) => place(n.name, () => ((trail = [trail[0], { name: n.name, tree: n.subtree }]), open()))),
+		el("h2", { textContent: "" }),
+		special("deleted", TRASH),
 	);
 }
 
+// which of the sidebar's places is open
+function mark(name) {
+	for (const b of $("sidebar").querySelectorAll("button")) b.setAttribute("aria-current", b.dataset.name === name);
+}
+
 async function open() {
+	place = null;
 	say("Loading…");
 	nodes = visible(await readTree(trail[trail.length - 1].tree));
 	selected = null;
 	$("filter").value = "";
-	const here = trail.length === 1 ? "Browse" : trail[1].name;
-	for (const b of $("sidebar").querySelectorAll("button")) b.setAttribute("aria-current", b.dataset.name === here);
+	mark(trail.length === 1 ? "Browse" : trail[1].name);
 	$("path").replaceChildren(
 		...trail.map((step, i) =>
 			i === trail.length - 1
@@ -242,15 +374,17 @@ const seen = new IntersectionObserver((entries) => {
 function show() {
 	const find = $("filter").value.trim().toLowerCase();
 	const shown = nodes.filter((n) => !find || n.name.toLowerCase().includes(find));
-	shown.sort((a, b) => (b.type === "dir") - (a.type === "dir") || orders[sort](a, b));
+	if (place) shown.sort(orders[placeSort]);
+	else shown.sort((a, b) => (b.type === "dir") - (a.type === "dir") || orders[sort](a, b));
 	waiting.length = 0;
 	seen.disconnect();
 
 	const items = $("items");
-	items.className = view;
+	// pictures are looked at, not listed
+	items.className = place === "photos" ? "grid photos" : view;
 	$("as-grid").setAttribute("aria-pressed", view === "grid");
 	$("as-list").setAttribute("aria-pressed", view === "list");
-	$("sort").value = sort;
+	$("sort").value = place ? placeSort : sort;
 	items.replaceChildren(
 		...shown.map((node) => {
 			const art = el("div", { className: "art" });
@@ -261,14 +395,22 @@ function show() {
 				seen.observe(art);
 			}
 			const detail = folder ? "" : human(node.size || 0);
+			// where a file from elsewhere is, or was
+			const from = place ? node.where || "Omacloud Drive" : "";
 			const row = el(
 				"div",
 				{ className: "item", role: "option" },
 				art,
-				el("div", { className: "name", textContent: node.name, title: node.name }),
+				el("div", { className: "name", textContent: node.name, title: from ? `${from}/${node.name}` : node.name }),
 			);
-			if (view === "list") row.append(el("div", { className: "detail when", textContent: when(node) }));
-			row.append(el("div", { className: "detail", textContent: view === "list" ? detail : detail || when(node) }));
+			const date = place === "deleted" ? `Deleted ${when({ mtime: node.deleted })}` : when(node);
+			if (view === "list" && place !== "photos") {
+				row.append(el("div", { className: "detail when", textContent: date }));
+				row.append(el("div", { className: "detail", textContent: from || detail, title: from }));
+			} else {
+				const under = place === "deleted" ? `${date} · ${from}` : from || detail || date;
+				row.append(el("div", { className: "detail", textContent: under }));
+			}
 			row.setAttribute("aria-selected", node === selected);
 			// a tap opens; with a mouse, a click chooses and a second opens
 			row.addEventListener("click", () => {
@@ -280,7 +422,8 @@ function show() {
 		}),
 	);
 	if (!shown.length) {
-		items.append(el("p", { className: "empty", textContent: find ? "Nothing here by that name." : "This folder is empty." }));
+		const nothing = place ? PLACES[place].empty : "This folder is empty.";
+		items.append(el("p", { className: "empty", textContent: find ? "Nothing here by that name." : nothing }));
 	}
 	$("download").disabled = !selected || selected.type !== "file";
 	say(`${shown.length} ${shown.length === 1 ? "item" : "items"}`);
@@ -413,8 +556,14 @@ $("connect").addEventListener("submit", (event) => {
 });
 // forgetting everything is a fresh page: nothing was kept anywhere else
 $("lock").addEventListener("click", () => location.reload());
+$("home-lock").addEventListener("click", () => location.reload());
 $("filter").addEventListener("input", show);
-$("sort").addEventListener("change", (event) => ((sort = event.target.value), keep("sort", sort), show()));
+$("filter").placeholder = "Search";
+$("sort").addEventListener("change", (event) => {
+	if (place) placeSort = event.target.value;
+	else (sort = event.target.value), keep("sort", sort);
+	show();
+});
 $("as-grid").addEventListener("click", () => ((view = "grid"), keep("view", view), show()));
 $("as-list").addEventListener("click", () => ((view = "list"), keep("view", view), show()));
 $("download").addEventListener("click", () => selected && act(() => download(selected)));
