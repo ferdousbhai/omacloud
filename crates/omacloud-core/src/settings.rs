@@ -188,8 +188,25 @@ impl Manifest {
     /// Nor does what another program installed and manages there: that
     /// belongs to the computer the program is on (see [`managed`]).
     /// Of launchers and their icons, only a web app's sync (see [`web_app`]).
+    /// Of the files of hooks in an agent's hooks folder, only one whose
+    /// every hook travels (see [`crate::agents`]).
     #[must_use]
     pub fn admits(&self, rel: &Path, full: &Path) -> bool {
+        if HOOK_FOLDERS
+            .iter()
+            .any(|folder| rel.parent() == Some(Path::new(folder)))
+        {
+            return full
+                .ancestors()
+                .nth(rel.components().count())
+                .is_some_and(|home| crate::agents::hook_file_travels(self, home, full));
+        }
+        self.admits_file(rel, full)
+    }
+
+    /// [`Manifest::admits`] for a file a hook runs: by what it is, never by
+    /// what it would run in turn.
+    pub(crate) fn admits_file(&self, rel: &Path, full: &Path) -> bool {
         if let Some(ours) = web_app(rel, full) {
             return ours;
         }
@@ -326,6 +343,9 @@ fn plain_text(path: &Path) -> bool {
 }
 
 /// Where launchers and their icons are, under home.
+/// Where Grok and Copilot keep hooks: a JSON file a program, side by side.
+const HOOK_FOLDERS: [&str; 2] = [".grok/hooks", ".copilot/hooks"];
+
 const LAUNCHERS: &str = ".local/share/applications";
 const ICONS: &str = ".local/share/icons/hicolor/256x256/apps";
 
@@ -552,6 +572,40 @@ pub fn merge(base: &[u8], ours: &[u8], theirs: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hooks_file_syncs_when_all_it_runs_does() {
+        let home = tempfile::tempdir().unwrap();
+        let manifest = Manifest::parse(BUNDLED).unwrap();
+        let hooks = home.path().join(".grok/hooks");
+        fs::create_dir_all(&hooks).unwrap();
+        let write = |name: &str, command: &str| {
+            let text =
+                serde_json::json!({ "hooks": { "Stop": [{ "hooks": [{ "type": "command", "command": command }] }] } });
+            fs::write(hooks.join(name), text.to_string()).unwrap();
+        };
+        let admits = |name: &str| {
+            let rel = Path::new(".grok/hooks").join(name);
+            manifest.is_shared(&rel) && manifest.admits(&rel, &home.path().join(&rel))
+        };
+        // names no file: it works wherever the program is
+        write(
+            "keep-going.json",
+            "command -v keep-going >/dev/null || exit 0; keep-going hook grok",
+        );
+        assert!(admits("keep-going.json"));
+        // runs a script a program installed beside it, which doesn't sync
+        fs::write(hooks.join("state.sh"), "#!/bin/sh\n# managed by herdr\n").unwrap();
+        write("herdr.json", "sh '~/.grok/hooks/state.sh' session");
+        assert!(!admits("herdr.json"));
+        // something of this computer
+        write("local.json", "/opt/tool/bin/hook");
+        assert!(!admits("local.json"));
+        fs::write(hooks.join("broken.json"), "{").unwrap();
+        assert!(!admits("broken.json"));
+        // a script there isn't a hooks file, and isn't shared
+        assert!(!admits("state.sh"));
+    }
 
     #[test]
     fn what_is_about_the_machine_stays_whatever_omarchys_manifest_says() -> Result<()> {

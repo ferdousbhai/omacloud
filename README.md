@@ -182,7 +182,8 @@ project of their own ([docs/providers.md](docs/providers.md)).
   here, like a script of yours in `~/.claude/hooks` (write its path with `~`
   or `$HOME` if your user name differs between computers). One that runs a
   program's install or a checkout stays. That holds for Claude Code, Gemini,
-  Antigravity, Codex and Cursor; Grok's and Copilot's hook files stay. A file or folder linked in from elsewhere
+  Antigravity, Codex and Cursor, and for Grok and Copilot a file at a time: one in their hooks folder
+  syncs when every hook in it would. A file or folder linked in from elsewhere
   (a `CLAUDE.md` pointing at your notes, say) is left as it is, and `omacloud
   settings` lists it. Codex's trusted projects and pi's version note and device
   id stay with each computer while the rest of those files syncs. Edits on two machines

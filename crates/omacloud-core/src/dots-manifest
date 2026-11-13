@@ -65,7 +65,8 @@ shared .local/share/icons/hicolor/256x256/apps/*
 # only files that sync here (a person's script in ~/.claude/hooks) or no file
 # at all: in Claude Code's and Gemini's settings.json, and in Antigravity's,
 # Codex's and Cursor's hooks.json, none of which are listed here (agents.rs
-# merges them). Grok's and Copilot's hook files stay. Codex's config.toml and
+# merges them), and in Grok's and Copilot's hooks folders, where a file syncs
+# when every hook in it does. Codex's config.toml and
 # pi's settings.json sync without their machine-only parts (project trust,
 # version notes, the device's id): see agents.rs.
 shared .agents/skills/**
@@ -106,5 +107,7 @@ shared .pi/agent/themes/**
 shared .pi/agent/extensions/**
 local .pi/agent/auth.json
 shared .grok/config.toml
+shared .grok/hooks/*.json
 local .grok/auth.json
 shared .copilot/settings.json
+shared .copilot/hooks/*.json

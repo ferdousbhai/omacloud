@@ -74,6 +74,47 @@ fn command(v: &Value) -> Option<&str> {
         .find_map(|k| v.get(*k).and_then(Value::as_str))
 }
 
+/// Whether a hook's handler travels (see [`Agents::travels`]), for the
+/// account whose home is `home`.
+fn handler_travels(manifest: &Manifest, home: &Path, handler: &Value) -> bool {
+    let Some(command) = command(handler) else {
+        return true;
+    };
+    let at_home = home.to_string_lossy();
+    command
+        .split(|c: char| c.is_whitespace() || "'\"`;|&<>()=".contains(c))
+        .filter_map(|word| {
+            let rest = ["~/", "$HOME/", "${HOME}/"].iter().find_map(|p| word.strip_prefix(p));
+            match rest {
+                Some(rest) => Some(format!("{at_home}/{rest}")),
+                None => word.starts_with('/').then(|| word.to_string()),
+            }
+        })
+        .filter(|path| !["/dev/null", "/dev/stdout", "/dev/stderr"].contains(&path.as_str()))
+        .all(|path| {
+            let full = Path::new(&path);
+            full.strip_prefix(home).is_ok_and(|rel| {
+                manifest.is_shared(rel)
+                    && !manifest.through_link(home, rel)
+                    && (!full.exists() || manifest.admits_file(rel, full))
+            })
+        })
+}
+
+/// Whether a file of nothing but hooks (Grok's and Copilot's keep one a
+/// program in a folder) travels: every hook in it does. One that doesn't
+/// read as JSON isn't such a file, and stays.
+pub(crate) fn hook_file_travels(manifest: &Manifest, home: &Path, file: &Path) -> bool {
+    fs::read(file)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .is_some_and(|hooks| {
+            split_hooks(&hooks, &|handler| handler_travels(manifest, home, handler))
+                .1
+                .is_none()
+        })
+}
+
 /// Hooks as two: what travels, and what stays on this computer. A handler
 /// (see [`command`]) goes whole to one side, by `travels`; what holds
 /// handlers (an event's list, a group with its matcher, a file keyed by
@@ -203,28 +244,7 @@ impl Agents {
     /// Whether a file is here yet doesn't count: a script may arrive after
     /// the hook that runs it.
     fn travels(&self, handler: &Value) -> bool {
-        let Some(command) = command(handler) else {
-            return true;
-        };
-        let home = self.home.to_string_lossy();
-        command
-            .split(|c: char| c.is_whitespace() || "'\"`;|&<>()=".contains(c))
-            .filter_map(|word| {
-                let rest = ["~/", "$HOME/", "${HOME}/"].iter().find_map(|p| word.strip_prefix(p));
-                match rest {
-                    Some(rest) => Some(format!("{home}/{rest}")),
-                    None => word.starts_with('/').then(|| word.to_string()),
-                }
-            })
-            .filter(|path| !["/dev/null", "/dev/stdout", "/dev/stderr"].contains(&path.as_str()))
-            .all(|path| {
-                let full = Path::new(&path);
-                full.strip_prefix(&self.home).is_ok_and(|rel| {
-                    self.manifest.is_shared(rel)
-                        && !self.manifest.through_link(&self.home, rel)
-                        && (!full.exists() || self.manifest.admits(rel, full))
-                })
-            })
+        handler_travels(&self.manifest, &self.home, handler)
     }
 
     fn file(doc: &str) -> Option<(&'static str, Kind)> {
