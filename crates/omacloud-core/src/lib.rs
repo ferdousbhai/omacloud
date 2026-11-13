@@ -36,6 +36,6 @@ pub const VERSIONS_KEPT: std::time::Duration = std::time::Duration::from_secs(30
 pub use repo::RepoSpec;
 pub use rustic_core::{jiff, repofile::MasterKey};
 pub use sync::{
-    Deleted, Engine, Folders, KeyChange, Membership, NoCloudFolder, PACKAGES, Rotated, SECRETS, SettingsSetup,
+    Arrived, Deleted, Engine, Folders, KeyChange, Membership, NoCloudFolder, PACKAGES, Rotated, SECRETS, SettingsSetup,
     SettingsStatus, Setup, State, Stats, Version,
 };

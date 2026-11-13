@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- A notification says when files arrive from another computer: how many, from which one,
+  and where. A click opens the folder.
+- Omacloud shows in Omarchy's bar: a cloud that's ticked when everything is in step, turning
+  while it syncs, dimmed when paused or not running, and red when something needs you. A
+  click opens Omacloud. The daemon puts it there once; `omacloud bar off` takes it out and
+  `omacloud bar on` puts it back.
+
 ## 0.0.26 (2026-11-13)
 
 - A drive link opens Omacloud Drive in a browser with nothing typed or pasted. In the app,

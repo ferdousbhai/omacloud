@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "ferdousbhai.omacloud",
+  "name": "Omacloud",
+  "version": "1.0.0",
+  "author": "Ferdous Bhai",
+  "license": "MIT",
+  "description": "Omacloud's sync at a glance in the bar: up to date, syncing, paused, or needing you. A click opens Omacloud. Needs the omacloud package.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {"barWidget": "Widget.qml"},
+  "barWidget": {
+    "displayName": "Omacloud",
+    "description": "Shows whether your files are in step, and opens Omacloud.",
+    "category": "Files",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

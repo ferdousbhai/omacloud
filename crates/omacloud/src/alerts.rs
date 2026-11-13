@@ -75,6 +75,51 @@ pub struct Alerts {
     folders_at: Option<Instant>,
 }
 
+/// The folder all of `files` are in, however deep it's shared.
+fn shared_folder(files: &[PathBuf]) -> PathBuf {
+    let mut shared = files
+        .first()
+        .and_then(|f| f.parent())
+        .unwrap_or(Path::new(""))
+        .to_path_buf();
+    for file in files {
+        while !file.starts_with(&shared) {
+            if !shared.pop() {
+                break;
+            }
+        }
+    }
+    shared
+}
+
+/// A notification's two lines for files that arrived: how many and from
+/// where, then the first few by name.
+fn arrival_words(arrived: &omacloud_core::Arrived) -> (String, String) {
+    const NAMED: usize = 3;
+    let name = |f: &PathBuf| f.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    let count = arrived.files.len();
+    let folder = shared_folder(&arrived.files);
+    let place = if folder.as_os_str().is_empty() {
+        String::new()
+    } else {
+        format!(" in {}", folder.display())
+    };
+    let summary = match arrived.files.as_slice() {
+        [one] => format!("{} arrived from {}", name(one), arrived.from),
+        _ => format!("{count} files arrived from {}", arrived.from),
+    };
+    let mut names: Vec<String> = arrived.files.iter().take(NAMED).map(name).collect();
+    if count > NAMED {
+        names.push(format!("and {} more", count - NAMED));
+    }
+    let body = match arrived.files.as_slice() {
+        [_] if place.is_empty() => String::new(),
+        [_] => format!("It's{place}."),
+        _ => format!("{}{place}", names.join(", ")),
+    };
+    (summary, body)
+}
+
 impl Alerts {
     pub fn new(config: Option<&Path>) -> Self {
         Self {
@@ -217,6 +262,33 @@ impl Alerts {
         });
     }
 
+    /// Say that files came from another device: what iCloud never does and a
+    /// person syncing their own computers wants to see. One notification a
+    /// sync however many files; a click opens the folder they're in.
+    pub fn arrived(&self, folder: &Path, arrived: &omacloud_core::Arrived) {
+        let (summary, body) = arrival_words(arrived);
+        let open = folder.join(shared_folder(&arrived.files));
+        std::thread::spawn(move || {
+            let Ok(out) = Command::new("notify-send")
+                .args([
+                    "--app-name=Omacloud",
+                    "--icon=folder-download",
+                    "--expire-time=8000",
+                    "--action=default=Show",
+                    &summary,
+                    &body,
+                ])
+                .stderr(Stdio::null())
+                .output()
+            else {
+                return;
+            };
+            if String::from_utf8_lossy(&out.stdout).trim() == "default" {
+                _ = Command::new("xdg-open").arg(open).spawn();
+            }
+        });
+    }
+
     fn show(&self, summary: &str, body: &str, page: &str) {
         let (summary, body, page) = (summary.to_string(), body.to_string(), page.to_string());
         let config = self.config.clone();
@@ -250,6 +322,39 @@ impl Alerts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arrivals_say_how_many_from_where_and_which_folder() {
+        let arrived = |files: &[&str]| omacloud_core::Arrived {
+            from: "thinkpad".into(),
+            files: files.iter().map(PathBuf::from).collect(),
+        };
+        let one = arrived(&["Work/Reports/sales.csv"]);
+        assert_eq!(
+            arrival_words(&one),
+            ("sales.csv arrived from thinkpad".into(), "It's in Work/Reports.".into())
+        );
+        assert_eq!(shared_folder(&one.files), Path::new("Work/Reports"));
+        let many = arrived(&[
+            "Work/a.md",
+            "Work/Reports/b.csv",
+            "Work/c.txt",
+            "Work/d.txt",
+            "Work/e.txt",
+        ]);
+        assert_eq!(
+            arrival_words(&many),
+            (
+                "5 files arrived from thinkpad".into(),
+                "a.md, b.csv, c.txt, and 2 more in Work".into()
+            )
+        );
+        let apart = arrived(&["Work/a.md", "Pictures/b.png"]);
+        assert_eq!(shared_folder(&apart.files), Path::new(""));
+        assert_eq!(arrival_words(&apart).1, "a.md, b.png");
+        let top = arrived(&["a.md"]);
+        assert_eq!(arrival_words(&top).1, "");
+    }
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_string()).collect()

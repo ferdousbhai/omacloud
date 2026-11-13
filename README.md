@@ -362,7 +362,10 @@ repository = "opendal:s3"
 
 `notifications = false` turns off the desktop notifications (a computer
 asking to join, a setting that needs a choice, a new folder in your home to sync,
-this computer removed, your storage refusing its key).
+files arriving from another computer, this computer removed, your storage refusing its key).
+
+On Omarchy, a cloud in the bar shows how sync stands (in step, syncing, paused, or needing
+you), and a click opens Omacloud. `omacloud bar off` takes it out; `omacloud bar on` puts it back.
 
 Ignore rules use gitignore syntax, from three places: built-in defaults
 (editor swap files, desktop junk), `~/.config/omacloud/ignore` for this

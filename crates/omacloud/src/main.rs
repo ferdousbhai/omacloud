@@ -15,6 +15,7 @@ use std::{
 
 mod agent_skill;
 mod alerts;
+mod bar;
 mod dropbox;
 mod fail;
 mod mount;
@@ -248,6 +249,12 @@ enum Cmd {
     /// omacloud.computer/drive (a bucket's account; it holds the key to your
     /// storage and the password to your files)
     DriveCode,
+    /// Show how sync stands in Omarchy's bar (a cloud; a click opens
+    /// Omacloud), or take it out
+    Bar {
+        #[command(subcommand)]
+        action: BarCmd,
+    },
     /// Show a link, and its code for a phone's camera, that opens your files
     /// in a browser at omacloud.computer/drive. It works for five minutes;
     /// nothing is typed or pasted (a bucket's account)
@@ -533,6 +540,14 @@ enum Keep {
 }
 
 #[derive(Subcommand)]
+enum BarCmd {
+    /// Put Omacloud's cloud in the bar
+    On,
+    /// Take it out, and don't put it back
+    Off,
+}
+
+#[derive(Subcommand)]
 enum FoldersCmd {
     /// Show the folders syncing here, and the ones this device skips
     List,
@@ -809,6 +824,18 @@ impl Paths {
     /// systemd unit runs.
     fn is_default(&self) -> bool {
         self.default
+    }
+    /// Where a person's settings live (`~/.config`).
+    fn config_home() -> PathBuf {
+        std::env::var_os("XDG_CONFIG_HOME").map_or_else(
+            || PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".config"),
+            PathBuf::from,
+        )
+    }
+    /// Its being there says the bar was decided: shown once by the daemon,
+    /// or turned on or off by the person. So it's never put back unasked.
+    fn bar_decided(&self) -> PathBuf {
+        self.data.join("bar-decided")
     }
     fn device_key(&self) -> PathBuf {
         self.data.join("device.key")
@@ -1432,6 +1459,16 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     let mut alerts = config
         .notifications
         .then(|| alerts::Alerts::new((!paths.is_default()).then_some(paths.config.as_path())));
+    let mut bar = bar::Bar::new(&paths.data, paths.is_default());
+    // in Omarchy's bar from the first run on, as its other sync shows there;
+    // once only, so taking it out stays taken out
+    if paths.is_default() && !paths.bar_decided().exists() {
+        _ = fs::write(paths.bar_decided(), "");
+        match bar::show(&Paths::config_home()) {
+            Ok(()) => info!("Omacloud is in the bar; `omacloud bar off` takes it out"),
+            Err(e) => info!("not in the bar: {e:#}"),
+        }
+    }
     let config_mtime = || fs::metadata(&paths.config).and_then(|m| m.modified()).ok();
     let mut config_seen = config_mtime();
     let (mut seen_marker, mut full_at, mut folders_changed) = (None, None, false);
@@ -1460,6 +1497,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
                 }
             }
         }
+        bar.beat();
         // between syncs: an upgrade restarts into the new binary
         if exe.as_ref().is_some_and(Exe::replaced) {
             info!("omacloud was upgraded; restarting into the new version");
@@ -1501,6 +1539,9 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             paused = pause;
             info!("{} sync (battery)", if paused { "pausing" } else { "resuming" });
         }
+        if paused {
+            bar.say(bar::Standing::Paused, "paused on battery");
+        }
         // idle: one look at the change marker instead of a sync, with a full
         // sync now and then in case a write didn't mark itself
         let refused = refused_at.is_some_and(|t: Instant| t.elapsed() < REFUSED_WAIT);
@@ -1527,9 +1568,30 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
                 engine.request_rescan();
                 rescan_at = Some(Instant::now());
             }
-            match run_sync(&mut engine, &mut waiting, alerts.as_mut()) {
-                Synced::Stop => return Ok(Ended::Stopped),
+            // a look that finds nothing is over at once: not worth a flicker
+            if engine.has_pending() || marker != seen_marker {
+                bar.say(bar::Standing::Syncing, "syncing");
+            }
+            let synced = run_sync(&mut engine, &mut waiting, alerts.as_mut());
+            match &synced {
+                Synced::Ok => bar.say(bar::Standing::Synced, "up to date"),
+                Synced::Failed if waiting => {
+                    bar.say(bar::Standing::Attention, "waiting to be approved on another computer");
+                }
+                Synced::Failed => bar.say(bar::Standing::Syncing, "couldn't sync, trying again"),
+                Synced::Refused => bar.say(bar::Standing::Attention, "your storage refused this computer's key"),
+                Synced::Stop => bar.say(bar::Standing::Attention, "stopped: open Omacloud to see why"),
+            }
+            match synced {
+                Synced::Stop => {
+                    // what it says stays after this ends
+                    std::mem::forget(bar);
+                    return Ok(Ended::Stopped);
+                }
                 Synced::Ok => {
+                    if let (Some(a), Some(arrived)) = (alerts.as_ref(), engine.take_arrived()) {
+                        a.arrived(&config.folder, &arrived);
+                    }
                     // the marker read before syncing: anything written
                     // since moves it again
                     seen_marker = marker;
@@ -1559,6 +1621,12 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             }
             if let Some(a) = alerts.as_mut() {
                 a.check(&mut engine);
+            }
+            if !engine.settings_status().held.is_empty() {
+                bar.say(
+                    bar::Standing::Attention,
+                    "a setting changed on two computers: choose one",
+                );
             }
         }
         // a folder made in home: offer to sync it, once
@@ -2308,6 +2376,24 @@ fn run(cli: Cli) -> Out {
             );
             let data = json!({ "epoch": r.epoch, "snapshots": r.snapshots, "left": r.left });
             Ok(Response::new(data, summary.clone()).human(format!("{summary}\n{}", leftover_text(&r))))
+        }
+        Cmd::Bar { action } => {
+            fs::create_dir_all(&paths.data)?;
+            fs::write(paths.bar_decided(), "")?;
+            let home = Paths::config_home();
+            match action {
+                BarCmd::On => {
+                    bar::show(&home).map_err(|e| {
+                        fail::unsupported(format!("couldn't put Omacloud in the bar: {e:#}"))
+                            .hint("it needs Omarchy's shell (omarchy-shell) and the omacloud package")
+                    })?;
+                    Ok(Response::new(json!({ "bar": true }), "Omacloud is in the bar"))
+                }
+                BarCmd::Off => {
+                    bar::hide(&home)?;
+                    Ok(Response::new(json!({ "bar": false }), "Omacloud is out of the bar"))
+                }
+            }
         }
         Cmd::DriveCode => {
             if !output::to_terminal(mode()) {

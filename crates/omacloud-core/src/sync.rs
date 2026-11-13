@@ -325,6 +325,15 @@ impl std::ops::AddAssign for Stats {
     }
 }
 
+/// Files another device's push put on this one, see [`Engine::take_arrived`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Arrived {
+    /// The device that pushed the last of them.
+    pub from: String,
+    /// Each file's path in the synced folder, as written here.
+    pub files: Vec<PathBuf>,
+}
+
 /// One version of a path, see [`Engine::versions`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Version {
@@ -388,6 +397,8 @@ pub struct Engine {
     held_docs: BTreeMap<PathBuf, Value>,
     /// The groups due a look this sync, as they were before it looked.
     due_now: BTreeSet<String>,
+    /// Files pulls wrote here since [`Engine::take_arrived`] was last asked.
+    arrived: Arrived,
     folders: Option<Folders>,
     /// The folders syncing here, when syncing chosen folders of home:
     /// the account's, less the skipped ones.
@@ -474,6 +485,7 @@ impl Engine {
             apps_looked: None,
             held_docs: BTreeMap::new(),
             due_now: BTreeSet::new(),
+            arrived: Arrived::default(),
             synced: folders
                 .as_ref()
                 .map(|f| f.add.difference(&f.skip).cloned().collect())
@@ -1690,6 +1702,13 @@ impl Engine {
         self.rescan = true;
     }
 
+    /// The files other devices' pushes wrote here since this was last asked,
+    /// for telling the person at this one. `None` when there were none.
+    pub fn take_arrived(&mut self) -> Option<Arrived> {
+        let arrived = std::mem::take(&mut self.arrived);
+        (!arrived.files.is_empty()).then_some(arrived)
+    }
+
     /// Run one sync cycle.
     ///
     /// # Errors
@@ -2433,6 +2452,15 @@ impl Engine {
         }
         stats.conflicts += self.write_all(repo, &writes)?;
         self.reserved.clear(); // the copies exist on disk now
+        // what a person would call new files: not settings, not folders
+        let files = writes
+            .iter()
+            .filter(|(path, node)| !node.is_dir() && !path.starts_with(SETTINGS) && !path.starts_with(MERGED))
+            .map(|(path, _)| path.clone());
+        self.arrived.files.extend(files);
+        if !self.arrived.files.is_empty() {
+            self.arrived.from.clone_from(&snap.hostname);
+        }
         for (path, _) in &writes {
             // conflict copies are new here; push them like any local file
             if path.to_string_lossy().contains(".sync-conflict-") {
