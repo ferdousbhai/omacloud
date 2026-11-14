@@ -247,14 +247,17 @@ one back where it was.
 ## In a browser
 
 [Omacloud Drive](https://omacloud.computer/drive/) opens your files from any browser: it reads them
-from your bucket and decrypts them there, so the site sees neither a file nor a key. To open it on
+from your storage and decrypts them there, so the site sees neither a file nor a key. It has your
+folders (Drive), every picture in them (Photos), what changed last (Recents), and what was deleted
+in the last 30 days (Recently Deleted), each file to look at or download. To open it on
 a phone, press Open on a Phone in the app (or run `omacloud drive-link`) and point the phone's
 camera at the code: nothing is typed. The link works for five minutes, for whoever has it. A computer
-leaves the key to your storage and the password to your files in your bucket for those minutes,
+leaves the key to your storage and the password to your files in your storage for those minutes,
 sealed, and the link carries what opens them, in the part of an address that's never sent to a
-server. Signed in that way you can upload too: Upload, or drop files on a folder. The browser
-encrypts each one and leaves it in your bucket, and one of your computers takes it in within about
-a minute and syncs it. `omacloud drive-code` prints a one-line code to paste instead, which only
+server. Signed in that way you can upload too: Upload, or drop files on a folder (up to 100 MB a
+file), and Put Back in Recently Deleted returns a deleted file. The browser encrypts each one and
+leaves it in your storage, and one of your computers takes it in within about a minute and syncs
+it, so one of them has to be on. `omacloud drive-code` prints a one-line code to paste instead, which only
 reads; keep that one private, since it doesn't run out. A bucket needs one rule first
 ([docs/providers.md](docs/providers.md#reading-in-a-browser)); an account in Dropbox needs nothing.
 

@@ -82,6 +82,24 @@ from the environment, or a prompt that doesn't echo.
   pattern can match the shell running it.
 - Guard `rm -rf` paths built from variables: `"${dir:?}"/...`.
 
+## The browser and the bar
+
+`scripts/web-files.sh` runs Omacloud Drive's page on a throwaway account: it
+builds the reader for WebAssembly (`rustup target add wasm32-unknown-unknown`
+once), starts the stand-in S3 with a rule for the page, runs a daemon for the
+account, and prints a drive code and a drive link to open. Uploading there
+exercises the whole way round: the page, the inbox, the daemon, the next sync,
+and the page again. Dropbox has no stand-in: an account made with
+`init --provider dropbox --root /some-test-folder` and the same page proves it,
+with someone to allow Omacloud in a browser.
+
+The bar widget is `contrib/omarchy-plugin`. `OMACLOUD_BAR_PLUGIN=$PWD/contrib/omarchy-plugin
+target/debug/omacloud bar on` puts the checkout's copy in your own bar; it reads
+`$XDG_RUNTIME_DIR/omacloud/bar.json`, which only the daemon of the default account
+writes, so write a line there by hand to see each state
+(`{"state":"syncing","text":"x","at":<now>}`). `omacloud bar off` takes it out again;
+then delete `bar-decided` from the data directory, so the packaged daemon shows its own.
+
 ## Packaging checks
 
 `python3 scripts/tests/installer.py` checks architecture selection,

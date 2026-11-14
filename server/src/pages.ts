@@ -74,7 +74,7 @@ code. Write it down and keep it somewhere that isn't a computer. Lose the code a
 the data is gone. If that worries you, you can split the code among people you trust.</p>
 <h2>In a browser</h2>
 <p><a href="/drive/">Omacloud Drive</a> opens your files from any browser. Same rule as everything else: the
-page fetches from your bucket and decrypts in the tab, so this site never sees a file or a key. It is early.
+page fetches from your storage and decrypts in the tab, so this site never sees a file or a key.
 To sign in on a phone, press Open on a Phone in the app and point
 the camera at the code. One of your computers leaves the keys in your storage for five minutes, sealed, and
 the code carries what opens them. Nothing passes through here. You can upload from there too: the browser
@@ -149,12 +149,12 @@ it. Omacloud runs on Omarchy (Arch Linux, x86_64 and aarch64), as a GTK app and 
 
 ## Command line
 
-- [omacloud CLI](${repo}/blob/master/README.md): \`omacloud --help\` lists every command. Piped, every command prints a JSON envelope ({ok, data, summary} or {ok: false, error: {code, message, hint}}; \`--quiet\` for the data alone) and exits 0, 1, 2 usage, 3 not set up, 4 not found or 5 unreachable; \`omacloud status\` reports state. Commands that print a secret (\`join-code\`, \`invite\`, \`export\`, \`recovery split\` and \`combine\`, a new account's recovery code) print only to a terminal. Secrets come from environment variables (OMACLOUD_RECOVERY_CODE, OMACLOUD_JOIN_CODE, OMACLOUD_SECRET_ACCESS_KEY) or a prompt, never arguments
+- [omacloud CLI](${repo}/blob/master/README.md): \`omacloud --help\` lists every command. Piped, every command prints a JSON envelope ({ok, data, summary} or {ok: false, error: {code, message, hint}}; \`--quiet\` for the data alone) and exits 0, 1, 2 usage, 3 not set up, 4 not found or 5 unreachable; \`omacloud status\` reports state. Commands that print a secret (\`join-code\`, \`invite\`, \`drive-code\`, \`drive-link\`, \`export\`, \`recovery split\` and \`combine\`, a new account's recovery code) print only to a terminal. Secrets come from environment variables (OMACLOUD_RECOVERY_CODE, OMACLOUD_JOIN_CODE, OMACLOUD_SECRET_ACCESS_KEY) or a prompt, never arguments
 
 ## Site
 
 - [Home](${site}/): what Omacloud is and how to install it
-- [Omacloud Drive](${site}/drive/): a person's files in a browser, read from their own bucket and decrypted there
+- [Omacloud Drive](${site}/drive/): a person's files in a browser, read from their own bucket or Dropbox and decrypted there; signed in with a link from one of their computers (\`omacloud drive-link\`), it uploads too
 - [Privacy](${site}/privacy): visiting collects nothing; Omacloud has no accounts
 - [Terms](${site}/terms): terms
 

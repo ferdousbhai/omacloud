@@ -232,5 +232,6 @@ names, settings or keys.
   every file read-only, fetched on open, but a folder is either kept here
   in full or skipped, not freed file by file.
 - Sharing with other people (#8, #15).
-- Writing from a browser, and a phone app (#35); reading is Omacloud Drive, above.
+- A phone app (#35); a phone's browser has Omacloud Drive, above. Editing a file in a
+  browser: it reads, uploads and puts back, and nothing more.
 - An outside review of this design (#18).

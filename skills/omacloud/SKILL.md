@@ -65,6 +65,15 @@ to sync settings first.
   development and tests only. Point test accounts at `OMACLOUD_CONFIG`, never
   the owner's real `~/.config/omacloud`.
 
+In a browser: Omacloud Drive (omacloud.computer/drive) shows the account's files. The
+owner signs in with `omacloud drive-link` (a code for a phone's camera, good for five
+minutes) or Open on a Phone in the app; both print a secret, so the owner runs them.
+`omacloud drive-link --close` closes an open link and prints nothing secret. A file
+uploaded there reaches a computer within about a minute, if one is on.
+
+In Omarchy's bar a cloud shows how sync stands; `omacloud bar on` and `omacloud bar off`
+put it there or take it out.
+
 Removing a lost computer: `devices revoke --lost`. On Dropbox that's all: it asks to
 allow Omacloud again, and the old token is revoked once every computer has switched.
 With a bucket, also make a new key at the provider, run `bucket set-key`, then delete

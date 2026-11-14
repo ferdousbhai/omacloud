@@ -1,8 +1,8 @@
-# Omacloud files in a browser
+# Omacloud Drive in a browser
 
-A first slice of web access: a static page that reads an account's files
-straight from the person's own S3 bucket and decrypts them in the browser.
-No server of Omacloud's sees a file, a key or a request.
+A static page that reads an account's files straight from the person's own
+storage, a bucket or Dropbox, and decrypts them in the browser. No server of
+Omacloud's sees a file, a key or a request.
 
 - `index.html`, `style.css`, `app.js`: the page, laid out as iCloud is on the
   web: a sign-in card, a home of tiles (Drive, Photos, Recents, Recently
