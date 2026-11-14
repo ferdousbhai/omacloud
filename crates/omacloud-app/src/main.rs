@@ -1317,10 +1317,7 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> Vec<adw::PreferencesGroup> {
     };
     let (usual, own): (Vec<_>, Vec<_>) = rows.into_iter().partition(|r| order(&r.0).is_some());
 
-    let omarchy = group(
-        "Omarchy folders",
-        "The folders every Omarchy computer has. Switch on the ones you want on all your computers.",
-    );
+    let omarchy = group("Omarchy folders", "The folders every Omarchy computer has.");
     for r in usual {
         omarchy.add(&folder_row(r));
     }
@@ -1336,10 +1333,7 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> Vec<adw::PreferencesGroup> {
     // every other folder of home, a switch each
     let more = folders["more"].as_array().unwrap_or(&empty);
     if !more.is_empty() {
-        let x = adw::ExpanderRow::builder()
-            .title("Add a folder from your home")
-            .subtitle("Switch one on to put it on all your computers")
-            .build();
+        let x = adw::ExpanderRow::builder().title("Add a folder from your home").build();
         for f in more {
             let (name, ui2) = (text(&f["name"]), ui.clone());
             let name2 = name.clone();
@@ -1774,7 +1768,7 @@ fn secrets(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         if saved.is_empty() {
             "No device has saved its secrets yet."
         } else {
-            "Restoring asks for your recovery code and shows what it will write first."
+            ""
         },
     );
     for d in saved {
@@ -1804,7 +1798,7 @@ fn restore_secrets(ui: &Rc<Ui>, device: &str) {
     let (list, entry) = code_entry();
     let dialog = adw::AlertDialog::new(
         Some(&format!("Restore {device}'s secrets?")),
-        Some("Enter your recovery code. Nothing is written until you confirm."),
+        Some("Enter your recovery code."),
     );
     dialog.set_extra_child(Some(&list));
     dialog.add_response("cancel", "Cancel");
