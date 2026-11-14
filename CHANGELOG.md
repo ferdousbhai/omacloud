@@ -12,7 +12,10 @@
   your bucket; one of your computers takes it in within about a minute and syncs it, and the
   page then shows it. A computer takes in only files signed with a key one of your computers
   vouched for when it made the link, so the bucket's key alone can't put a file on them. The
-  bucket's rule needs `PUT` added for this (docs/providers.md).
+  bucket's rule needs `PUT` added for this (docs/providers.md). Put Back, in Recently
+  Deleted, returns a deleted file the same way.
+- Omacloud Drive in a browser opens an account kept in Dropbox too, with a drive link or a
+  drive code, uploads included. Nothing to set up at Dropbox.
 - Grok's and Copilot's hooks sync like the other agents': a file in their hooks folder goes
   to your other computers when every hook in it runs something that's there too.
 - Omacloud shows in Omarchy's bar: a cloud that's ticked when everything is in step, turning

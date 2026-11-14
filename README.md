@@ -255,8 +255,8 @@ sealed, and the link carries what opens them, in the part of an address that's n
 server. Signed in that way you can upload too: Upload, or drop files on a folder. The browser
 encrypts each one and leaves it in your bucket, and one of your computers takes it in within about
 a minute and syncs it. `omacloud drive-code` prints a one-line code to paste instead, which only
-reads; keep that one private, since it doesn't run out. The bucket needs one rule first
-([docs/providers.md](docs/providers.md#reading-in-a-browser)); Dropbox accounts aren't there yet.
+reads; keep that one private, since it doesn't run out. A bucket needs one rule first
+([docs/providers.md](docs/providers.md#reading-in-a-browser)); an account in Dropbox needs nothing.
 
 Leaving needs nothing from Omacloud: `omacloud export` prints the command that
 has plain restic or rustic restore everything from your storage, with the

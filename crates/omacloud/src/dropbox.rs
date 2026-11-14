@@ -246,6 +246,42 @@ fn exchange(fields: &[(&str, &str)]) -> Result<String> {
     token.refresh_token.context("Dropbox returned no offline refresh token")
 }
 
+/// An address Dropbox serves one file at to anyone, for a few hours or until
+/// the file is deleted: how a drive link's browser reads what was left for
+/// it before it has the token. `path` is from the top of the app's folder.
+pub fn temporary_link(refresh_token: &str, path: &str) -> Result<String> {
+    let token = token_request(&[
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+        ("client_id", APP_KEY),
+    ])?;
+    ensure!(
+        token.status().is_success(),
+        "Dropbox refused this computer's sign-in ({})",
+        token.status().as_u16()
+    );
+    let access = serde_json::from_str::<Token>(&token.text()?)
+        .context("Dropbox token response")?
+        .access_token;
+    let answer = agent()?
+        .post("https://api.dropboxapi.com/2/files/get_temporary_link")
+        .bearer_auth(access)
+        .header("content-type", "application/json")
+        .body(serde_json::json!({ "path": path }).to_string())
+        .send()
+        .context("asking Dropbox for a link")?;
+    ensure!(
+        answer.status().is_success(),
+        "Dropbox gave no link ({})",
+        answer.status().as_u16()
+    );
+    let said: serde_json::Value = serde_json::from_str(&answer.text()?).context("Dropbox's link answer")?;
+    said["link"]
+        .as_str()
+        .map(str::to_string)
+        .context("Dropbox's answer held no link")
+}
+
 /// Revoke an old authorization after every remaining computer has switched.
 pub fn revoke(refresh_token: &str) -> Result<()> {
     // Dropbox refuses an empty secret: a public app sends none

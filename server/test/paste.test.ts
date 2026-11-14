@@ -73,6 +73,14 @@ test("what a drive link's code says may carry an upload key", () => {
 	assert.deepEqual(account({ ...said, upload: { seed, endorsement } }), want);
 });
 
+test("a drive code for an account in Dropbox names the token, not a bucket", () => {
+	const said = { v: 1, endpoint: "", bucket: "", root: "", region: "", key: "", secret: "", password: "pw", dropbox: { app_key: "app", refresh_token: "tok", root: "/Omacloud" } };
+	const code = `omacloud-drive-${Buffer.from(JSON.stringify(said)).toString("base64url")}`;
+	assert.deepEqual(pasted(code), { dropbox: { appKey: "app", refreshToken: "tok", root: "/Omacloud" }, password: "pw" });
+	// without the token it's neither kind
+	assert.equal(account({ ...said, dropbox: { app_key: "app" } }), null);
+});
+
 test("anything else isn't taken for it", () => {
 	assert.equal(pasted(""), null);
 	assert.equal(pasted("hello"), null);

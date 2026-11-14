@@ -28,9 +28,9 @@ pub struct Uploads {
 }
 
 impl Uploads {
-    /// For an account in a bucket; `None` for any other.
+    /// For an account at a provider; `None` for one kept in a folder.
     pub fn new(repo: &RepoSpec) -> Option<Self> {
-        (repo.is_remote() && !repo.is_dropbox())
+        repo.is_remote()
             .then(|| Inbox::beside(repo).ok())
             .flatten()
             .map(|inbox| Self {

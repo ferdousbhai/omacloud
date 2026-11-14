@@ -33,7 +33,13 @@ each file with the key, seals it with the repository's (`upload.rs` in the
 crate), and puts it in `omacloud-inbox/` beside the repository; a computer's
 daemon takes it in (`crates/omacloud-core/src/inbox.rs`,
 `crates/omacloud/src/uploads.rs`). The page then watches for the version that
-has it. Still to come: Dropbox, and putting a deleted file back.
+has it. Put Back, in Recently Deleted, sends a deleted file's last version
+the same way.
+
+An account in Dropbox works the same through `dropbox.js`, which has `s3.js`'s
+few calls on Dropbox's API (Omacloud's Dropbox app has no secret, so the token a
+computer holds works from a page). A drive link's address is then one Dropbox
+gives for the sealed file, good until the file is taken back.
 The site's Worker serves it at omacloud.computer/drive/ (`server/build-drive.sh`
 puts it in place at deploy).
 

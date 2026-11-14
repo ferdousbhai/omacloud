@@ -247,8 +247,8 @@ enum Cmd {
         yes: bool,
     },
     /// Print a code that opens your files in a browser, at
-    /// omacloud.computer/drive (a bucket's account; it holds the key to your
-    /// storage and the password to your files)
+    /// omacloud.computer/drive (it holds the key to your storage and the
+    /// password to your files)
     DriveCode,
     /// Show how sync stands in Omarchy's bar (a cloud; a click opens
     /// Omacloud), or take it out
@@ -258,7 +258,7 @@ enum Cmd {
     },
     /// Show a link, and its code for a phone's camera, that opens your files
     /// in a browser at omacloud.computer/drive. It works for five minutes;
-    /// nothing is typed or pasted (a bucket's account)
+    /// nothing is typed or pasted
     DriveLink {
         /// Leave it open for its five minutes instead of waiting for Enter
         #[arg(long, conflicts_with = "close")]
@@ -1020,10 +1020,22 @@ struct DriveCode {
     key: String,
     secret: String,
     password: String,
+    /// For an account in Dropbox, in place of the bucket's fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dropbox: Option<DropboxKey>,
     /// What lets the page upload, in a drive link only: a pasted code opens
     /// files to read.
     #[serde(skip_serializing_if = "Option::is_none")]
     upload: Option<UploadKey>,
+}
+
+/// How a page reaches an account's folder in Dropbox: the app it's allowed
+/// as, the token that says so, and the repository's folder there.
+#[derive(Serialize)]
+struct DropboxKey {
+    app_key: String,
+    refresh_token: String,
+    root: String,
 }
 
 /// A browser session's key for uploading, vouched for by this computer (see
@@ -1068,12 +1080,19 @@ impl DriveCode {
         let mut e = engine(paths, &config)?;
         e.sync()?; // pick up any key rotation first
         let (spec, secret, _) = e.repository()?;
-        if spec.is_dropbox() || !spec.is_remote() {
-            return Err(fail::unsupported("Omacloud Drive in a browser reads a bucket for now")
-                .hint("this account's files aren't in one; `omacloud mount` shows them on a computer")
-                .into());
+        if !spec.is_remote() {
+            return Err(
+                fail::unsupported("Omacloud Drive in a browser reads a bucket or a Dropbox")
+                    .hint("this account's files are in neither; `omacloud mount` shows them on a computer")
+                    .into(),
+            );
         }
         let opt = |k: &str| spec.options.get(k).cloned().unwrap_or_default();
+        let dropbox = spec.is_dropbox().then(|| DropboxKey {
+            app_key: opt("client_id"),
+            refresh_token: opt("refresh_token"),
+            root: opt("root"),
+        });
         let code = Self {
             v: 1,
             endpoint: opt("endpoint"),
@@ -1083,6 +1102,7 @@ impl DriveCode {
             key: opt("access_key_id"),
             secret: opt("secret_access_key"),
             password: secret.password,
+            dropbox,
             upload: None,
         };
         Ok((config, e, code))
@@ -1568,8 +1588,14 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             // what changed before the watch began went unseen
             engine.request_rescan();
         }
-        // the package list, at start and hourly
+        // the package list, at start and hourly; and any drive link left
+        // open past its minutes (the app that showed it was killed)
         if packages_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(3600)) {
+            if config.repo.is_remote()
+                && let Err(e) = Links::beside(&config.repo).and_then(|links| links.clear_older(2 * DRIVE_LINK_VALID))
+            {
+                warn!("closing old drive links: {e:#}");
+            }
             record_packages(config, &mut engine);
             packages_at = Some(Instant::now());
         }
@@ -2470,7 +2496,27 @@ fn run(cli: Cli) -> Out {
             let links = Links::beside(&config.repo)?;
             // one a killed command left behind, and any still open: only the newest works
             links.clear()?;
-            let (name, address) = links.leave(sealed, DRIVE_LINK_VALID)?;
+            let name = links.leave(sealed)?;
+            // a bucket signs an address good for these minutes; Dropbox gives
+            // one of its own, which works until the file is taken back
+            let address = if config.repo.is_dropbox() {
+                let token = config
+                    .repo
+                    .options
+                    .get("refresh_token")
+                    .map(String::as_str)
+                    .unwrap_or_default();
+                dropbox::temporary_link(token, &links.path(&name))
+            } else {
+                links.address(&name, DRIVE_LINK_VALID)
+            };
+            let address = match address {
+                Ok(address) => address,
+                Err(e) => {
+                    _ = links.remove(&name);
+                    return Err(e);
+                }
+            };
             let link = drive_link(&seed, &address);
             match qr_for_terminal(&link) {
                 Some(qr) => eprintln!("{qr}\nPoint a phone's camera at this, or open the link below in any browser."),

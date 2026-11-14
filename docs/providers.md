@@ -102,8 +102,8 @@ The page reads your files straight from your storage and decrypts them in the
 browser, so no server of Omacloud's carries them. Dropbox needs nothing for that.
 A bucket needs one rule, set once: let pages from `https://omacloud.computer`
 read it (CORS). It lets a browser on that site show what it fetched; it opens
-nothing to anyone without the bucket's key. With a second bucket for the records,
-set it on both.
+nothing to anyone without the bucket's key. A second bucket for the records
+needs none: the page never reads it.
 
 The key your computers hold can't change a bucket's settings, so set it at the
 provider:

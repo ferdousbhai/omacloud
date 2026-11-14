@@ -14,10 +14,18 @@ const loose = (text) =>
 const bytesOf = (base64url) => Uint8Array.from(atob(base64url.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
 
 // What a drive code says, as the page uses it: { endpoint, bucket, root,
-// region, key, secret, password }, or null if it names no bucket.
+// region, key, secret, password }, or for an account in Dropbox { dropbox:
+// { appKey, refreshToken, root }, password }; null if it names neither.
 export function account(said) {
 	try {
 		const text = (name) => (typeof said[name] === "string" ? said[name] : "");
+		const upload = uploadKey(said.upload) ? { upload: uploadKey(said.upload) } : {};
+		// an account in Dropbox: the token in place of a bucket and its key
+		const box = said.dropbox;
+		if (typeof box?.refresh_token === "string" && box.refresh_token && typeof box.app_key === "string") {
+			const dropbox = { appKey: box.app_key, refreshToken: box.refresh_token, root: typeof box.root === "string" ? box.root : "" };
+			return { dropbox, password: text("password"), ...upload };
+		}
 		if (!text("bucket") || !new URL(text("endpoint")).host) return null;
 		return {
 			endpoint: new URL(text("endpoint")).origin,
@@ -27,7 +35,7 @@ export function account(said) {
 			key: text("key"),
 			secret: text("secret"),
 			password: text("password"),
-			...(uploadKey(said.upload) ? { upload: uploadKey(said.upload) } : {}),
+			...upload,
 		};
 	} catch {
 		return null;

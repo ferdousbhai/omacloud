@@ -5,6 +5,7 @@
 
 import { account, linked, pasted } from "./paste.js";
 import * as reader from "./reader.js";
+import { Dropbox } from "./dropbox.js";
 import { Bucket } from "./s3.js";
 
 const $ = (id) => document.getElementById(id);
@@ -53,6 +54,9 @@ const THUMB_LIMIT = 8e6;
 const TEXT_LIMIT = 1e6;
 
 let bucket;
+// what a link or a pasted code said, when it names a Dropbox: the form has
+// no fields for one
+let dropbox = null;
 // what lets this session upload, if a drive link brought it (see paste.js)
 let uploader = null;
 // files sent from here that no version has yet: [{ name, where, size, mtime }]
@@ -126,20 +130,22 @@ async function readFile(node, progress) {
 async function connect(form) {
 	const status = (words) => ($("signin-status").textContent = words);
 	const field = (name) => form.elements[name].value.trim();
-	bucket = new Bucket({
-		endpoint: field("endpoint"),
-		bucket: field("bucket"),
-		root: field("root"),
-		region: field("region"),
-		accessKeyId: field("key"),
-		secretAccessKey: form.elements.secret.value,
-	});
+	bucket = dropbox
+		? new Dropbox(dropbox)
+		: new Bucket({
+				endpoint: field("endpoint"),
+				bucket: field("bucket"),
+				root: field("root"),
+				region: field("region"),
+				accessKeyId: field("key"),
+				secretAccessKey: form.elements.secret.value,
+			});
 	status("Opening…");
 	// let that show before the password is worked out, which takes a moment
 	await new Promise((shown) => setTimeout(shown, 30));
 	await reader.load("omacloud_web.wasm");
 	const keys = await bucket.list("keys");
-	if (!keys.length) throw new Error("No Omacloud files here: check the bucket and its folder.");
+	if (!keys.length) throw new Error(dropbox ? "No Omacloud files in this Dropbox." : "No Omacloud files here: check the bucket and its folder.");
 	let opened = false;
 	for (const key of keys) {
 		try {
@@ -223,8 +229,7 @@ const UPLOAD_LIMIT = 100e6;
 // with the repository's, and left in the inbox beside it. One of the
 // person's computers takes it in and syncs it, and then it shows here as
 // any file does.
-async function send(files) {
-	const where = folderPath();
+async function send(files, where = folderPath()) {
 	if (!uploader || !where) throw new Error("Open one of your folders to upload into it.");
 	const random = (n) => crypto.getRandomValues(new Uint8Array(n));
 	const hex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -260,6 +265,18 @@ function watchForVersion() {
 	};
 	setTimeout(look, 15_000);
 }
+
+// A deleted file goes back where it was the same way: its last version is
+// read here and sent as an upload.
+async function putBack(node) {
+	if ((node.size || 0) > UPLOAD_LIMIT) throw new Error(`${node.name} is over ${human(UPLOAD_LIMIT)}: put it back from one of your computers.`);
+	say(`Reading ${node.name}…`);
+	const blob = await readFile(node);
+	const file = new File([blob], node.name, { lastModified: node.mtime ? Date.parse(node.mtime) : Date.now() });
+	await send([file], node.where);
+	say(`Sent ${node.name} back to ${node.where}. It's there once one of your computers has taken it in.`);
+}
+$("putback").addEventListener("click", () => selected && act(() => putBack(selected)));
 
 $("upload").addEventListener("click", () => $("files").click());
 $("files").addEventListener("change", (event) => {
@@ -492,6 +509,9 @@ function show() {
 	const shown = [...nodes, ...sent].filter((n) => !find || n.name.toLowerCase().includes(find));
 	// uploads go into a folder of the account, never beside them
 	$("upload").hidden = !uploader || !!place || trail.length < 2;
+	// a deleted file goes back to a folder, so one from the top level can't
+	$("putback").hidden = !uploader || place !== "deleted";
+	$("putback").disabled = !selected?.where;
 	if (place) shown.sort(orders[placeSort]);
 	else shown.sort((a, b) => (b.type === "dir") - (a.type === "dir") || orders[sort](a, b));
 	waiting.length = 0;
@@ -555,6 +575,7 @@ function choose(node, row) {
 	selected = node;
 	for (const other of $("items").children) other.setAttribute?.("aria-selected", other === row);
 	$("download").disabled = node.type !== "file";
+	$("putback").disabled = !node.where;
 }
 
 async function activate(node) {
@@ -651,6 +672,7 @@ async function follow({ seed, address }) {
 	if (!found) throw new Error(`This link is damaged. ${again}`);
 	fill($("connect"), found);
 	uploader = found.upload;
+	dropbox = found.dropbox ?? null;
 	await connect($("connect"));
 }
 
@@ -664,6 +686,9 @@ $("pasted").addEventListener("input", (event) => {
 		return;
 	}
 	fill(form, found);
+	dropbox = found.dropbox ?? null;
+	// a Dropbox has nothing more to enter: open it
+	if (dropbox) return found.password ? act(() => connect(form)) : status("Found your Dropbox, but not the password: paste the whole code.");
 	const missing = !found.key || !found.secret || !found.password;
 	status(
 		missing
@@ -675,6 +700,8 @@ $("pasted").addEventListener("input", (event) => {
 $("connect").addEventListener("invalid", () => ($("byhand").open = true), true);
 $("connect").addEventListener("submit", (event) => {
 	event.preventDefault();
+	// typed by hand, it's a bucket
+	if (!pasted($("pasted").value)?.dropbox) dropbox = null;
 	act(() => connect(event.target));
 });
 // forgetting everything is a fresh page: nothing was kept anywhere else

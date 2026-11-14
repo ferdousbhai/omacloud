@@ -65,6 +65,7 @@ const LINKS: &str = "omacloud-links";
 /// needs no key.
 pub struct Links {
     op: opendal::Operator,
+    root: String,
 }
 
 impl Links {
@@ -77,31 +78,45 @@ impl Links {
             .strip_prefix("opendal:")
             .context("a drive link needs the repository in a bucket")?;
         let mut options = repo.options.clone();
-        _ = options.insert("root".into(), repo.under_root(LINKS));
+        let root = repo.under_root(LINKS);
+        _ = options.insert("root".into(), root.clone());
         let _guard = runtime().enter();
         let op = opendal::Operator::via_iter(scheme, options)
             .with_context(|| format!("opening the {scheme} location for a drive link"))?
             .layer(RetryLayer::new().with_jitter());
-        Ok(Self { op })
+        Ok(Self { op, root })
     }
 
-    /// Leave `sealed` under a new name and say where a browser reads it,
-    /// for `valid` and no longer: `(name, address)`.
+    /// Where a link named `name` is in the storage, from its top.
+    #[must_use]
+    pub fn path(&self, name: &str) -> String {
+        format!("{}/{name}", self.root.trim_end_matches('/'))
+    }
+
+    /// Leave `sealed` under a new name: the name.
     ///
     /// # Errors
     ///
-    /// If the storage refuses the write or can't sign an address.
-    pub fn leave(&self, sealed: Vec<u8>, valid: Duration) -> Result<(String, String)> {
+    /// If the storage refuses the write.
+    pub fn leave(&self, sealed: Vec<u8>) -> Result<String> {
         let name = hex::encode(rand::random::<[u8; 8]>());
-        runtime().block_on(async {
-            _ = self.op.write(&name, sealed).await.context("leaving the drive link")?;
-            let signed = self
-                .op
-                .presign_read(&name, valid)
-                .await
-                .context("this storage can't make an address a browser reads without the key")?;
-            Ok((name, signed.uri().to_string()))
-        })
+        _ = runtime()
+            .block_on(self.op.write(&name, sealed))
+            .context("leaving the drive link")?;
+        Ok(name)
+    }
+
+    /// Where a browser reads the link named `name` without the key, for
+    /// `valid` and no longer: an address the storage signs.
+    ///
+    /// # Errors
+    ///
+    /// If this storage can't sign one.
+    pub fn address(&self, name: &str, valid: Duration) -> Result<String> {
+        let signed = runtime()
+            .block_on(self.op.presign_read(name, valid))
+            .context("this storage can't make an address a browser reads without the key")?;
+        Ok(signed.uri().to_string())
     }
 
     /// Take one back. One that's already gone is no error.
@@ -113,6 +128,30 @@ impl Links {
         runtime()
             .block_on(self.op.delete(name))
             .context("removing the drive link")
+    }
+
+    /// Take back the links left here longer ago than `age`: none is meant to
+    /// last, and where the storage's own address for one outlives ours
+    /// (Dropbox's does, by hours), removing it is what ends it.
+    ///
+    /// # Errors
+    ///
+    /// If the storage can't be reached.
+    pub fn clear_older(&self, age: Duration) -> Result<()> {
+        let now = std::time::SystemTime::now();
+        runtime().block_on(async {
+            for entry in self.op.list("/").await.context("listing drive links")? {
+                if entry.path().ends_with('/') {
+                    continue;
+                }
+                let meta = self.op.stat(entry.path()).await.context("looking at a drive link")?;
+                let written: Option<std::time::SystemTime> = meta.last_modified().map(Into::into);
+                if written.is_none_or(|t| now.duration_since(t).is_ok_and(|d| d > age)) {
+                    self.op.delete(entry.path()).await.context("removing a drive link")?;
+                }
+            }
+            Ok(())
+        })
     }
 
     /// Take back every link left here: a command that was killed couldn't

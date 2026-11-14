@@ -101,7 +101,8 @@ the repository password. A computer hands them over with a drive link
 (`omacloud drive-link`): it seals them under a random seed, leaves that in the
 bucket under `omacloud-links/`, and shows a link to the page with the seed and
 a presigned address of the object, good for five minutes, after the `#`, which
-a browser sends to no server. So the storage holds only what it can't read, the
+a browser sends to no server (in Dropbox, an address Dropbox gives for the
+file, which works until the file is removed). So the storage holds only what it can't read, the
 site sees nothing, and the link opens nothing once the object is removed (when
 the command ends, or by the next link). For those five minutes the link is as
 good as the keys, so it's shown as a code for a camera and only to a terminal.

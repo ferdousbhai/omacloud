@@ -253,6 +253,7 @@ button {
 #lock,
 #home-lock,
 #upload,
+#putback,
 #download,
 #look header button {
 	color: var(--accent);
@@ -262,10 +263,12 @@ button {
 #lock:hover,
 #home-lock:hover,
 #upload:hover,
+#putback:hover:enabled,
 #download:hover:enabled,
 #look header button:hover {
 	background: var(--chosen);
 }
+#putback:disabled,
 #download:disabled {
 	color: var(--soft);
 	cursor: default;
