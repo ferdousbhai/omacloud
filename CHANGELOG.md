@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.28 (2026-11-14)
+
+- The skill for coding agents (`omacloud skill install`) covers what 0.0.27 added: drive
+  links and who runs them, uploads from a browser, and the cloud in Omarchy's bar. The
+  README, the contributor guide and the site's pages say the same.
+
 ## 0.0.27 (2026-11-14)
 
 - A notification says when files arrive from another computer: how many, from which one,
