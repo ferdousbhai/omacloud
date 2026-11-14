@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.27 (2026-11-14)
 
 - A notification says when files arrive from another computer: how many, from which one,
   and where. A click opens the folder.
