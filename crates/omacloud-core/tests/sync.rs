@@ -1218,6 +1218,91 @@ fn a_settings_group_back_among_others_loses_nothing() -> Result<()> {
     Ok(())
 }
 
+/// A computer's own settings are backed up under its name and written on no
+/// other computer; a shared file can become one computer's own, and the
+/// computer that takes its place gets them all.
+#[test]
+fn each_computers_own_settings_are_kept_apart_and_follow_its_replacement() -> Result<()> {
+    use omacloud_core::settings::{MACHINES, Manifest};
+    let w = World::new(&["a", "b", "c"])?;
+    let (ha, hb, hc) = (w.home("a"), w.home("b"), w.home("c"));
+    let (monitors, claude, bindings) = (
+        ".config/hypr/monitors.lua",
+        ".claude/CLAUDE.md",
+        ".config/hypr/bindings.lua",
+    );
+    let m = format!("shared {claude}\nshared {bindings}\nmachine {monitors}\n");
+    let keeping = |files: &[&str]| -> Result<Manifest> {
+        let files: std::collections::BTreeSet<PathBuf> = files.iter().map(PathBuf::from).collect();
+        Ok(Manifest::parse(&m)?.keeping(&files))
+    };
+    write(&ha, monitors, "a's monitors\n");
+    write(&hb, monitors, "b's monitors\n");
+    write(&ha, claude, "everywhere\n");
+    write(&hb, claude, "only on b\n");
+    write(&ha, bindings, "bind\n");
+    let (mut a, mut b) = (w.engine_with_manifest("a", &m)?, w.engine_with_manifest("b", &m)?);
+    a.sync()?;
+    b.sync()?;
+    a.sync()?;
+
+    // each keeps its own monitors, and both are backed up
+    assert_eq!(fs::read_to_string(ha.join(monitors))?, "a's monitors\n");
+    assert_eq!(fs::read_to_string(hb.join(monitors))?, "b's monitors\n");
+    assert_eq!(a.settings_status().own, [PathBuf::from(monitors)]);
+    assert_eq!(a.versions(&Path::new(MACHINES).join("a").join(monitors))?.len(), 1);
+    assert_eq!(a.versions(&Path::new(MACHINES).join("b").join(monitors))?.len(), 1);
+    assert_eq!(fs::read_to_string(hb.join(bindings))?, "bind\n");
+
+    // CLAUDE.md differed when they met: b keeps each computer's own
+    assert_eq!(b.settings_status().held, [PathBuf::from(claude)]);
+    drop(b);
+    let mut b = w.engine_with_parsed("b", keeping(&[claude])?)?;
+    b.keep_each(Path::new(claude))?;
+    b.sync()?;
+    a.sync()?;
+    assert!(b.settings_status().held.is_empty());
+    assert_eq!(fs::read_to_string(ha.join(claude))?, "everywhere\n");
+    assert_eq!(fs::read_to_string(hb.join(claude))?, "only on b\n");
+
+    // edits on either side stay there; b's are backed up as its own
+    write(&ha, claude, "everywhere, edited\n");
+    a.notice([ha.join(claude)]);
+    a.sync()?;
+    write(&hb, claude, "only on b, edited\n");
+    b.notice([hb.join(claude)]);
+    b.sync()?;
+    a.sync()?;
+    assert_eq!(fs::read_to_string(ha.join(claude))?, "everywhere, edited\n");
+    assert_eq!(fs::read_to_string(hb.join(claude))?, "only on b, edited\n");
+    assert_eq!(b.versions(&Path::new(MACHINES).join("b").join(claude))?.len(), 2);
+
+    // c takes b's place: shared settings come, then b's own on request
+    let mut c = w.engine_with_manifest("c", &m)?;
+    c.sync()?;
+    assert_eq!(fs::read_to_string(hc.join(claude))?, "everywhere, edited\n");
+    assert!(!hc.join(monitors).exists());
+    let (taken, keep) = c.take_machine_files("b")?;
+    assert_eq!(taken, [PathBuf::from(claude), PathBuf::from(monitors)]);
+    assert_eq!(keep, [PathBuf::from(claude)]);
+    drop(c);
+    let mut c = w.engine_with_parsed("c", keeping(&[claude])?)?;
+    c.sync()?;
+    a.sync()?;
+    assert_eq!(fs::read_to_string(hc.join(claude))?, "only on b, edited\n");
+    assert_eq!(fs::read_to_string(hc.join(monitors))?, "b's monitors\n");
+    assert_eq!(fs::read_to_string(ha.join(claude))?, "everywhere, edited\n");
+    assert_eq!(c.versions(&Path::new(MACHINES).join("c").join(claude))?.len(), 1);
+
+    // b shares CLAUDE.md again: the two differ, so b is asked to choose
+    drop(b);
+    let mut b = w.engine_with_manifest("b", &m)?;
+    b.sync()?;
+    assert_eq!(fs::read_to_string(hb.join(claude))?, "only on b, edited\n");
+    assert_eq!(b.settings_status().held, [PathBuf::from(claude)]);
+    Ok(())
+}
+
 /// Two computers set up on their own, whose settings already differ when they
 /// first meet: no earlier version to merge from, and nothing may be lost.
 #[test]

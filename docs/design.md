@@ -137,11 +137,22 @@ holding another.
 Omarchy's dots manifest lists which files of home are shared between
 machines and which stay local (`settings.rs`). The rule is that what's about you
 follows you and what's about the machine stays on it, so Omacloud's own entries
-keep `input.lua` and the bar's `shell.json` local over Omarchy's manifest: a local
-entry wins, and a copy already in the repository reaches no computer. Omacloud syncs the shared
+keep `input.lua` and the bar's `shell.json` each computer's own over Omarchy's
+manifest: a local or machine entry wins, and a shared copy already in the
+repository reaches no computer. Omacloud syncs the shared
 ones, inside the same encrypted history, with three-way merges and a backup
 of anything it replaces. A change made on two machines that doesn't merge is
-held for you to choose (Keep Mine or Keep Theirs). Settings sync stands down
+held for you to choose (Keep Mine, Keep Theirs, or Keep Each).
+
+A third kind sits between shared and local: a computer's own settings
+(`machine` entries, and shared files a computer keeps through
+`settings keep`, listed in its config). They are stored under
+`.omacloud/machines/<device>/`, so they have versions and survive the
+computer, but each computer writes only its own folder and never applies
+another's; older versions ignore the folder, and their pushes leave it as it
+is. `restore-machine --replacing` copies another computer's into home. A file
+a computer keeps stays shared for the others, and shared again it is compared
+afresh, so two copies that differ wait for a choice. Settings sync stands down
 when another dotfile manager owns those files. Omacloud's own entries
 (shell dotfiles, AI agents' settings and skills) add a `dir/**` form for
 whole folders: text files only, at most 2 MiB, never through a symlink,

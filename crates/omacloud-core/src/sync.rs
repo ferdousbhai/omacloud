@@ -48,7 +48,7 @@ use crate::{
     ignore::{Ignores, TEMP_PREFIX},
     merged::{self, Concern, Group, Item, PREFIX as MERGED},
     repo::{Repo, RepoSpec, copy_snapshots, hex, snapshot_hex},
-    settings::{self, Manifest, PREFIX as SETTINGS},
+    settings::{self, MACHINES, Manifest, PREFIX as SETTINGS},
 };
 
 /// Go's `os.ModeDir`, as restic stores directory modes.
@@ -213,6 +213,9 @@ pub struct SettingsStatus {
     /// Settings changed on both sides that didn't merge, waiting for
     /// `resolve`: path relative to home.
     pub held: Vec<PathBuf>,
+    /// This computer's own settings files, kept under its name and never
+    /// applied on another: path relative to home.
+    pub own: Vec<PathBuf>,
     /// Each group of settings and how it stands here.
     pub groups: Vec<Item>,
 }
@@ -608,7 +611,16 @@ impl Engine {
             out.extend(f.exclude.iter().cloned());
         }
         match self.settings_on() {
-            Some(s) => out.extend(s.manifest.skipped().iter().map(|g| format!("{GROUP_LEFT_OUT}{g}"))),
+            Some(s) => {
+                out.extend(s.manifest.skipped().iter().map(|g| format!("{GROUP_LEFT_OUT}{g}")));
+                // a shared file kept here: shared again, it is compared afresh
+                out.extend(
+                    s.manifest
+                        .kept()
+                        .iter()
+                        .map(|p| Path::new(SETTINGS).join(p).to_string_lossy().into_owned()),
+                );
+            }
             None => out.extend([SETTINGS.to_string(), MERGED.to_string()]),
         }
         Ok(out)
@@ -722,6 +734,16 @@ impl Engine {
         match local {
             Some(name) => self.folder.join(name).join(parts.as_path()),
             None => self.folder.join(path),
+        }
+    }
+
+    /// Where a setting (`rest`, relative to home) lives in the synced tree:
+    /// with the shared settings, or with this computer's own.
+    #[must_use]
+    pub fn setting_path(&self, rest: &Path) -> PathBuf {
+        match &self.settings {
+            Some(s) if s.manifest.is_machine(rest) => Path::new(MACHINES).join(&self.device).join(rest),
+            _ => Path::new(SETTINGS).join(rest),
         }
     }
 
@@ -1099,6 +1121,11 @@ impl Engine {
         if let Ok(rest) = path.strip_prefix(MERGED) {
             return self.settings_on().map(|s| s.merged.join("synced").join(rest));
         }
+        // this computer's own settings are in home; others' stay in the cloud
+        if let Ok(rest) = path.strip_prefix(MACHINES) {
+            let rest = rest.strip_prefix(&self.device).ok()?;
+            return self.settings_on().map(|s| s.home.join(rest));
+        }
         match path.strip_prefix(SETTINGS) {
             Ok(rest) => self.settings_on().map(|s| s.home.join(rest)),
             Err(_) => Some(self.on_disk(path)),
@@ -1128,6 +1155,18 @@ impl Engine {
                 || is_dir
                 || rest.components().count() < 2
                 || rest.extension().is_none_or(|e| e != "json");
+        }
+        // each computer's own settings: only this one's, as the manifest
+        // names them; another computer's are kept for it, never written here
+        if let Ok(rest) = path.strip_prefix(MACHINES) {
+            return self.settings_on().is_none_or(|s| {
+                is_dir
+                    || rest
+                        .strip_prefix(&self.device)
+                        .ok()
+                        .filter(|r| !r.as_os_str().is_empty())
+                        .is_none_or(|r| !s.manifest.is_machine(r) || s.manifest.through_any_link(&s.home, r))
+            });
         }
         match path.strip_prefix(SETTINGS) {
             // settings are files the manifest shares; directories under
@@ -1233,10 +1272,15 @@ impl Engine {
             (Some(s), None) => self.groups_status(s, &held),
             _ => Vec::new(),
         };
+        let own = match (self.settings_on(), &dormant) {
+            (Some(s), None) => s.manifest.machine_files(&s.home),
+            _ => Vec::new(),
+        };
         SettingsStatus {
             on: self.settings.is_some(),
             dormant,
             held,
+            own,
             groups,
         }
     }
@@ -1648,9 +1692,79 @@ impl Engine {
         self.save_state()
     }
 
+    /// Settle a held setting by keeping each computer's version: this one's
+    /// stays here as its own (the manifest must keep it already, see
+    /// [`Manifest::keeping`]), and the other computers' stays shared.
+    ///
+    /// # Errors
+    ///
+    /// If the setting isn't held, or isn't kept as this computer's own.
+    pub fn keep_each(&mut self, path: &Path) -> Result<()> {
+        if !self.settings.as_ref().is_some_and(|s| s.manifest.is_machine(path)) {
+            bail!("{} is not kept as this computer's own", path.display());
+        }
+        let parked = self
+            .state
+            .held
+            .remove(&Path::new(SETTINGS).join(path))
+            .ok_or_else(|| anyhow!("{} is not waiting to be resolved", path.display()))?;
+        _ = fs::remove_file(&parked);
+        _ = self.pending.insert(self.setting_path(path));
+        self.save_state()
+    }
+
+    /// Bring another computer's own settings here, for a computer taking its
+    /// place: each is written into home as it was at the last sync (what
+    /// was here is backed up first), then syncs as this computer's own.
+    /// Returns the files taken (relative to home), and which of them this
+    /// computer must keep as its own (see [`Manifest::keeping`]), being
+    /// shared files to the manifest.
+    ///
+    /// # Errors
+    ///
+    /// On repository or I/O errors, or with settings sync off.
+    pub fn take_machine_files(&mut self, from: &str) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+        let s = self.settings_on().ok_or_else(|| anyhow!("settings sync is off"))?;
+        let (home, manifest) = (s.home.clone(), s.manifest.clone());
+        let seq = self.state.base.as_ref().map(|b| b.seq);
+        let Some(seq) = seq else {
+            return Ok((Vec::new(), Vec::new()));
+        };
+        let repo = self.open_repo()?;
+        let theirs = Path::new(MACHINES).join(from);
+        let Some(dir) = Trees::new(&repo)
+            .lookup(self.base_tree()?, &theirs)?
+            .filter(Node::is_dir)
+        else {
+            return Ok((Vec::new(), Vec::new()));
+        };
+        let mut files = BTreeSet::new();
+        walk_tree(&repo, dir.subtree, Path::new(""), &|_: &Path, _| false, &mut files)?;
+        let (mut taken, mut keep) = (Vec::new(), Vec::new());
+        for rest in files {
+            if !manifest.is_machine(&rest) && !manifest.can_keep(&rest) {
+                continue;
+            }
+            if manifest.through_any_link(&home, &rest) {
+                continue;
+            }
+            self.back_up(&Path::new(SETTINGS).join(&rest))?;
+            self.restore_version(&theirs.join(&rest), seq, &home.join(&rest))?;
+            if !manifest.is_machine(&rest) {
+                keep.push(rest.clone());
+            }
+            taken.push(rest);
+        }
+        Ok((taken, keep))
+    }
+
     /// Copy a setting aside before a pull replaces or deletes it.
     fn back_up(&self, path: &Path) -> Result<()> {
-        let (Some(s), Ok(rest)) = (self.settings_on(), path.strip_prefix(SETTINGS)) else {
+        let own = Path::new(MACHINES).join(&self.device);
+        let (Some(s), Ok(rest)) = (
+            self.settings_on(),
+            path.strip_prefix(SETTINGS).or_else(|_| path.strip_prefix(&own)),
+        ) else {
             return Ok(());
         };
         let src = s.home.join(rest);
@@ -1695,7 +1809,7 @@ impl Engine {
             let rel = if let Some(rel) = p.strip_prefix(&self.folder).ok().and_then(|rel| self.synced_path(rel)) {
                 rel
             } else if let Some(rest) = self.settings_on().and_then(|s| p.strip_prefix(&s.home).ok()) {
-                Path::new(SETTINGS).join(rest)
+                self.setting_path(rest)
             } else {
                 p
             };
@@ -2185,6 +2299,8 @@ impl Engine {
                     .into_iter()
                     .map(|p| Path::new(SETTINGS).join(p)),
             );
+            let own = Path::new(MACHINES).join(&self.device);
+            paths.extend(s.manifest.machine_files(&s.home).into_iter().map(|p| own.join(p)));
             let mut docs = BTreeSet::new();
             let synced = s.merged.join("synced");
             if synced.is_dir() {
@@ -3430,7 +3546,7 @@ fn walk_tree_nodes(
         let path = rel.join(name);
         // settings directories are walked for the files in them
         let settings_dir = node.is_dir()
-            && [SETTINGS, PACKAGES, SECRETS, MERGED]
+            && [SETTINGS, PACKAGES, SECRETS, MERGED, MACHINES]
                 .iter()
                 .any(|p| Path::new(p).starts_with(&path) || path.starts_with(p));
         if !settings_dir && skip(&path, node.is_dir()) {

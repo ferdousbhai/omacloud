@@ -130,7 +130,8 @@ refresh token already allowed in OMACLOUD_DROPBOX_REFRESH_TOKEN. Each person use
 own Dropbox, so `invite` doesn't apply; `bucket set-key` needs no key id there.
 
 Settings: `settings on|off`, `settings skip|unskip shell|agents|apps|theme|chromium|wifi`,
-`settings resolve PATH --keep local|remote`.
+`settings keep|share PATH` (a shared file kept as this computer's own: backed up,
+never written elsewhere), `settings resolve PATH --keep local|remote|each`.
 Changes can affect desktop settings, browser configuration, Wi-Fi, and agent
 settings across computers. Existing settings can contain API keys. Do not sync
 or settle conflicts without the owner's requested scope; never blindly prefer
@@ -143,6 +144,7 @@ repository to a folder first. It prints secrets: the owner runs it.
 
 Machine migration: `packages restore --from NAME` previews package installation;
 `--yes` runs pacman. `restore-machine --from NAME` is broader: settings, files,
-packages, and daemon startup. It is not a harmless preview. Secret restoration
+packages, and daemon startup; with `--replacing` it also brings NAME's own
+settings (monitors, its kept files) for a computer taking its place. It is not a harmless preview. Secret restoration
 and device revocation/key rotation likewise need explicit scope; inspect their
 help and the README first. Never run server deploy/release scripts for user setup.

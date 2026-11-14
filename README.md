@@ -156,7 +156,7 @@ project of their own ([docs/providers.md](docs/providers.md)).
 - **Omarchy settings:** the shared files in Omarchy's dots manifest
   (bindings, look and feel, terminals, `.bashrc`), never what's about the
   machine, like `monitors.lua`, `input.lua` (touchpad and keyboard) or the bar's
-  `shell.json`, and your shell's: `.bash_aliases`, `.inputrc`,
+  `shell.json` (those are each computer's own, below), and your shell's: `.bash_aliases`, `.inputrc`,
   git's settings, fish's `config.fish` and functions, Neovim, mise,
   lazygit, mpv and fastfetch (not `.bash_profile`, `.profile` or fish's
   `conf.d`, where installers add lines for one machine), herdr's
@@ -229,7 +229,19 @@ computers the union of their files: one held by only one of them reaches the
 other, identical files stay one file, and two different files of the same name
 are both kept, the older as `name.sync-conflict-<date>-<time>-<device>.ext`.
 Settings that already differ stay as each computer has them until you choose
-(`omacloud settings`). From then on a delete on one computer deletes on the others,
+(`omacloud settings`): this one's, the other's, or each keeping its own.
+
+**Each computer's own settings** are backed up, with their versions, under its
+name, and never written on another computer: `monitors.lua`, `hyprland.lua`,
+`autostart.lua`, `input.lua`, the bar's `shell.json` and Claude Code's
+`settings.local.json`. Any other shared file can be made one computer's own,
+say a `CLAUDE.md` that only makes sense on the ThinkPad:
+`omacloud settings keep ~/.claude/CLAUDE.md` (`settings share` undoes it; the
+other computers keep the shared copy). Where only a few lines differ, keep the
+rest shared and put those lines in a file of the computer's own that the shared
+one includes (`@~/.claude/CLAUDE.thinkpad.md` in a `CLAUDE.md`, `[include]` in
+git's config). A computer taking another's place gets its own settings too:
+`omacloud restore-machine --from thinkpad --replacing`. From then on a delete on one computer deletes on the others,
 and stays in Recently Deleted for 30 days; name a file `name.nosync`, or switch its
 folder off, to keep it on one computer.
 

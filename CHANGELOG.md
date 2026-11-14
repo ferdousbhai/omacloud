@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Settings about one computer are backed up: its monitors, `hyprland.lua`, autostart,
+  touchpad, the bar's plugins and Claude Code's `settings.local.json` are kept with their
+  versions under that computer's name, and never written on another.
+- `omacloud settings keep <file>` makes a shared settings file this computer's own (a
+  `CLAUDE.md` that only makes sense on one laptop, say); `settings share` undoes it. A
+  setting changed on two computers can also be settled as Keep Each, in the app too.
+- `omacloud restore-machine --from <computer> --replacing` brings that computer's own
+  settings to the one taking its place.
+
 ## 0.0.28 (2026-11-14)
 
 - The skill for coding agents (`omacloud skill install`) covers what 0.0.27 added: drive

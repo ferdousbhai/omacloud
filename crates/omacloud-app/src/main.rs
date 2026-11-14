@@ -1626,19 +1626,46 @@ fn settings(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     }
 
     let empty = Vec::new();
+    let own = st["own"].as_array().unwrap_or(&empty);
+    if on && !own.is_empty() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let kept: Vec<&str> = st["kept"]
+            .as_array()
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let g = group(
+            "This computer's own",
+            "Backed up with their versions, never written on another computer.",
+        );
+        for p in own {
+            let rel = text(p);
+            let rw = row(&format!("~/{rel}"), "");
+            if kept.contains(&rel.as_str()) {
+                let b = button("Share", Some("flat"));
+                let (ui, path) = (ui.clone(), format!("{home}/{rel}"));
+                b.connect_clicked(move |_| {
+                    ui.act(&["omacloud", "settings", "share", &path], "Shared again");
+                });
+                rw.add_suffix(&b);
+            }
+            g.add(&rw);
+        }
+        page.add(&g);
+    }
     let held = st["held"].as_array().unwrap_or(&empty);
     if !held.is_empty() {
         let home = std::env::var("HOME").unwrap_or_default();
         let g = group(
             "Changed on two machines",
             "These changed here and on another device in ways that don't merge. \
-             This machine keeps its version until you choose.",
+             This machine keeps its version until you choose. Keep Each makes it \
+             this computer's own: backed up, but no longer the same everywhere.",
         );
         for p in held {
             let rel = text(p);
             let rw = row(&format!("~/{rel}"), "");
             let path = format!("{home}/{rel}");
-            for (label, keep) in [("Keep Mine", "local"), ("Keep Theirs", "remote")] {
+            for (label, keep) in [("Keep Mine", "local"), ("Keep Theirs", "remote"), ("Keep Each", "each")] {
                 let b = button(label, Some("flat"));
                 let (ui, path) = (ui.clone(), path.clone());
                 b.connect_clicked(move |_| {

@@ -608,6 +608,24 @@ fn versions_find_a_folder_another_computer_added() {
     machine_error(&h.run("b", &["settings", "skip", "nonsense"]), "usage", 2);
     let s = json(&h.run("b", &["settings", "unskip", "agents"]));
     assert_eq!(s["data"]["skipped"], serde_json::json!([]), "{s}");
+
+    // a shared file kept as this computer's own, and shared again
+    let claude = h.path("home/.claude/CLAUDE.md");
+    std::fs::create_dir_all(claude.parent().unwrap()).unwrap();
+    std::fs::write(&claude, "only here\n").unwrap();
+    let claude = claude.to_string_lossy();
+    let s = json(&h.run("b", &["settings", "keep", &claude]));
+    assert_eq!(s["data"]["kept"], serde_json::json!([".claude/CLAUDE.md"]), "{s}");
+    let monitors = h.path("home/.config/hypr/monitors.lua");
+    machine_error(
+        &h.run("b", &["settings", "keep", &monitors.to_string_lossy()]),
+        "usage",
+        2,
+    );
+    machine_error(&h.run("b", &["settings", "keep", "/etc/hosts"]), "usage", 2);
+    let s = json(&h.run("b", &["settings", "share", &claude]));
+    assert_eq!(s["data"]["kept"], serde_json::json!([]), "{s}");
+    machine_error(&h.run("b", &["settings", "share", &claude]), "not_found", 4);
 }
 
 #[test]

@@ -242,6 +242,10 @@ enum Cmd {
         /// The device to take packages from
         #[arg(long)]
         from: String,
+        /// This computer takes that device's place: bring its own settings
+        /// too (its monitors, its own CLAUDE.md, ...)
+        #[arg(long)]
+        replacing: bool,
         /// Install the packages (pacman still asks); otherwise only show
         #[arg(long)]
         yes: bool,
@@ -522,6 +526,18 @@ enum SettingsCmd {
     Skip { group: String },
     /// Sync a skipped group of settings here again
     Unskip { group: String },
+    /// Keep a shared settings file as this computer's own: still backed up,
+    /// with its versions, but no longer the same on every computer
+    Keep {
+        /// The file, like ~/.claude/CLAUDE.md
+        path: PathBuf,
+    },
+    /// Make a file kept as this computer's own the same on every computer
+    /// again
+    Share {
+        /// The file, like ~/.claude/CLAUDE.md
+        path: PathBuf,
+    },
     /// Settle a setting that changed here and on another device
     Resolve {
         /// The setting, like ~/.config/hypr/bindings.lua
@@ -538,6 +554,9 @@ enum Keep {
     Local,
     /// The other device's version
     Remote,
+    /// Each device's own: this one's stays here as this computer's, the
+    /// others share theirs
+    Each,
 }
 
 #[derive(Subcommand)]
@@ -621,6 +640,9 @@ struct Config {
     /// Groups of settings this device leaves out
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     settings_skip: std::collections::BTreeSet<String>,
+    /// Shared settings files this device keeps as its own (relative to home)
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    settings_keep: std::collections::BTreeSet<PathBuf>,
     /// Desktop notifications from the daemon: join requests, settings that
     /// need a choice, this device being removed
     #[serde(default = "yes")]
@@ -1228,7 +1250,9 @@ fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
                     .into_iter()
                     .map(|c| Arc::new(c) as Arc<dyn omacloud_core::merged::Group>)
                     .collect();
-            let manifest = Manifest::load()?.skipping(&config.settings_skip);
+            let manifest = Manifest::load()?
+                .skipping(&config.settings_skip)
+                .keeping(&config.settings_keep);
             groups.push(Arc::new(
                 omacloud_core::agents::Agents::new(&home).with_manifest(manifest.clone()),
             ));
@@ -1546,7 +1570,11 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
         if now != config_seen {
             config_seen = now;
             if let Ok(c) = load(paths) {
-                if c.settings != config.settings || c.settings_skip != config.settings_skip || c.repo != config.repo {
+                if c.settings != config.settings
+                    || c.settings_skip != config.settings_skip
+                    || c.settings_keep != config.settings_keep
+                    || c.repo != config.repo
+                {
                     info!("settings sync or the bucket's key changed; restarting into it");
                     return Ok(Ended::Upgraded);
                 }
@@ -2086,6 +2114,7 @@ fn run(cli: Cli) -> Out {
                 limits: Limits::default(),
                 settings,
                 settings_skip: std::collections::BTreeSet::new(),
+                settings_keep: std::collections::BTreeSet::new(),
                 notifications: true,
                 folders,
                 coordination_bucket: target.coordination_bucket,
@@ -2378,7 +2407,7 @@ fn run(cli: Cli) -> Out {
         Cmd::Bucket { action } => bucket(&paths, action.unwrap_or(BucketCmd::Status)),
         Cmd::Recovery { action } => recovery(&paths, action),
         Cmd::Packages { action } => packages(&paths, action.unwrap_or(PackagesCmd::List)),
-        Cmd::RestoreMachine { from, yes } => {
+        Cmd::RestoreMachine { from, replacing, yes } => {
             let mut config = load(&paths)?;
             if !config.settings {
                 config.settings = true;
@@ -2389,6 +2418,34 @@ fn run(cli: Cli) -> Out {
             record_packages(&config, &mut e);
             let st = e.sync()?;
             say!(out, "files and settings: pulled {}", st.pulled);
+            // only a computer taking another's place gets that one's own
+            let mut taken = Vec::new();
+            if replacing {
+                if from == config.device {
+                    return Err(fail::usage("a computer can't take its own place")
+                        .hint("name the computer this one replaces with --from")
+                        .into());
+                }
+                let keep;
+                (taken, keep) = e.take_machine_files(&from)?;
+                if !keep.is_empty() {
+                    config.settings_keep.extend(keep);
+                    save(&paths, &config)?;
+                    e = engine(&paths, &config)?;
+                }
+                if !taken.is_empty() {
+                    _ = e.sync()?;
+                }
+                say!(
+                    out,
+                    "{from}'s own settings: {} file{} brought here",
+                    taken.len(),
+                    if taken.len() == 1 { "" } else { "s" }
+                );
+                for p in &taken {
+                    say!(out, "  ~/{}", p.display());
+                }
+            }
             let packages = packages(
                 &paths,
                 PackagesCmd::Restore {
@@ -2424,6 +2481,8 @@ fn run(cli: Cli) -> Out {
             let data = json!({
                 "from": from,
                 "pulled": st.pulled,
+                "replacing": replacing,
+                "own_settings": taken,
                 "packages": packages.data(),
                 "secrets_bundle": has_secrets,
                 "daemon_started": started,
@@ -3019,17 +3078,40 @@ fn settings(paths: &Paths, action: SettingsCmd) -> Out {
             };
             Ok(Response::new(settings_json(&st, &config), summary).human(settings_text(&st).trim_end()))
         }
+        SettingsCmd::Keep { path } => {
+            let rel = under_home(&path)?;
+            if !config.settings_keep.contains(&rel) {
+                keepable(&rel)?;
+                _ = config.settings_keep.insert(rel.clone());
+                save(paths, &config)?;
+            }
+            let st = engine(paths, &config)?.settings_status();
+            Ok(Response::new(
+                settings_json(&st, &config),
+                format!("~/{} is this computer's own", rel.display()),
+            )
+            .human(settings_text(&st).trim_end()))
+        }
+        SettingsCmd::Share { path } => {
+            let rel = under_home(&path)?;
+            if !config.settings_keep.remove(&rel) {
+                return Err(
+                    fail::not_found(format!("~/{} isn't kept as this computer's own", rel.display()))
+                        .hint("`omacloud settings status` lists this computer's own files")
+                        .into(),
+                );
+            }
+            save(paths, &config)?;
+            let st = engine(paths, &config)?.settings_status();
+            Ok(Response::new(
+                settings_json(&st, &config),
+                format!("~/{} is shared again", rel.display()),
+            )
+            .human(settings_text(&st).trim_end()))
+        }
         SettingsCmd::Resolve { path, keep } => {
-            let home = home_dir()?;
-            let abs = if path.is_absolute() {
-                path
-            } else {
-                std::env::current_dir()?.join(path)
-            };
-            let rel = abs.strip_prefix(&home).map_err(|_| {
-                fail::usage(format!("{} is not under your home", abs.display()))
-                    .hint("give a setting like ~/.config/hypr/bindings.lua")
-            })?;
+            let rel = under_home(&path)?;
+            let rel = rel.as_path();
             let mut e = engine(paths, &config)?;
             if !e.settings_status().held.iter().any(|p| p.as_path() == rel) {
                 return Err(
@@ -3038,19 +3120,67 @@ fn settings(paths: &Paths, action: SettingsCmd) -> Out {
                         .into(),
                 );
             }
-            e.resolve_setting(rel, matches!(keep, Keep::Remote))?;
-            e.sync()?;
-            let keep = if matches!(keep, Keep::Remote) {
-                "remote"
-            } else {
-                "local"
+            let kept = match keep {
+                Keep::Local | Keep::Remote => {
+                    e.resolve_setting(rel, matches!(keep, Keep::Remote))?;
+                    if matches!(keep, Keep::Remote) {
+                        "remote"
+                    } else {
+                        "local"
+                    }
+                }
+                Keep::Each => {
+                    keepable(rel)?;
+                    _ = config.settings_keep.insert(rel.to_path_buf());
+                    save(paths, &config)?;
+                    e = engine(paths, &config)?;
+                    e.keep_each(rel)?;
+                    "each"
+                }
             };
+            e.sync()?;
             Ok(Response::new(
-                json!({ "resolved": format!("~/{}", rel.display()), "kept": keep }),
+                json!({ "resolved": format!("~/{}", rel.display()), "kept": kept }),
                 format!("resolved {}", rel.display()),
             ))
         }
     }
+}
+
+/// A settings file given on the command line, relative to home.
+fn under_home(path: &Path) -> Result<PathBuf> {
+    let home = home_dir()?;
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    Ok(abs
+        .strip_prefix(&home)
+        .map_err(|_| {
+            fail::usage(format!("{} is not under your home", abs.display()))
+                .hint("give a setting like ~/.config/hypr/bindings.lua")
+        })?
+        .to_path_buf())
+}
+
+/// Fails unless `rel` is a shared settings file a computer can keep as its
+/// own.
+fn keepable(rel: &Path) -> Result<()> {
+    let manifest = Manifest::load()?;
+    if manifest.is_machine(rel) {
+        return Err(
+            fail::usage(format!("~/{} is already each computer's own", rel.display()))
+                .hint("such files are backed up under each computer's name and never shared")
+                .into(),
+        );
+    }
+    if !manifest.can_keep(rel) {
+        return Err(fail::usage(format!("~/{} isn't a shared settings file", rel.display()))
+            .hint("`omacloud settings status` shows what syncs; an app's settings that merge (Chromium, an agent's settings.json) can't be kept apart")
+            .into());
+    }
+    Ok(())
 }
 
 fn settings_json(st: &omacloud_core::SettingsStatus, config: &Config) -> Value {
@@ -3059,6 +3189,8 @@ fn settings_json(st: &omacloud_core::SettingsStatus, config: &Config) -> Value {
         "skipped": config.settings_skip,
         "dormant": st.dormant,
         "held": st.held,
+        "own": st.own,
+        "kept": config.settings_keep,
         "groups": st.groups,
         "source": settings_source(),
     })
@@ -3085,10 +3217,16 @@ fn settings_text(st: &omacloud_core::SettingsStatus) -> String {
         (true, None) => say!(out, "settings sync is on, following {}", settings_source()),
     }
     out.push_str(&groups_text(&st.groups, "  "));
+    if !st.own.is_empty() {
+        say!(out, "  this computer's own, backed up but not shared:");
+        for p in &st.own {
+            say!(out, "    ~/{}", p.display());
+        }
+    }
     for p in &st.held {
         say!(
             out,
-            "  waiting: ~/{} changed here and on another device; `omacloud settings resolve ~/{} --keep local|remote`",
+            "  waiting: ~/{} changed here and on another device; `omacloud settings resolve ~/{} --keep local|remote|each`",
             p.display(),
             p.display()
         );
@@ -3152,7 +3290,7 @@ fn relative(config: &Config, e: &mut Engine, path: &Path) -> Result<PathBuf> {
     if config.settings
         && let Ok(rest) = abs.strip_prefix(home_dir()?)
     {
-        return Ok(Path::new(omacloud_core::settings::PREFIX).join(rest));
+        return Ok(e.setting_path(rest));
     }
     if path.is_relative() {
         return Ok(path.to_path_buf()); // taken as folder relative

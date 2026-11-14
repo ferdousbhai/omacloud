@@ -7,6 +7,12 @@
 //! [`PREFIX`], so versions, key rotation and plain restic restores cover
 //! them too.
 //!
+//! Omacloud's own `machine` tier is a third kind: a file about one computer
+//! (its monitors, what it starts) that is kept, with its versions, under
+//! that computer's name ([`MACHINES`]) and never written on another. A
+//! person can make any shared file their computer's own too (see
+//! [`Manifest::keeping`]).
+//!
 //! As dots does, settings sync stands down ("dormant") when manifest paths
 //! are symlinks or another dotfile manager is in use: those users already
 //! have their own sync, and writing through their links would fight it.
@@ -22,6 +28,10 @@ use anyhow::Result;
 /// Where settings live in the synced tree.
 pub const PREFIX: &str = ".omacloud/settings";
 
+/// Where each computer's own settings live in the synced tree:
+/// `<MACHINES>/<device>/<path under home>`.
+pub const MACHINES: &str = ".omacloud/machines";
+
 /// The manifest from Omarchy's dots (PR #12037), used until Omarchy ships
 /// its own at `$OMARCHY_PATH/default/dots/manifest`, then Omacloud's
 /// additions after [`ADDITIONS`].
@@ -35,6 +45,8 @@ const ADDITIONS: &str = "# Omacloud's additions";
 pub enum Tier {
     Shared,
     Local,
+    /// One computer's own: kept under its name, never applied elsewhere.
+    Machine,
 }
 
 /// Parsed manifest: `tier path` per line, `#` comments. A `*` matches
@@ -48,12 +60,14 @@ pub struct Manifest {
     omarchy: usize,
     /// Groups this computer leaves out (see [`group_of`]).
     skip: BTreeSet<String>,
+    /// Files this computer keeps as its own, though the manifest shares them.
+    keep: BTreeSet<PathBuf>,
 }
 
 impl Manifest {
     /// # Errors
     ///
-    /// On a line that isn't `shared <path>` or `local <path>`, or a path
+    /// On a line that isn't `shared`, `local` or `machine` and a path, or a path
     /// that isn't plainly relative.
     pub fn parse(text: &str) -> Result<Self> {
         let mut entries = Vec::new();
@@ -72,6 +86,7 @@ impl Manifest {
             let tier = match tier {
                 "shared" => Tier::Shared,
                 "local" => Tier::Local,
+                "machine" => Tier::Machine,
                 other => anyhow::bail!("manifest line {}: unknown tier `{other}`", n + 1),
             };
             let path = path.trim();
@@ -92,6 +107,7 @@ impl Manifest {
             entries,
             omarchy,
             skip: BTreeSet::new(),
+            keep: BTreeSet::new(),
         })
     }
 
@@ -133,17 +149,87 @@ impl Manifest {
         &self.skip
     }
 
+    /// The same manifest, with these shared files kept as this computer's
+    /// own (paths relative to home).
+    #[must_use]
+    pub fn keeping(mut self, files: &BTreeSet<PathBuf>) -> Self {
+        self.keep.clone_from(files);
+        self
+    }
+
+    /// The shared files this computer keeps as its own.
+    #[must_use]
+    pub fn kept(&self) -> &BTreeSet<PathBuf> {
+        &self.keep
+    }
+
+    fn matching(&self, tier: Tier, rel: &Path) -> bool {
+        self.entries
+            .iter()
+            .any(|(t, pattern)| *t == tier && matches(pattern, rel))
+    }
+
+    /// Whether `rel` is one computer's own: a `machine` entry, or a shared
+    /// file this computer keeps. Sign-ins and tokens never are.
+    #[must_use]
+    pub fn is_machine(&self, rel: &Path) -> bool {
+        (self.matching(Tier::Machine, rel) || self.keep.contains(rel))
+            && !secret_name(rel)
+            && !self.skip.contains(group_of(rel))
+    }
+
+    /// Whether `rel` could be kept as this computer's own: a file the
+    /// manifest shares, read as it is (not one an app's group merges).
+    #[must_use]
+    pub fn can_keep(&self, rel: &Path) -> bool {
+        self.matching(Tier::Shared, rel)
+            && !self.matching(Tier::Local, rel)
+            && !self.matching(Tier::Machine, rel)
+            && !secret_name(rel)
+    }
+
+    /// This computer's own settings files present under `home`, relative to
+    /// it: regular files, never one reached through a link.
+    #[must_use]
+    pub fn machine_files(&self, home: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for (tier, pattern) in &self.entries {
+            if *tier == Tier::Machine {
+                expand(home, Path::new(""), &components(pattern), &mut out);
+            }
+        }
+        out.extend(self.keep.iter().cloned());
+        out.retain(|p| {
+            self.is_machine(p)
+                && !self.through_any_link(home, p)
+                && fs::symlink_metadata(home.join(p)).is_ok_and(|m| m.is_file())
+        });
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Whether `rel` under `home` is a link or passes through one.
+    #[must_use]
+    pub fn through_any_link(&self, home: &Path, rel: &Path) -> bool {
+        let mut at = home.to_path_buf();
+        rel.components().any(|c| {
+            at.push(c);
+            fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink())
+        })
+    }
+
     /// Whether `rel` (relative to home) is in the shared tier. A path listed
     /// as local is never shared, whatever else matches.
     /// Sign-ins and tokens never are, whatever matches (see [`secret_name`]).
     #[must_use]
     pub fn is_shared(&self, rel: &Path) -> bool {
-        let matching = |tier| {
-            self.entries
-                .iter()
-                .any(|(t, pattern)| *t == tier && matches(pattern, rel))
-        };
-        matching(Tier::Shared) && !matching(Tier::Local) && !secret_name(rel) && !self.skip.contains(group_of(rel))
+        self.matching(Tier::Shared, rel)
+            && !self.matching(Tier::Local, rel)
+            && !self.matching(Tier::Machine, rel)
+            && !self.keep.contains(rel)
+            && !secret_name(rel)
+            && !self.skip.contains(group_of(rel))
     }
 
     /// Whether `rel` is shared only by Omacloud's additions.
@@ -224,11 +310,7 @@ impl Manifest {
         if !self.deep(rel) && !self.addition(rel) {
             return false;
         }
-        let mut at = home.to_path_buf();
-        rel.components().any(|c| {
-            at.push(c);
-            fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink())
-        })
+        self.through_any_link(home, rel)
     }
 
     /// Shared files present under `home`, relative to it.
@@ -253,9 +335,13 @@ impl Manifest {
     /// (`.config/nvim/lua/*/`).
     #[must_use]
     pub fn watch_dirs(&self, home: &Path) -> Vec<(PathBuf, bool)> {
-        let mut dirs = Vec::new();
+        let mut dirs: Vec<(PathBuf, bool)> = self
+            .keep
+            .iter()
+            .filter_map(|p| p.parent().map(|d| (home.join(d), false)))
+            .collect();
         for (tier, pattern) in &self.entries {
-            if *tier != Tier::Shared {
+            if *tier == Tier::Local {
                 continue;
             }
             let mut parts = components(pattern);

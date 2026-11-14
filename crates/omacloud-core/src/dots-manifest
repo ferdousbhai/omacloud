@@ -1,5 +1,6 @@
 # tier path (relative to home). Only audited regular files are ever stored.
-# Local files have history but are never published or overwritten by a pull.
+# Local files are never stored; machine files (Omacloud's additions) are
+# stored under each computer's name and never applied on another.
 shared .bashrc
 shared .XCompose
 shared .config/hypr/bindings.lua
@@ -25,9 +26,14 @@ shared .config/tmux/tmux.conf
 # they ran.
 # What's about the machine stays on it, whatever Omarchy's own manifest says: a
 # touchpad's settings, and the bar's plugins, some of which only run on one kind
-# of computer.
-local .config/hypr/input.lua
-local .config/omarchy/shell.json
+# of computer. `machine` files are kept with their versions under the computer's
+# name, never applied on another (`restore-machine --replacing` brings them to
+# the computer taking its place); `local` ones are never stored.
+machine .config/hypr/hyprland.lua
+machine .config/hypr/monitors.lua
+machine .config/hypr/autostart.lua
+machine .config/hypr/input.lua
+machine .config/omarchy/shell.json
 shared .bash_aliases
 shared .inputrc
 shared .gitconfig
@@ -78,7 +84,7 @@ shared .claude/skills/**
 local .claude/skills/synced/**
 shared .claude/hooks/**
 shared .claude/themes/**
-local .claude/settings.local.json
+machine .claude/settings.local.json
 local .claude/.credentials.json
 shared .codex/AGENTS.md
 shared .codex/rules/**
