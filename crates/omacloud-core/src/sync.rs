@@ -778,6 +778,18 @@ impl Engine {
         public_hex(&self.signing)
     }
 
+    /// This device's word for a browser session's key (see [`crate::inbox`]).
+    #[must_use]
+    pub fn endorse_upload_key(&self, key: &str, until: u64) -> crate::inbox::Endorsement {
+        crate::inbox::Endorsement::new(&self.signing, key, until)
+    }
+
+    /// Whether a device is in the account, by the chain as last verified.
+    #[must_use]
+    pub fn is_member(&self, device: &str) -> bool {
+        self.state.devices.members().valid.contains_key(device)
+    }
+
     /// Fetch and verify the device chain.
     ///
     /// # Errors

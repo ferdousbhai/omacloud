@@ -21,6 +21,7 @@ mod fail;
 mod mount;
 mod output;
 mod power;
+mod uploads;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -1019,13 +1020,50 @@ struct DriveCode {
     key: String,
     secret: String,
     password: String,
+    /// What lets the page upload, in a drive link only: a pasted code opens
+    /// files to read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upload: Option<UploadKey>,
 }
+
+/// A browser session's key for uploading, vouched for by this computer (see
+/// `omacloud_core::inbox`), and the inbox's folder in the bucket.
+#[derive(Serialize)]
+struct UploadKey {
+    inbox: String,
+    seed: String,
+    endorsement: omacloud_core::inbox::Endorsement,
+}
+
+/// How long a drive link's session may upload: a working day.
+const UPLOAD_KEY_VALID: Duration = Duration::from_secs(12 * 3600);
 
 impl DriveCode {
     const PREFIX: &str = "omacloud-drive-";
 
     /// This account's, with the configuration it was read from.
+    /// With what lets the page upload too, vouched for by this computer.
+    fn with_upload(paths: &Paths) -> Result<(Config, Self)> {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        let (config, engine, mut code) = Self::read(paths)?;
+        let (seed, public) = omacloud_core::inbox::session_key();
+        let until = (std::time::SystemTime::now() + UPLOAD_KEY_VALID)
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        code.upload = Some(UploadKey {
+            inbox: omacloud_core::Inbox::beside(&config.repo)?.prefix().to_string(),
+            seed: URL_SAFE_NO_PAD.encode(seed),
+            endorsement: engine.endorse_upload_key(&public, until),
+        });
+        Ok((config, code))
+    }
+
     fn of(paths: &Paths) -> Result<(Config, Self)> {
+        let (config, _, code) = Self::read(paths)?;
+        Ok((config, code))
+    }
+
+    fn read(paths: &Paths) -> Result<(Config, Engine, Self)> {
         let config = load(paths)?;
         let mut e = engine(paths, &config)?;
         e.sync()?; // pick up any key rotation first
@@ -1045,8 +1083,9 @@ impl DriveCode {
             key: opt("access_key_id"),
             secret: opt("secret_access_key"),
             password: secret.password,
+            upload: None,
         };
-        Ok((config, code))
+        Ok((config, e, code))
     }
 
     fn encode(&self) -> Result<String> {
@@ -1459,6 +1498,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     let mut alerts = config
         .notifications
         .then(|| alerts::Alerts::new((!paths.is_default()).then_some(paths.config.as_path())));
+    let mut uploads = uploads::Uploads::new(&config.repo);
     let mut bar = bar::Bar::new(&paths.data, paths.is_default());
     // in Omarchy's bar from the first run on, as its other sync shows there;
     // once only, so taking it out stays taken out
@@ -1628,6 +1668,14 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
                     "a setting changed on two computers: choose one",
                 );
             }
+        }
+        // what a browser uploaded: saved here, for the next sync to carry
+        if let (Some(u), false) = (uploads.as_mut(), paused || refused) {
+            let names: Option<Vec<String>> = config
+                .folders
+                .is_some()
+                .then(|| engine.folder_list().into_iter().map(|(name, _)| name).collect());
+            u.take_in(&mut engine, &config.folder, names.as_deref());
         }
         // a folder made in home: offer to sync it, once
         if let (Some(a), true) = (alerts.as_mut(), config.folders.is_some()) {
@@ -2415,7 +2463,7 @@ fn run(cli: Cli) -> Out {
             if !output::to_terminal(mode()) {
                 return Err(fail::terminal_required("a drive link (it opens your files)").into());
             }
-            let (config, code) = DriveCode::of(&paths)?;
+            let (config, code) = DriveCode::with_upload(&paths)?;
             let seed: [u8; omacloud_web::link::SEED] = rand::random();
             let sealed = omacloud_web::link::seal(&seed, rand::random(), &serde_json::to_vec(&code)?)
                 .map_err(anyhow::Error::msg)?;

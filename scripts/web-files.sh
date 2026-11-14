@@ -58,6 +58,9 @@ rm "$work/A/Work/Reports/sales.csv" "$work/A/Photos/forest.png"
 "$OMACLOUD" --config "$work/a.toml" --styled sync >/dev/null 2>&1
 printed=$(on_tty "$OMACLOUD" --config "$work/a.toml" drive-code | grep '^omacloud-drive-')
 
+# a computer of the account, running: what the page uploads, it takes in
+"$OMACLOUD" --config "$work/a.toml" watch --poll 2 >"$work/watch.log" 2>&1 &
+pids+=($!)
 (cd "$work/site" && python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) &
 pids+=($!)
 cat <<END

@@ -133,6 +133,99 @@ impl Links {
     }
 }
 
+/// Where a browser leaves files for the account's computers, beside the
+/// repository (see [`crate::inbox`]).
+const INBOX: &str = "omacloud-inbox";
+
+/// The inbox in an account's bucket: sealed files a browser put there, and a
+/// `changed` object it rewrites after each, so a computer learns of one with
+/// a single read.
+pub struct Inbox {
+    op: opendal::Operator,
+    prefix: String,
+}
+
+impl Inbox {
+    /// # Errors
+    ///
+    /// If `repo` isn't in a bucket, or its options don't make an operator.
+    pub fn beside(repo: &RepoSpec) -> Result<Self> {
+        let scheme = repo
+            .repository
+            .strip_prefix("opendal:")
+            .context("uploads from a browser need the repository in a bucket")?;
+        let mut options = repo.options.clone();
+        let prefix = repo.under_root(INBOX);
+        _ = options.insert("root".into(), prefix.clone());
+        let _guard = runtime().enter();
+        let op = opendal::Operator::via_iter(scheme, options)
+            .with_context(|| format!("opening the {scheme} location for the inbox"))?
+            .layer(RetryLayer::new().with_jitter());
+        Ok(Self { op, prefix })
+    }
+
+    /// The inbox's folder in the bucket, as a browser writes to it.
+    #[must_use]
+    pub fn prefix(&self) -> &str {
+        self.prefix.trim_matches('/')
+    }
+
+    /// What the `changed` object says now, `None` before any upload.
+    ///
+    /// # Errors
+    ///
+    /// If the storage can't be reached.
+    pub fn marker(&self) -> Result<Option<String>> {
+        match runtime().block_on(self.op.read(CHANGED)) {
+            Ok(buf) => Ok(Some(String::from_utf8_lossy(&buf.to_vec()).into_owned())),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).context("reading the inbox's marker"),
+        }
+    }
+
+    /// The files waiting, each with when the bucket says it was written
+    /// (Unix seconds; a file the bucket gives no time for counts as written
+    /// now, which no vouching outlasts).
+    ///
+    /// # Errors
+    ///
+    /// If the storage can't be reached.
+    pub fn waiting(&self) -> Result<Vec<(String, u64)>> {
+        runtime().block_on(async {
+            let mut found = Vec::new();
+            for entry in self.op.list("/").await.context("listing the inbox")? {
+                let name = entry.path().to_string();
+                if name.ends_with('/') || name == CHANGED {
+                    continue;
+                }
+                let meta = self.op.stat(&name).await.context("looking at an upload")?;
+                let written = meta.last_modified().map_or(u64::MAX, |t| {
+                    u64::try_from(t.into_inner().as_second()).unwrap_or(u64::MAX)
+                });
+                found.push((name, written));
+            }
+            Ok(found)
+        })
+    }
+
+    /// # Errors
+    ///
+    /// If the storage can't be reached or the file is gone.
+    pub fn read(&self, name: &str) -> Result<Vec<u8>> {
+        Ok(runtime()
+            .block_on(self.op.read(name))
+            .context("reading an upload")?
+            .to_vec())
+    }
+
+    /// # Errors
+    ///
+    /// If the storage can't be reached.
+    pub fn remove(&self, name: &str) -> Result<()> {
+        runtime().block_on(self.op.delete(name)).context("removing an upload")
+    }
+}
+
 /// Parallel reads when catching up on a long history.
 const READERS: usize = 16;
 

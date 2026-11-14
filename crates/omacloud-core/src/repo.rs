@@ -206,6 +206,19 @@ impl RepoSpec {
         Ok(n)
     }
 
+    /// The repository's key files, as stored: what its password opens.
+    ///
+    /// # Errors
+    ///
+    /// If the storage can't be read.
+    pub fn key_files(&self) -> Result<Vec<Vec<u8>>> {
+        let from = self.backends()?.repository();
+        from.list(FileType::Key)?
+            .into_iter()
+            .map(|id| Ok(from.read_full(FileType::Key, &id)?.to_vec()))
+            .collect()
+    }
+
     pub(crate) fn open_ids(&self, key: &MasterKey) -> Result<Repository<IndexedIdsStatus>> {
         Ok(Repository::new(&RepositoryOptions::default(), &self.backends()?)?
             .open(&Credentials::Masterkey(key.clone()))?

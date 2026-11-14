@@ -27,7 +27,21 @@ export function account(said) {
 			key: text("key"),
 			secret: text("secret"),
 			password: text("password"),
+			...(uploadKey(said.upload) ? { upload: uploadKey(said.upload) } : {}),
 		};
+	} catch {
+		return null;
+	}
+}
+
+// What lets the page upload, when a drive link brought it: the inbox's folder
+// in the bucket, the session's signing key, and a computer's word for it.
+function uploadKey(said) {
+	try {
+		if (typeof said?.inbox !== "string" || !said.inbox || typeof said.endorsement !== "object") return null;
+		const seed = bytesOf(said.seed);
+		if (seed.length !== 32) return null;
+		return { inbox: said.inbox.replace(/^\/+|\/+$/g, ""), seed, endorsement: JSON.stringify(said.endorsement) };
 	} catch {
 		return null;
 	}

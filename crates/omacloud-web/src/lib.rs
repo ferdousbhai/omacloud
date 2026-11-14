@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 #[cfg(target_arch = "wasm32")]
 mod abi;
 pub mod link;
+pub mod upload;
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -45,6 +46,15 @@ impl Key {
         Aes256CtrPoly1305Aes::new((&self.0).into())
             .decrypt(Nonce::<Aes256CtrPoly1305Aes>::from_slice(&data[..16]), &data[16..])
             .map_err(|_| "wrong key, or the data was changed".to_string())
+    }
+
+    /// The other way: `nonce`, then `plain` encrypted, then its MAC. The
+    /// nonce must be random and used once; the caller brings it.
+    fn encrypt(&self, nonce: [u8; 16], plain: &[u8]) -> Result<Vec<u8>> {
+        let sealed = Aes256CtrPoly1305Aes::new((&self.0).into())
+            .encrypt(Nonce::<Aes256CtrPoly1305Aes>::from_slice(&nonce), plain)
+            .map_err(|_| "encrypting failed".to_string())?;
+        Ok([&nonce[..], &sealed].concat())
     }
 }
 
@@ -158,6 +168,26 @@ impl Reader {
             key: Key(key),
             blobs: HashMap::new(),
         })
+    }
+
+    /// Encrypt with the repository's key, as its own files are: for what a
+    /// browser leaves in the account's inbox. `nonce` must be random and
+    /// used once.
+    ///
+    /// # Errors
+    ///
+    /// Never in practice: only if the cipher refuses the length.
+    pub fn seal(&self, nonce: [u8; 16], plain: &[u8]) -> Result<Vec<u8>> {
+        self.key.encrypt(nonce, plain)
+    }
+
+    /// Open what [`Reader::seal`] made.
+    ///
+    /// # Errors
+    ///
+    /// If it wasn't sealed with this repository's key.
+    pub fn unseal(&self, sealed: &[u8]) -> Result<Vec<u8>> {
+        self.key.decrypt(sealed)
     }
 
     /// The JSON of a config, snapshot or index file, as stored.

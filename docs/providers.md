@@ -111,12 +111,14 @@ provider:
 - **R2:** in the bucket's Settings, under CORS Policy, add:
 
   ```json
-  [{ "AllowedOrigins": ["https://omacloud.computer"], "AllowedMethods": ["GET", "HEAD"], "AllowedHeaders": ["range"], "MaxAgeSeconds": 3600 }]
+  [{ "AllowedOrigins": ["https://omacloud.computer"], "AllowedMethods": ["GET", "HEAD", "PUT"], "AllowedHeaders": ["range"], "MaxAgeSeconds": 3600 }]
   ```
 
 - **Other S3 storage:** the same rule through the provider's console or its
-  `PutBucketCors`: origin `https://omacloud.computer`, methods `GET` and `HEAD`,
-  header `range`.
+  `PutBucketCors`: origin `https://omacloud.computer`, methods `GET`, `HEAD` and
+  `PUT`, header `range`.
+
+`PUT` is for uploading from the page; leave it out and the page only reads.
 
 Without the rule, requests to an R2 bucket still succeed but carry no
 `Access-Control-Allow-Origin`, so a browser refuses to hand the page what came back.

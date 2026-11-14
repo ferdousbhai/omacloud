@@ -15,6 +15,7 @@ pub mod devices;
 pub mod epoch;
 pub mod head;
 pub mod ignore;
+pub mod inbox;
 pub mod merged;
 pub mod repo;
 pub mod secrets;
@@ -25,7 +26,7 @@ pub mod theme;
 pub mod throttle;
 pub mod wifi;
 
-pub use bucket::{BucketCoordinator, Links};
+pub use bucket::{BucketCoordinator, Inbox, Links};
 pub use devices::{Anchor, DeviceChain, DeviceError, JoinRequest, fingerprint};
 pub use head::{Coordinator, DirCoordinator, Head, HeadError, HeadTracker};
 pub use ignore::Ignores;

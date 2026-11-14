@@ -119,3 +119,41 @@ pub unsafe extern "C" fn unseal(seed: *const u8, seed_len: usize, sealed: *const
         bytes(sealed, sealed_len)
     }))
 }
+
+/// A file for the account's inbox (see [`crate::upload::make`]); `mtime` is
+/// its number as text.
+///
+/// # Safety
+///
+/// As [`open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn upload(
+    seed: *const u8,
+    seed_len: usize,
+    endorsement: *const u8,
+    endorsement_len: usize,
+    path: *const u8,
+    path_len: usize,
+    mtime: *const u8,
+    mtime_len: usize,
+    nonce: *const u8,
+    nonce_len: usize,
+    content: *const u8,
+    content_len: usize,
+) -> *mut u8 {
+    answer(with(|r| {
+        let nonce: [u8; 16] = unsafe { bytes(nonce, nonce_len) }
+            .try_into()
+            .map_err(|_| "a nonce is 16 bytes".to_string())?;
+        let mtime = unsafe { text(mtime, mtime_len) }?.parse().unwrap_or(0);
+        crate::upload::make(
+            r,
+            unsafe { bytes(seed, seed_len) },
+            unsafe { text(endorsement, endorsement_len) }?,
+            unsafe { text(path, path_len) }?,
+            mtime,
+            nonce,
+            unsafe { bytes(content, content_len) },
+        )
+    }))
+}

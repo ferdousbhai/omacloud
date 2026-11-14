@@ -252,6 +252,7 @@ button {
 }
 #lock,
 #home-lock,
+#upload,
 #download,
 #look header button {
 	color: var(--accent);
@@ -260,6 +261,7 @@ button {
 }
 #lock:hover,
 #home-lock:hover,
+#upload:hover,
 #download:hover:enabled,
 #look header button:hover {
 	background: var(--chosen);
@@ -449,6 +451,14 @@ svg.line {
 .item .detail {
 	font-size: 0.75rem;
 	color: var(--soft);
+}
+/* sent from here, not yet taken in by a computer */
+.item.pending {
+	opacity: 0.55;
+}
+#items.dropping {
+	outline: 2px dashed var(--accent);
+	outline-offset: -0.5rem;
 }
 .item[aria-selected="true"] {
 	background: var(--chosen);

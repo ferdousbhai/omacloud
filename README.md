@@ -252,8 +252,10 @@ a phone, press Open on a Phone in the app (or run `omacloud drive-link`) and poi
 camera at the code: nothing is typed. The link works for five minutes, for whoever has it. A computer
 leaves the key to your storage and the password to your files in your bucket for those minutes,
 sealed, and the link carries what opens them, in the part of an address that's never sent to a
-server. `omacloud drive-code` prints a one-line code to paste instead; keep that one private, since
-it doesn't run out. The bucket needs one rule first
+server. Signed in that way you can upload too: Upload, or drop files on a folder. The browser
+encrypts each one and leaves it in your bucket, and one of your computers takes it in within about
+a minute and syncs it. `omacloud drive-code` prints a one-line code to paste instead, which only
+reads; keep that one private, since it doesn't run out. The bucket needs one rule first
 ([docs/providers.md](docs/providers.md#reading-in-a-browser)); Dropbox accounts aren't there yet.
 
 Leaving needs nothing from Omacloud: `omacloud export` prints the command that

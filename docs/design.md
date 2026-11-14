@@ -108,6 +108,18 @@ good as the keys, so it's shown as a code for a camera and only to a terminal.
 The page runs whatever the site serves, so using it trusts the site's code that
 day, as any web app does; the computers' sync never depends on it.
 
+A browser holds no device key, so it can't push a version. To upload, it
+leaves each file in the bucket, in `omacloud-inbox/`, sealed with the
+repository's key, and a computer's daemon takes it in: saves it into the
+folder, never over a file that's there, and the next sync carries it
+(`inbox.rs`). What a computer takes in must stand on a member's word: a drive
+link carries a signing key made for that session and the linking computer's
+signature over it, good for twelve hours; the page signs each file's path and
+hash with the key; the daemon checks both signatures, that the signer is still
+a member, and that the bucket wrote the object before the key ran out. So
+whoever holds the bucket's key and the repository's password, as a removed
+computer does until the key changes, still can't put a file on your computers.
+
 ## Accounts and people
 
 One person is one account: a recovery code, a device chain, a repository. Every

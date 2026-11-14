@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 // @ts-ignore: the Drive page's own script, plain JavaScript
-import { linked, pasted } from "../../web/paste.js";
+import { account, linked, pasted } from "../../web/paste.js";
 
 const printed = `# restore without omacloud: restic or rustic, this bucket and password
 # (repository epoch 0)
@@ -57,6 +57,20 @@ test("a drive link is read from after the #", () => {
 	assert.equal(linked(`#link=${b64(seed.slice(1))}.${b64(address)}`), null);
 	assert.equal(linked(""), null);
 	assert.equal(linked("#section"), null);
+});
+
+test("what a drive link's code says may carry an upload key", () => {
+	const said = { v: 1, ...want };
+	assert.deepEqual(account(said), want);
+	const seed = Buffer.alloc(32, 7).toString("base64url");
+	const endorsement = { key: "aa", until: 5, device: "bb", sig: "cc" };
+	const withKey = account({ ...said, upload: { inbox: "/omacloud-inbox/", seed, endorsement } });
+	assert.equal(withKey?.upload?.inbox, "omacloud-inbox");
+	assert.equal(withKey?.upload?.seed.length, 32);
+	assert.deepEqual(JSON.parse(withKey!.upload!.endorsement), endorsement);
+	// half of one is none
+	assert.deepEqual(account({ ...said, upload: { inbox: "x", seed: "AAAA", endorsement } }), want);
+	assert.deepEqual(account({ ...said, upload: { seed, endorsement } }), want);
 });
 
 test("anything else isn't taken for it", () => {

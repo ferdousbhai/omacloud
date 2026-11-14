@@ -106,7 +106,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         # a browser asking first: allowed when the bucket has the rule
-        self.answer(204 if CORS else 403, headers={"Access-Control-Allow-Headers": "range"} if CORS else None)
+        self.answer(204 if CORS else 403, headers={"Access-Control-Allow-Headers": "range", "Access-Control-Allow-Methods": "GET, HEAD, PUT"} if CORS else None)
 
     def do_HEAD(self):
         self.do_GET()

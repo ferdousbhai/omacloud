@@ -116,4 +116,26 @@ fn reads_what_the_engine_wrote() {
     let pack = fs::read(repo.join("data").join(&at.pack[..2]).join(&at.pack)).unwrap();
     let bytes = &pack[at.offset as usize..(at.offset + at.length) as usize];
     assert!(reader.blob(b, bytes).is_err());
+
+    // what a browser uploads, a computer takes: the engine vouches for a
+    // session's key, the reader signs and seals with it, and the inbox's
+    // checks pass with what both sides made
+    let session = SigningKey::generate(&mut rand::rngs::OsRng);
+    let session_public = hex::encode(session.verifying_key().to_bytes());
+    let endorsement = serde_json::to_string(&engine.endorse_upload_key(&session_public, 2000)).unwrap();
+    let sealed = omacloud_web::upload::make(
+        &reader,
+        &session.to_bytes(),
+        &endorsement,
+        "Notes/from the browser.txt",
+        1_800_000_000_000,
+        [9; 16],
+        b"hello",
+    )
+    .unwrap();
+    assert!(!sealed.windows(5).any(|w| w == b"hello"));
+    let upload = omacloud_core::inbox::open(&reader.unseal(&sealed).unwrap(), 1999, |d| engine.is_member(d)).unwrap();
+    assert_eq!(upload.path, Path::new("Notes/from the browser.txt"));
+    assert_eq!(upload.content, b"hello");
+    assert!(omacloud_core::inbox::open(&reader.unseal(&sealed).unwrap(), 2001, |d| engine.is_member(d)).is_err());
 }

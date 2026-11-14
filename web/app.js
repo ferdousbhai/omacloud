@@ -53,6 +53,13 @@ const THUMB_LIMIT = 8e6;
 const TEXT_LIMIT = 1e6;
 
 let bucket;
+// what lets this session upload, if a drive link brought it (see paste.js)
+let uploader = null;
+// files sent from here that no version has yet: [{ name, where, size, mtime }]
+let pending = [];
+// the snapshot and index files read so far, by name
+let latestName = "";
+const indexesRead = new Set();
 // every snapshot the bucket lists, newest written first: [{ name, modified }]
 let written = [];
 // the folders opened so far, from the top: [{ name, tree }]
@@ -144,20 +151,15 @@ async function connect(form) {
 	if (!opened) throw new Error("The password doesn't open these files.");
 	reader.file(await bucket.read("config"));
 
-	const indexes = await bucket.list("index");
 	status("Reading the index…");
-	await each(indexes, async (name) => reader.addIndex(await bucket.read(`index/${name}`)));
+	await readIndexes();
 
 	// The newest snapshot is the account as it stands. An account keeps a
 	// month of them, so only the few written last are read: the newest by
 	// what each says is among them. (Any written at the same moment as the
 	// last of those are read too, since the listing can't order them.)
-	written = (await bucket.listed("snapshots")).sort((a, b) => b.modified.localeCompare(a.modified));
-	const cut = written[Math.min(NEWEST, written.length) - 1]?.modified;
-	const names = written.filter((file, i) => i < NEWEST || file.modified === cut).map((file) => file.name);
 	status("Finding your files…");
-	const snapshots = await each(names, async (name) => reader.file(await bucket.read(`snapshots/${name}`)));
-	const latest = snapshots.reduce((a, b) => (a && a.time > b.time ? a : b), null);
+	const latest = await newest();
 	if (!latest) throw new Error("Nothing has been synced yet.");
 	trail = [{ name: "Omacloud Drive", tree: latest.tree }];
 	form.reset();
@@ -167,6 +169,118 @@ async function connect(form) {
 	await sidebar();
 	home();
 }
+
+// Take in the index files not read yet.
+async function readIndexes() {
+	const fresh = (await bucket.list("index")).filter((name) => !indexesRead.has(name));
+	await each(fresh, async (name) => (reader.addIndex(await bucket.read(`index/${name}`)), indexesRead.add(name)));
+}
+
+async function newest() {
+	written = (await bucket.listed("snapshots")).sort((a, b) => b.modified.localeCompare(a.modified));
+	const cut = written[Math.min(NEWEST, written.length) - 1]?.modified;
+	const names = written.filter((file, i) => i < NEWEST || file.modified === cut).map((file) => file.name);
+	const snapshots = await each(names, async (name) => ({ name, ...reader.file(await bucket.read(`snapshots/${name}`)) }));
+	const latest = snapshots.reduce((a, b) => (a && a.time > b.time ? a : b), null);
+	latestName = latest?.name ?? "";
+	return latest;
+}
+
+// A newer version than the one on show, if a computer pushed one: the page
+// moves to it, staying in the folder it was in while that still exists.
+async function refresh() {
+	const before = latestName;
+	const latest = await newest();
+	if (!latest || latest.name === before) return false;
+	await readIndexes();
+	everything = undefined;
+	deletedFiles = undefined;
+	const names = trail.slice(1).map((step) => step.name);
+	trail = [{ name: "Omacloud Drive", tree: latest.tree }];
+	for (const name of names) {
+		const next = (await readTree(trail.at(-1).tree)).find((n) => n.name === name && n.type === "dir");
+		if (!next) break;
+		trail.push({ name, tree: next.subtree });
+	}
+	const have = new Set((await allFiles()).map((file) => `${file.where}/${file.name}`));
+	pending = pending.filter((file) => !have.has(`${file.where}/${file.name}`));
+	await sidebar();
+	if ($("drive").hidden) return true;
+	await (place ? openPlace(place) : open());
+	return true;
+}
+
+// The folder on show, as a path in the account: "Work/Reports".
+const folderPath = () =>
+	trail
+		.slice(1)
+		.map((step) => step.name)
+		.join("/");
+
+const UPLOAD_LIMIT = 100e6;
+
+// Send files to the account: each is signed with this session's key, sealed
+// with the repository's, and left in the inbox beside it. One of the
+// person's computers takes it in and syncs it, and then it shows here as
+// any file does.
+async function send(files) {
+	const where = folderPath();
+	if (!uploader || !where) throw new Error("Open one of your folders to upload into it.");
+	const random = (n) => crypto.getRandomValues(new Uint8Array(n));
+	const hex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+	let sent = 0;
+	for (const file of files) {
+		if (file.size > UPLOAD_LIMIT) throw new Error(`${file.name} is over ${human(UPLOAD_LIMIT)}: too big to send from a browser.`);
+		say(`Uploading ${file.name}…`);
+		const content = new Uint8Array(await file.arrayBuffer());
+		const sealed = reader.upload(uploader.seed, uploader.endorsement, `${where}/${file.name}`, file.lastModified, random(16), content);
+		await bucket.put(`${uploader.inbox}/${hex(random(12))}`, sealed);
+		pending.push({ type: "file", name: file.name, where, size: file.size, mtime: new Date(file.lastModified).toISOString(), pending: true });
+		sent++;
+	}
+	// one read tells a computer something is waiting
+	await bucket.put(`${uploader.inbox}/changed`, random(16));
+	show();
+	say(`Sent ${sent} ${sent === 1 ? "file" : "files"}. ${sent === 1 ? "It shows" : "They show"} here once one of your computers has taken ${sent === 1 ? "it" : "them"} in.`);
+	watchForVersion();
+}
+
+// After an upload, look for the version that has it: every so often, for a
+// few minutes.
+let watching = 0;
+function watchForVersion() {
+	const mine = ++watching;
+	let tries = 0;
+	const look = async () => {
+		if (mine !== watching || !pending.length || ++tries > 40) return;
+		try {
+			await refresh();
+		} catch {}
+		setTimeout(look, 15_000);
+	};
+	setTimeout(look, 15_000);
+}
+
+$("upload").addEventListener("click", () => $("files").click());
+$("files").addEventListener("change", (event) => {
+	const files = [...event.target.files];
+	event.target.value = "";
+	if (files.length) act(() => send(files));
+});
+const canDrop = () => uploader && !place && trail.length > 1;
+$("items").addEventListener("dragover", (event) => {
+	if (!canDrop()) return;
+	event.preventDefault();
+	$("items").classList.add("dropping");
+});
+$("items").addEventListener("dragleave", () => $("items").classList.remove("dropping"));
+$("items").addEventListener("drop", (event) => {
+	$("items").classList.remove("dropping");
+	if (!canDrop()) return;
+	event.preventDefault();
+	const files = [...event.dataTransfer.files];
+	if (files.length) act(() => send(files));
+});
 
 // Where signing in lands, as iCloud's site does: what there is to open.
 function home() {
@@ -373,7 +487,11 @@ const seen = new IntersectionObserver((entries) => {
 
 function show() {
 	const find = $("filter").value.trim().toLowerCase();
-	const shown = nodes.filter((n) => !find || n.name.toLowerCase().includes(find));
+	// what was sent from here into this folder shows at once, as waiting
+	const sent = place ? [] : pending.filter((file) => file.where === folderPath() && !nodes.some((n) => n.name === file.name));
+	const shown = [...nodes, ...sent].filter((n) => !find || n.name.toLowerCase().includes(find));
+	// uploads go into a folder of the account, never beside them
+	$("upload").hidden = !uploader || !!place || trail.length < 2;
 	if (place) shown.sort(orders[placeSort]);
 	else shown.sort((a, b) => (b.type === "dir") - (a.type === "dir") || orders[sort](a, b));
 	waiting.length = 0;
@@ -394,7 +512,7 @@ function show() {
 				art.node = node;
 				seen.observe(art);
 			}
-			const detail = folder ? "" : human(node.size || 0);
+			const detail = folder ? "" : node.pending ? "Waiting for a computer" : human(node.size || 0);
 			// where a file from elsewhere is, or was
 			const from = place ? node.where || "Omacloud Drive" : "";
 			const row = el(
@@ -412,6 +530,10 @@ function show() {
 				row.append(el("div", { className: "detail", textContent: under }));
 			}
 			row.setAttribute("aria-selected", node === selected);
+			if (node.pending) {
+				row.classList.add("pending");
+				return row;
+			}
 			// a tap opens; with a mouse, a click chooses and a second opens
 			row.addEventListener("click", () => {
 				if (matchMedia("(pointer: coarse)").matches || node === selected) return act(() => activate(node));
@@ -504,7 +626,7 @@ async function act(work) {
 }
 
 const fill = (form, found) => {
-	for (const [name, value] of Object.entries(found)) form.elements[name].value = value || "";
+	for (const [name, value] of Object.entries(found)) if (form.elements[name]) form.elements[name].value = value || "";
 };
 
 // A drive link: one of the person's computers left the drive code in their
@@ -528,6 +650,7 @@ async function follow({ seed, address }) {
 	} catch {}
 	if (!found) throw new Error(`This link is damaged. ${again}`);
 	fill($("connect"), found);
+	uploader = found.upload;
 	await connect($("connect"));
 }
 

@@ -42,3 +42,7 @@ export const locate = (id) => json(call("locate", id));
 export const blob = (id, stored) => call("blob", id, stored);
 // what a drive link's computer left in the bucket, opened with the link's seed
 export const unseal = (seed, sealed) => json(call("unseal", seed, sealed));
+// a file for the account's inbox, signed with the session's key and sealed
+// with the repository's (see crates/omacloud-web/src/upload.rs)
+export const upload = (seed, endorsement, path, mtime, nonce, content) =>
+	call("upload", seed, endorsement, path, String(mtime), nonce, content);

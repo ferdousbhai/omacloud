@@ -1,5 +1,6 @@
 // The little of S3 the page needs, signed here with the browser's own crypto:
-// listing a folder of the bucket and reading a file or a range of one. Each
+// listing a folder of the bucket, reading a file or a range of one, and
+// writing one object for an upload. Each
 // request is a presigned URL (the signature in the query), so it carries no
 // header a browser asks the bucket's permission for first.
 
@@ -26,7 +27,7 @@ export class Bucket {
 		this.secret = secretAccessKey;
 	}
 
-	async url(key, query = {}) {
+	async url(key, query = {}, method = "GET") {
 		const now = new Date().toISOString().replace(/[-:]|\.\d+/g, "");
 		const day = now.slice(0, 8);
 		const scope = `${day}/${this.region}/s3/aws4_request`;
@@ -43,7 +44,7 @@ export class Bucket {
 			.sort()
 			.map((k) => `${encode(k)}=${encode(params[k])}`)
 			.join("&");
-		const request = ["GET", path, canonicalQuery, `host:${this.endpoint.host}`, "", "host", "UNSIGNED-PAYLOAD"].join("\n");
+		const request = [method, path, canonicalQuery, `host:${this.endpoint.host}`, "", "host", "UNSIGNED-PAYLOAD"].join("\n");
 		const digest = hex(await crypto.subtle.digest("SHA-256", text.encode(request)));
 		let key_ = text.encode("AWS4" + this.secret);
 		for (const part of [day, this.region, "s3", "aws4_request"]) key_ = await hmac(key_, part);
@@ -90,6 +91,12 @@ export class Bucket {
 			token = xml.querySelector("NextContinuationToken")?.textContent;
 		} while (token);
 		return names;
+	}
+
+	// write an object by its whole key in the bucket (not under the
+	// repository's folder): what the page uploads goes beside the repository
+	async put(key, bytes) {
+		await this.fetch(await this.url(key, {}, "PUT"), { method: "PUT", body: bytes });
 	}
 
 	// a file of the repository, or `length` bytes of it from `offset`

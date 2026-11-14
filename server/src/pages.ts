@@ -77,7 +77,8 @@ the data is gone. If that worries you, you can split the code among people you t
 page fetches from your bucket and decrypts in the tab, so this site never sees a file or a key. It is early.
 Today it needs a bucket (no Dropbox yet). To sign in on a phone, press Open on a Phone in the app and point
 the camera at the code. One of your computers leaves the keys in your bucket for five minutes, sealed, and
-the code carries what opens them. Nothing passes through here.</p>
+the code carries what opens them. Nothing passes through here. You can upload from there too: the browser
+encrypts the file, leaves it in your bucket, and one of your computers picks it up.</p>
 <h2>Family</h2>
 <p>Each person gets an account of their own, in storage of their own. You can pay for someone's bucket and
 still not be able to read their files, which is how it should be.</p>

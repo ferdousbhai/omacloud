@@ -21,6 +21,8 @@ serde.workspace = true
 serde_json.workspace = true
 # zstd in plain Rust: the C library needs a C toolchain for WebAssembly
 ruzstd = "0.9"
+# signs what a browser uploads; no randomness of its own, so it builds for WebAssembly
+ed25519-dalek = { version = "2", default-features = false }
 
 [dev-dependencies]
 omacloud-core.workspace = true
