@@ -9,7 +9,10 @@
   `CLAUDE.md` that only makes sense on one laptop, say); `settings share` undoes it. A
   setting changed on two computers can also be settled as Keep Each, in the app too.
 - `omacloud restore-machine --from <computer> --replacing` brings that computer's own
-  settings to the one taking its place.
+  settings to the one taking its place, for 30 days after it was removed too. Removing a
+  computer takes its own settings out of the latest version.
+- The app lists this computer's own settings, keeps a file there (Choose…) and shares
+  one again.
 
 ## 0.0.28 (2026-11-14)
 

@@ -2791,6 +2791,7 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
             lost,
             yes,
         } => {
+            let names: Vec<String> = members.valid.values().cloned().collect();
             let (key, name) = pick(&fp, members.valid.into_iter().collect())?;
             if key == me {
                 return Err(fail::usage("this is the device being removed")
@@ -2805,6 +2806,15 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
             e.revoke(&key)?;
             let mut out = String::new();
             say!(out, "removed {name} ({}). It can't push anymore.", fingerprint(&key));
+            // its own settings, unless another member goes by the same name
+            let forgot = names.iter().filter(|n| **n == name).count() == 1 && e.forget_machine(&name)?;
+            if forgot {
+                say!(
+                    out,
+                    "{name}'s own settings left the latest version; while versions are kept, \
+                     `omacloud restore-machine --from {name} --replacing` still brings them"
+                );
+            }
             let mut rotated = Value::Null;
             if rotate || lost {
                 let r = e.rotate()?;
@@ -2844,7 +2854,7 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
                 );
             }
             let fp = fingerprint(&key);
-            let data = json!({ "removed": { "fingerprint": fp, "name": name }, "rotated": rotated });
+            let data = json!({ "removed": { "fingerprint": fp, "name": name }, "rotated": rotated, "own_settings_removed": forgot });
             Ok(Response::new(data, format!("removed {name} ({fp})"))
                 .human(out.trim_end())
                 .ids(vec![fp]))

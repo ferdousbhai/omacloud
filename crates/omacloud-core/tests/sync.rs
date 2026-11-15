@@ -1277,6 +1277,26 @@ fn each_computers_own_settings_are_kept_apart_and_follow_its_replacement() -> Re
     assert_eq!(fs::read_to_string(hb.join(claude))?, "only on b, edited\n");
     assert_eq!(b.versions(&Path::new(MACHINES).join("b").join(claude))?.len(), 2);
 
+    // b shares CLAUDE.md again: the two differ, so b is asked to choose
+    drop(b);
+    let mut b = w.engine_with_manifest("b", &m)?;
+    b.sync()?;
+    assert_eq!(fs::read_to_string(hb.join(claude))?, "only on b, edited\n");
+    assert_eq!(b.settings_status().held, [PathBuf::from(claude)]);
+    b.resolve_setting(Path::new(claude), false)?;
+    drop(b);
+    let mut b = w.engine_with_parsed("b", keeping(&[claude])?)?;
+    b.sync()?;
+
+    // b is removed: its own settings leave the latest version, not the history
+    a.revoke(&w.public("b"))?;
+    assert!(a.forget_machine("b")?);
+    assert!(!a.forget_machine("b")?);
+    let own_b = Path::new(MACHINES).join("b").join(monitors);
+    let history = a.versions(&own_b)?;
+    assert_eq!(history.len(), 2);
+    assert_eq!(history.last().map(|v| v.size), Some(None));
+
     // c takes b's place: shared settings come, then b's own on request
     let mut c = w.engine_with_manifest("c", &m)?;
     c.sync()?;
@@ -1293,13 +1313,34 @@ fn each_computers_own_settings_are_kept_apart_and_follow_its_replacement() -> Re
     assert_eq!(fs::read_to_string(hc.join(monitors))?, "b's monitors\n");
     assert_eq!(fs::read_to_string(ha.join(claude))?, "everywhere, edited\n");
     assert_eq!(c.versions(&Path::new(MACHINES).join("c").join(claude))?.len(), 1);
+    Ok(())
+}
 
-    // b shares CLAUDE.md again: the two differ, so b is asked to choose
-    drop(b);
+/// A computer set up again under the same name meets its own settings as it
+/// meets shared ones: what differs waits for a choice, with no conflict
+/// copies beside live config.
+#[test]
+fn a_computer_set_up_again_is_asked_about_its_own_settings() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let hb = w.home("b");
+    let monitors = ".config/hypr/monitors.lua";
+    let m = format!("machine {monitors}\n");
+    write(&hb, monitors, "before\n");
+    w.engine_with_manifest("b", &m)?.sync()?;
+
+    // b's disk is wiped and set up again, with new monitors
+    fs::remove_file(w.tmp.path().join("b.state.json"))?;
+    write(&hb, monitors, "after\n");
     let mut b = w.engine_with_manifest("b", &m)?;
     b.sync()?;
-    assert_eq!(fs::read_to_string(hb.join(claude))?, "only on b, edited\n");
-    assert_eq!(b.settings_status().held, [PathBuf::from(claude)]);
+    assert_eq!(fs::read_to_string(hb.join(monitors))?, "after\n");
+    let names: Vec<_> = fs::read_dir(hb.join(".config/hypr"))?.collect::<Result<_, _>>()?;
+    assert_eq!(names.len(), 1, "{names:?}");
+    assert_eq!(b.settings_status().held, [PathBuf::from(monitors)]);
+    b.resolve_setting(Path::new(monitors), true)?;
+    b.sync()?;
+    assert_eq!(fs::read_to_string(hb.join(monitors))?, "before\n");
+    assert!(b.settings_status().held.is_empty());
     Ok(())
 }
 

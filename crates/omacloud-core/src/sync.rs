@@ -747,6 +747,14 @@ impl Engine {
         }
     }
 
+    /// A setting's path under home, from its path in the synced tree: a
+    /// shared one, or one of this computer's own.
+    fn home_rest<'a>(&self, path: &'a Path) -> Option<&'a Path> {
+        path.strip_prefix(SETTINGS)
+            .ok()
+            .or_else(|| path.strip_prefix(MACHINES).ok()?.strip_prefix(&self.device).ok())
+    }
+
     /// The synced path for a path on disk under the folder, if it is one:
     /// the reverse of [`Self::on_disk`].
     #[must_use]
@@ -951,6 +959,32 @@ impl Engine {
         };
         self.state.devices.append(self.coord.as_ref(), &self.signing, action)?;
         self.save_state()
+    }
+
+    /// Take a computer's own settings out of the latest version, once it is
+    /// removed: they stay in the history as long as versions are kept, for
+    /// `restore-machine --replacing`. Returns whether there were any.
+    ///
+    /// # Errors
+    ///
+    /// On storage errors, or when other computers keep winning the push.
+    pub fn forget_machine(&mut self, name: &str) -> Result<bool> {
+        let path = Path::new(MACHINES).join(name);
+        for _ in 0..MAX_ROUNDS {
+            self.sync()?;
+            let repo = self.open_repo()?;
+            if Trees::new(&repo).lookup(self.base_tree()?, &path)?.is_none() {
+                return Ok(false);
+            }
+            if self
+                .push(&repo, BTreeMap::from([(path.clone(), Local::Delete)]))?
+                .is_some()
+            {
+                self.save_state()?;
+                return Ok(true);
+            }
+        }
+        bail!("other computers kept syncing: try again")
     }
 
     /// Move to a new repository with a new key, so devices removed so far
@@ -1266,7 +1300,7 @@ impl Engine {
             .state
             .held
             .keys()
-            .filter_map(|p| p.strip_prefix(SETTINGS).ok().map(Path::to_path_buf))
+            .filter_map(|p| self.home_rest(p).map(Path::to_path_buf))
             .collect();
         let groups = match (&self.settings, &dormant) {
             (Some(s), None) => self.groups_status(s, &held),
@@ -1675,7 +1709,12 @@ impl Engine {
     ///
     /// If the setting isn't held, or files can't be written.
     pub fn resolve_setting(&mut self, path: &Path, keep_remote: bool) -> Result<()> {
-        let tree_path = Path::new(SETTINGS).join(path);
+        let own = self.setting_path(path);
+        let tree_path = if self.state.held.contains_key(&own) {
+            own
+        } else {
+            Path::new(SETTINGS).join(path)
+        };
         let parked = self
             .state
             .held
@@ -1726,16 +1765,20 @@ impl Engine {
     pub fn take_machine_files(&mut self, from: &str) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
         let s = self.settings_on().ok_or_else(|| anyhow!("settings sync is off"))?;
         let (home, manifest) = (s.home.clone(), s.manifest.clone());
-        let seq = self.state.base.as_ref().map(|b| b.seq);
-        let Some(seq) = seq else {
-            return Ok((Vec::new(), Vec::new()));
-        };
-        let repo = self.open_repo()?;
         let theirs = Path::new(MACHINES).join(from);
-        let Some(dir) = Trees::new(&repo)
-            .lookup(self.base_tree()?, &theirs)?
-            .filter(Node::is_dir)
-        else {
+        // the latest version that has them: a computer removed from the
+        // account left them only in the history
+        let heads = self.verified_history()?;
+        let repo = self.open_repo()?;
+        let trees = Trees::new(&repo);
+        let mut found = None;
+        for (head, snap) in self.kept_history(&repo, &heads)?.into_iter().rev() {
+            if let Some(dir) = trees.lookup(Some(snap.tree), &theirs)?.filter(Node::is_dir) {
+                found = Some((head.seq, dir));
+                break;
+            }
+        }
+        let Some((seq, dir)) = found else {
             return Ok((Vec::new(), Vec::new()));
         };
         let mut files = BTreeSet::new();
@@ -1760,11 +1803,7 @@ impl Engine {
 
     /// Copy a setting aside before a pull replaces or deletes it.
     fn back_up(&self, path: &Path) -> Result<()> {
-        let own = Path::new(MACHINES).join(&self.device);
-        let (Some(s), Ok(rest)) = (
-            self.settings_on(),
-            path.strip_prefix(SETTINGS).or_else(|_| path.strip_prefix(&own)),
-        ) else {
+        let (Some(s), Some(rest)) = (self.settings_on(), self.home_rest(path)) else {
             return Ok(());
         };
         let src = s.home.join(rest);
@@ -2511,7 +2550,7 @@ impl Engine {
                 continue;
             }
             stats.pulled += 1;
-            if path.starts_with(SETTINGS) || path.starts_with(MERGED) {
+            if path.starts_with(SETTINGS) || path.starts_with(MERGED) || path.starts_with(MACHINES) {
                 // back after being left out: what differs has no shared past
                 let base = if is_rejoining(&path) { None } else { base_tree };
                 self.pull_setting(repo, base, path, rnode, local, &mut writes, &mut deletes, stats)?;
@@ -2583,7 +2622,7 @@ impl Engine {
         // what a person would call new files: not settings, not folders
         let files = writes
             .iter()
-            .filter(|(path, node)| !node.is_dir() && !path.starts_with(SETTINGS) && !path.starts_with(MERGED))
+            .filter(|(path, node)| !node.is_dir() && ![SETTINGS, MERGED, MACHINES].iter().any(|p| path.starts_with(p)))
             .map(|(path, _)| path.clone());
         self.arrived.files.extend(files);
         if !self.arrived.files.is_empty() {
@@ -2716,7 +2755,7 @@ impl Engine {
 
     /// Keep another device's version of a held setting for `resolve`.
     fn park(&mut self, path: &Path, content: &[u8]) -> Result<()> {
-        let (Some(s), Ok(rest)) = (self.settings.as_ref(), path.strip_prefix(SETTINGS)) else {
+        let (Some(s), Some(rest)) = (self.settings.as_ref(), self.home_rest(path)) else {
             return Ok(());
         };
         let parked = s.backups.join("held").join(rest);

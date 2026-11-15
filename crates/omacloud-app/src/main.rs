@@ -1626,21 +1626,26 @@ fn settings(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     }
 
     let empty = Vec::new();
-    let own = st["own"].as_array().unwrap_or(&empty);
-    if on && !own.is_empty() {
+    if on && st["dormant"].is_null() {
         let home = std::env::var("HOME").unwrap_or_default();
-        let kept: Vec<&str> = st["kept"]
-            .as_array()
-            .map(|a| a.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
+        let strings = |k: &str| -> Vec<String> {
+            st[k]
+                .as_array()
+                .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                .unwrap_or_default()
+        };
+        let kept = strings("kept");
+        // kept files missing here still show, to be shared again
+        let mut own = strings("own");
+        own.extend(kept.iter().filter(|k| !own.contains(k)).cloned().collect::<Vec<_>>());
+        own.sort();
         let g = group(
             "This computer's own",
             "Backed up with their versions, never written on another computer.",
         );
-        for p in own {
-            let rel = text(p);
+        for rel in &own {
             let rw = row(&format!("~/{rel}"), "");
-            if kept.contains(&rel.as_str()) {
+            if kept.contains(rel) {
                 let b = button("Share", Some("flat"));
                 let (ui, path) = (ui.clone(), format!("{home}/{rel}"));
                 b.connect_clicked(move |_| {
@@ -1650,6 +1655,31 @@ fn settings(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
             }
             g.add(&rw);
         }
+        let add = row(
+            "Keep a file on this computer",
+            "a shared setting, like ~/.claude/CLAUDE.md",
+        );
+        let b = button("Choose…", Some("flat"));
+        {
+            let (ui, home) = (ui.clone(), home.clone());
+            b.connect_clicked(move |_| {
+                let dialog = gtk::FileDialog::builder()
+                    .title("Keep on this computer")
+                    .initial_folder(&gtk::gio::File::for_path(&home))
+                    .build();
+                let ui = ui.clone();
+                dialog.open(Some(&ui.window.clone()), gtk::gio::Cancellable::NONE, move |file| {
+                    if let Some(path) = file.ok().and_then(|f| f.path()) {
+                        ui.act(
+                            &["omacloud", "settings", "keep", &path.to_string_lossy()],
+                            "Kept on this computer",
+                        );
+                    }
+                });
+            });
+        }
+        add.add_suffix(&b);
+        g.add(&add);
         page.add(&g);
     }
     let held = st["held"].as_array().unwrap_or(&empty);

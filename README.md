@@ -241,7 +241,10 @@ other computers keep the shared copy). Where only a few lines differ, keep the
 rest shared and put those lines in a file of the computer's own that the shared
 one includes (`@~/.claude/CLAUDE.thinkpad.md` in a `CLAUDE.md`, `[include]` in
 git's config). A computer taking another's place gets its own settings too:
-`omacloud restore-machine --from thinkpad --replacing`. From then on a delete on one computer deletes on the others,
+`omacloud restore-machine --from thinkpad --replacing`. Removing a computer
+from the account takes its own settings out of the latest version; they stay
+in the history for 30 days, so `--replacing` still finds them. In the app,
+Omarchy > This computer's own lists them, and Choose… keeps a file there. From then on a delete on one computer deletes on the others,
 and stays in Recently Deleted for 30 days; name a file `name.nosync`, or switch its
 folder off, to keep it on one computer.
 
