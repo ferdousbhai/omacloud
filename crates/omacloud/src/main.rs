@@ -3104,7 +3104,7 @@ fn settings(paths: &Paths, action: SettingsCmd) -> Out {
         SettingsCmd::Keep { path } => {
             let rel = under_home(&path)?;
             if !config.settings_keep.contains(&rel) {
-                keepable(&rel)?;
+                keepable(&config, &rel)?;
                 _ = config.settings_keep.insert(rel.clone());
                 save(paths, &config)?;
             }
@@ -3117,20 +3117,40 @@ fn settings(paths: &Paths, action: SettingsCmd) -> Out {
         }
         SettingsCmd::Share { path } => {
             let rel = under_home(&path)?;
-            if !config.settings_keep.remove(&rel) {
-                return Err(
-                    fail::not_found(format!("~/{} isn't kept as this computer's own", rel.display()))
-                        .hint("`omacloud settings status` lists this computer's own files")
-                        .into(),
-                );
+            let was_kept = config.settings_keep.remove(&rel);
+            if was_kept {
+                save(paths, &config)?;
             }
-            save(paths, &config)?;
-            let st = engine(paths, &config)?.settings_status();
-            Ok(Response::new(
-                settings_json(&st, &config),
-                format!("~/{} is shared again", rel.display()),
-            )
-            .human(settings_text(&st).trim_end()))
+            let mut e = engine(paths, &config)?;
+            // its copy as this computer's goes, so a replacement doesn't
+            // bring it back; a sync first, which also compares it afresh.
+            // Run again, it only finishes that.
+            let mut out = String::new();
+            let left = match e.forget_own(&rel) {
+                Ok(false) if !was_kept => {
+                    return Err(
+                        fail::not_found(format!("~/{} isn't kept as this computer's own", rel.display()))
+                            .hint("`omacloud settings status` lists this computer's own files")
+                            .into(),
+                    );
+                }
+                Ok(_) => false,
+                Err(err) if !was_kept => return Err(err),
+                Err(err) => {
+                    say!(
+                        out,
+                        "its copy as this computer's own stays in the cloud: {err:#}\n\
+                         run `omacloud settings share ~/{}` again to remove it",
+                        rel.display()
+                    );
+                    true
+                }
+            };
+            let st = e.settings_status();
+            out.push_str(&settings_text(&st));
+            let mut data = settings_json(&st, &config);
+            data["own_copy_left"] = json!(left);
+            Ok(Response::new(data, format!("~/{} is shared again", rel.display())).human(out.trim_end()))
         }
         SettingsCmd::Resolve { path, keep } => {
             let rel = under_home(&path)?;
@@ -3159,7 +3179,7 @@ fn settings(paths: &Paths, action: SettingsCmd) -> Out {
                     "local"
                 }
                 Keep::Each => {
-                    keepable(rel)?;
+                    keepable(&config, rel)?;
                     _ = config.settings_keep.insert(rel.to_path_buf());
                     save(paths, &config)?;
                     e = engine(paths, &config)?;
@@ -3202,8 +3222,23 @@ fn under_home(path: &Path) -> Result<PathBuf> {
 
 /// Fails unless `rel` is a shared settings file a computer can keep as its
 /// own.
-fn keepable(rel: &Path) -> Result<()> {
+fn keepable(config: &Config, rel: &Path) -> Result<()> {
     let manifest = Manifest::load()?;
+    // kept, it would no longer sync as shared, nor be stored as this one's
+    if manifest.through_any_link(&home_dir()?, rel) {
+        return Err(fail::usage(format!("~/{} is a link", rel.display()))
+            .hint("a computer's own settings are files of its own; keep the file the link points to")
+            .into());
+    }
+    let group = omacloud_core::settings::group_of(rel);
+    if config.settings_skip.contains(group) {
+        return Err(fail::usage(format!(
+            "~/{} is in {group}, which this computer leaves out",
+            rel.display()
+        ))
+        .hint(format!("`omacloud settings unskip {group}` first"))
+        .into());
+    }
     if manifest.is_machine(rel) {
         return Err(
             fail::usage(format!("~/{} is already each computer's own", rel.display()))

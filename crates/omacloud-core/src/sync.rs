@@ -989,7 +989,34 @@ impl Engine {
     ///
     /// On storage errors, or when other computers keep winning the push.
     pub fn forget_machine(&mut self, key: &str) -> Result<bool> {
-        let path = Path::new(MACHINES).join(key);
+        self.delete_in_cloud(&Path::new(MACHINES).join(key))
+    }
+
+    /// Take this computer's own copy of a file it shares again out of the
+    /// latest version, so no computer taking its place brings it back
+    /// (`rest` relative to home). Returns whether there was one.
+    ///
+    /// # Errors
+    ///
+    /// On storage errors, or when other computers keep winning the push.
+    pub fn forget_own(&mut self, rest: &Path) -> Result<bool> {
+        // only a file the manifest shares, synced here and not kept: a
+        // machine file, or one of a group left out, keeps its copy
+        let shared_here = self.settings.as_ref().is_some_and(|s| {
+            s.manifest.can_keep(rest)
+                && !s.manifest.kept().contains(rest)
+                && !s.manifest.skipped().contains(settings::group_of(rest))
+        });
+        if !shared_here {
+            return Ok(false);
+        }
+        let path = self.own_machine().join(rest);
+        self.delete_in_cloud(&path)
+    }
+
+    /// Delete `path` from the latest version, after a sync.
+    fn delete_in_cloud(&mut self, path: &Path) -> Result<bool> {
+        let path = path.to_path_buf();
         for _ in 0..MAX_ROUNDS {
             self.sync()?;
             let repo = self.open_repo()?;
@@ -1779,21 +1806,28 @@ impl Engine {
         self.refresh_devices()?;
         let me = self.device_key();
         let members = self.state.devices.members();
-        let keys: Vec<String> = members
-            .valid
-            .iter()
-            .chain(&members.revoked)
-            .filter(|(k, name)| *name == from && **k != me)
-            .map(|(k, _)| k.clone())
-            .collect();
+        let named = |m: &BTreeMap<String, String>| -> Vec<String> {
+            m.iter()
+                .filter(|(k, name)| *name == from && **k != me)
+                .map(|(k, _)| k.clone())
+                .collect()
+        };
+        let (current, removed) = (named(&members.valid), named(&members.revoked));
         let heads = self.verified_history()?;
         let repo = self.open_repo()?;
         let trees = Trees::new(&repo);
-        for (head, snap) in self.kept_history(&repo, &heads)?.into_iter().rev() {
-            for key in &keys {
-                let theirs = Path::new(MACHINES).join(key);
-                if let Some(dir) = trees.lookup(Some(snap.tree), &theirs)?.filter(Node::is_dir) {
-                    return Ok(Some((head.seq, theirs, dir)));
+        // a member's own are as the latest version has them, gone or not; a
+        // removed computer's are in the history only
+        let history = self.kept_history(&repo, &heads)?;
+        let latest = history.last().cloned().into_iter();
+        let searches = [(current, latest.collect::<Vec<_>>()), (removed, history)];
+        for (keys, history) in searches {
+            for (head, snap) in history.into_iter().rev() {
+                for key in &keys {
+                    let theirs = Path::new(MACHINES).join(key);
+                    if let Some(dir) = trees.lookup(Some(snap.tree), &theirs)?.filter(Node::is_dir) {
+                        return Ok(Some((head.seq, theirs, dir)));
+                    }
                 }
             }
         }

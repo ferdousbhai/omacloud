@@ -1294,6 +1294,14 @@ fn each_computers_own_settings_are_kept_apart_and_follow_its_replacement() -> Re
     b.sync()?;
     assert_eq!(fs::read_to_string(hb.join(claude))?, "only on b, edited\n");
     assert_eq!(b.settings_status().held, [PathBuf::from(claude)]);
+    // its copy as b's own goes, so a replacement wouldn't bring it back
+    assert!(b.forget_own(Path::new(claude))?);
+    assert_eq!(
+        b.versions(&Path::new(MACHINES).join(w.public("b")).join(claude))?
+            .last()
+            .map(|v| v.size),
+        Some(None)
+    );
     b.resolve_setting(Path::new(claude), false)?;
     drop(b);
     let mut b = w.engine_with_parsed("b", keeping(&[claude])?)?;

@@ -623,6 +623,17 @@ fn versions_find_a_folder_another_computer_added() {
         2,
     );
     machine_error(&h.run("b", &["settings", "keep", "/etc/hosts"]), "usage", 2);
+    // a link would be neither shared nor stored as this computer's
+    let real = h.path("home/dots-bashrc");
+    std::fs::write(&real, "x\n").unwrap();
+    let bashrc = h.path("home/.bashrc");
+    std::os::unix::fs::symlink(&real, &bashrc).unwrap();
+    machine_error(
+        &h.run("b", &["settings", "keep", &bashrc.to_string_lossy()]),
+        "usage",
+        2,
+    );
+    std::fs::remove_file(&bashrc).unwrap();
     let s = json(&h.run("b", &["settings", "share", &claude]));
     assert_eq!(s["data"]["kept"], serde_json::json!([]), "{s}");
     machine_error(&h.run("b", &["settings", "share", &claude]), "not_found", 4);
