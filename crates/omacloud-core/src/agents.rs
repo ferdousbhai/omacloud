@@ -451,13 +451,14 @@ impl Group for Agents {
             Kind::Json(local) => {
                 let mut v = value.clone();
                 let mine: Option<Value> = here.as_deref().and_then(|h| serde_json::from_str(h).ok());
-                if let (Some(m), Some(mine)) = (v.as_object_mut(), mine) {
-                    // whatever another computer's older version sent along
+                if let Some(m) = v.as_object_mut() {
+                    // whatever another computer's older version sent along,
+                    // even with no file here to take this one's from
                     for k in local {
                         _ = m.remove(*k);
                     }
                     for k in local {
-                        if let Some(x) = mine.get(*k) {
+                        if let Some(x) = mine.as_ref().and_then(|mine| mine.get(*k)) {
                             _ = m.insert((*k).to_string(), x.clone());
                         }
                     }

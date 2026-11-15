@@ -190,6 +190,10 @@ pub trait Coordinator: Send + Sync {
     fn latest_key_record(&self) -> Result<Option<crate::bucket_key::KeyRecord>> {
         Ok(None)
     }
+    /// Bucket key change `seq`, if there is one.
+    fn key_record(&self, _seq: u64) -> Result<Option<crate::bucket_key::KeyRecord>> {
+        Ok(None)
+    }
     /// Append a bucket key change if it is exactly the next one.
     fn append_key_record(&self, _record: &crate::bucket_key::KeyRecord) -> Result<bool> {
         anyhow::bail!("this account doesn't keep its own bucket key")

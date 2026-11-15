@@ -9,7 +9,7 @@
 //!
 //! Omacloud's own `machine` tier is a third kind: a file about one computer
 //! (its monitors, what it starts) that is kept, with its versions, under
-//! that computer's name ([`MACHINES`]) and never written on another. A
+//! that computer's key ([`MACHINES`]) and never written on another. A
 //! person can make any shared file their computer's own too (see
 //! [`Manifest::keeping`]).
 //!
@@ -29,7 +29,7 @@ use anyhow::Result;
 pub const PREFIX: &str = ".omacloud/settings";
 
 /// Where each computer's own settings live in the synced tree:
-/// `<MACHINES>/<device>/<path under home>`.
+/// `<MACHINES>/<device key>/<path under home>` (a key, since names repeat).
 pub const MACHINES: &str = ".omacloud/machines";
 
 /// The manifest from Omarchy's dots (PR #12037), used until Omarchy ships
@@ -533,6 +533,10 @@ fn components(pattern: &str) -> Vec<String> {
 /// Whether `rel` matches `pattern` component by component; a last `**`
 /// takes any path below, but not through [`DEEP`]'s directories.
 fn matches(pattern: &str, rel: &Path) -> bool {
+    // a `..` or `.` would reach a file other than the one matched
+    if !rel.components().all(|c| matches!(c, Component::Normal(_))) {
+        return false;
+    }
     let pat = components(pattern);
     let parts: Vec<String> = rel
         .components()
@@ -658,6 +662,19 @@ pub fn merge(base: &[u8], ours: &[u8], theirs: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_through_dot_dot_matches_nothing() {
+        let m = Manifest::parse(BUNDLED).unwrap();
+        assert!(m.is_shared(Path::new(".claude/skills/mine/SKILL.md")));
+        for p in [
+            ".claude/skills/../../.bash_history",
+            ".claude/skills/x/../../../.ssh/config",
+        ] {
+            assert!(!m.is_shared(Path::new(p)), "{p}");
+            assert!(!m.can_keep(Path::new(p)), "{p}");
+        }
+    }
 
     #[test]
     fn a_hooks_file_syncs_when_all_it_runs_does() {

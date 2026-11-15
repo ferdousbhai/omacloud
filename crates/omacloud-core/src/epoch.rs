@@ -249,7 +249,10 @@ impl EpochChain {
         if !verify_sig(&rec.signer, &rec.sig, &rec.signed_bytes()) {
             return Err(EpochError::BadSignature { epoch: rec.epoch });
         }
-        if rec.devices > devices.len() || !devices.is_valid_at(&rec.signer, rec.devices) {
+        // the device list never goes back, as for heads: a computer removed
+        // before the last rotation can't sign the next one in its own name
+        let stale = self.records.last().is_some_and(|p| rec.devices < p.devices);
+        if stale || rec.devices > devices.len() || !devices.is_valid_at(&rec.signer, rec.devices) {
             return Err(EpochError::UntrustedSigner { epoch: rec.epoch });
         }
         self.records.push(rec);
@@ -364,6 +367,7 @@ mod tests {
         chain.push(r0.clone(), &devices).unwrap();
 
         // b is revoked; epoch 1 keys go to a and the root only
+        let before = devices.clone();
         devices
             .push(DeviceEntry::next(
                 &a,
@@ -391,6 +395,13 @@ mod tests {
                 Err(EpochError::UntrustedSigner { epoch: 2 })
             );
         }
+        // nor by naming a device list from before it was removed
+        let stale = EpochRecord::next(&b, Some(&r1), 9, &before, &s("x"), BTreeMap::new())?;
+        assert_eq!(stale.devices, before.len());
+        assert_eq!(
+            chain.clone().push(stale, &devices),
+            Err(EpochError::UntrustedSigner { epoch: 2 })
+        );
         Ok(())
     }
 }

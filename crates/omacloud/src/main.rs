@@ -2409,6 +2409,11 @@ fn run(cli: Cli) -> Out {
         Cmd::Packages { action } => packages(&paths, action.unwrap_or(PackagesCmd::List)),
         Cmd::RestoreMachine { from, replacing, yes } => {
             let mut config = load(&paths)?;
+            if replacing && from == config.device {
+                return Err(fail::usage("a computer can't take its own place")
+                    .hint("name the computer this one replaces with --from")
+                    .into());
+            }
             if !config.settings {
                 config.settings = true;
                 save(&paths, &config)?;
@@ -2421,18 +2426,20 @@ fn run(cli: Cli) -> Out {
             // only a computer taking another's place gets that one's own
             let mut taken = Vec::new();
             if replacing {
-                if from == config.device {
-                    return Err(fail::usage("a computer can't take its own place")
-                        .hint("name the computer this one replaces with --from")
-                        .into());
-                }
-                let keep;
-                (taken, keep) = e.take_machine_files(&from)?;
+                // shared files it kept become this one's own before any is
+                // written, so none goes out as the shared version
+                let manifest = Manifest::load()?;
+                let keep: Vec<PathBuf> = e
+                    .machine_files_of(&from)?
+                    .into_iter()
+                    .filter(|p| !manifest.is_machine(p))
+                    .collect();
                 if !keep.is_empty() {
                     config.settings_keep.extend(keep);
                     save(&paths, &config)?;
                     e = engine(&paths, &config)?;
                 }
+                taken = e.take_machine_files(&from)?;
                 if !taken.is_empty() {
                     _ = e.sync()?;
                 }
@@ -2791,7 +2798,6 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
             lost,
             yes,
         } => {
-            let names: Vec<String> = members.valid.values().cloned().collect();
             let (key, name) = pick(&fp, members.valid.into_iter().collect())?;
             if key == me {
                 return Err(fail::usage("this is the device being removed")
@@ -2806,15 +2812,6 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
             e.revoke(&key)?;
             let mut out = String::new();
             say!(out, "removed {name} ({}). It can't push anymore.", fingerprint(&key));
-            // its own settings, unless another member goes by the same name
-            let forgot = names.iter().filter(|n| **n == name).count() == 1 && e.forget_machine(&name)?;
-            if forgot {
-                say!(
-                    out,
-                    "{name}'s own settings left the latest version; while versions are kept, \
-                     `omacloud restore-machine --from {name} --replacing` still brings them"
-                );
-            }
             let mut rotated = Value::Null;
             if rotate || lost {
                 let r = e.rotate()?;
@@ -2831,6 +2828,22 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
                     out,
                     "It still holds the repository key it had, and the key to your storage. If the device is \
                      lost or not trusted, run `omacloud rotate` and `omacloud bucket set-key`."
+                );
+            }
+            // its own settings leave the latest version; best effort, after
+            // the steps that lock it out, so a failure here stops none of them
+            let forgot = match e.forget_machine(&key) {
+                Ok(forgot) => forgot,
+                Err(err) => {
+                    say!(out, "{name}'s own settings stay in the latest version for now: {err:#}");
+                    false
+                }
+            };
+            if forgot {
+                say!(
+                    out,
+                    "{name}'s own settings left the latest version; while versions are kept, \
+                     `omacloud restore-machine --from {name} --replacing` still brings them"
                 );
             }
             if lost && config.repo.is_dropbox() {
@@ -3139,6 +3152,12 @@ fn settings(paths: &Paths, action: SettingsCmd) -> Out {
                         "local"
                     }
                 }
+                // already this computer's own (set up again under its name):
+                // each keeping its own is keeping this one's
+                Keep::Each if Manifest::load()?.is_machine(rel) || config.settings_keep.contains(rel) => {
+                    e.resolve_setting(rel, false)?;
+                    "local"
+                }
                 Keep::Each => {
                     keepable(rel)?;
                     _ = config.settings_keep.insert(rel.to_path_buf());
@@ -3165,13 +3184,20 @@ fn under_home(path: &Path) -> Result<PathBuf> {
     } else {
         std::env::current_dir()?.join(path)
     };
-    Ok(abs
+    let rel = abs
         .strip_prefix(&home)
         .map_err(|_| {
             fail::usage(format!("{} is not under your home", abs.display()))
                 .hint("give a setting like ~/.config/hypr/bindings.lua")
         })?
-        .to_path_buf())
+        .to_path_buf();
+    // `..` would name another file than the one the manifest matched
+    if !rel.components().all(|c| matches!(c, std::path::Component::Normal(_))) {
+        return Err(fail::usage(format!("{} names a file through `..`", path.display()))
+            .hint("give the file's own path, like ~/.config/hypr/bindings.lua")
+            .into());
+    }
+    Ok(rel)
 }
 
 /// Fails unless `rel` is a shared settings file a computer can keep as its
@@ -3724,6 +3750,8 @@ fn status(paths: &Paths) -> Out {
             "on": settings.on,
             "dormant": settings.dormant,
             "held": settings.held,
+            "own": settings.own,
+            "kept": config.settings_keep,
             "groups": settings.groups,
         },
         "secrets": e.secrets_devices(),

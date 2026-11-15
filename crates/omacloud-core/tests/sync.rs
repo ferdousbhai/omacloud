@@ -1250,8 +1250,16 @@ fn each_computers_own_settings_are_kept_apart_and_follow_its_replacement() -> Re
     assert_eq!(fs::read_to_string(ha.join(monitors))?, "a's monitors\n");
     assert_eq!(fs::read_to_string(hb.join(monitors))?, "b's monitors\n");
     assert_eq!(a.settings_status().own, [PathBuf::from(monitors)]);
-    assert_eq!(a.versions(&Path::new(MACHINES).join("a").join(monitors))?.len(), 1);
-    assert_eq!(a.versions(&Path::new(MACHINES).join("b").join(monitors))?.len(), 1);
+    assert_eq!(
+        a.versions(&Path::new(MACHINES).join(w.public("a")).join(monitors))?
+            .len(),
+        1
+    );
+    assert_eq!(
+        a.versions(&Path::new(MACHINES).join(w.public("b")).join(monitors))?
+            .len(),
+        1
+    );
     assert_eq!(fs::read_to_string(hb.join(bindings))?, "bind\n");
 
     // CLAUDE.md differed when they met: b keeps each computer's own
@@ -1275,7 +1283,10 @@ fn each_computers_own_settings_are_kept_apart_and_follow_its_replacement() -> Re
     a.sync()?;
     assert_eq!(fs::read_to_string(ha.join(claude))?, "everywhere, edited\n");
     assert_eq!(fs::read_to_string(hb.join(claude))?, "only on b, edited\n");
-    assert_eq!(b.versions(&Path::new(MACHINES).join("b").join(claude))?.len(), 2);
+    assert_eq!(
+        b.versions(&Path::new(MACHINES).join(w.public("b")).join(claude))?.len(),
+        2
+    );
 
     // b shares CLAUDE.md again: the two differ, so b is asked to choose
     drop(b);
@@ -1290,9 +1301,9 @@ fn each_computers_own_settings_are_kept_apart_and_follow_its_replacement() -> Re
 
     // b is removed: its own settings leave the latest version, not the history
     a.revoke(&w.public("b"))?;
-    assert!(a.forget_machine("b")?);
-    assert!(!a.forget_machine("b")?);
-    let own_b = Path::new(MACHINES).join("b").join(monitors);
+    assert!(a.forget_machine(&w.public("b"))?);
+    assert!(!a.forget_machine(&w.public("b"))?);
+    let own_b = Path::new(MACHINES).join(w.public("b")).join(monitors);
     let history = a.versions(&own_b)?;
     assert_eq!(history.len(), 2);
     assert_eq!(history.last().map(|v| v.size), Some(None));
@@ -1302,17 +1313,22 @@ fn each_computers_own_settings_are_kept_apart_and_follow_its_replacement() -> Re
     c.sync()?;
     assert_eq!(fs::read_to_string(hc.join(claude))?, "everywhere, edited\n");
     assert!(!hc.join(monitors).exists());
-    let (taken, keep) = c.take_machine_files("b")?;
-    assert_eq!(taken, [PathBuf::from(claude), PathBuf::from(monitors)]);
-    assert_eq!(keep, [PathBuf::from(claude)]);
+    let theirs = c.machine_files_of("b")?;
+    assert_eq!(theirs, [PathBuf::from(claude), PathBuf::from(monitors)]);
+    // CLAUDE.md is kept here first, then both are written
     drop(c);
     let mut c = w.engine_with_parsed("c", keeping(&[claude])?)?;
+    let taken = c.take_machine_files("b")?;
+    assert_eq!(taken, [PathBuf::from(claude), PathBuf::from(monitors)]);
     c.sync()?;
     a.sync()?;
     assert_eq!(fs::read_to_string(hc.join(claude))?, "only on b, edited\n");
     assert_eq!(fs::read_to_string(hc.join(monitors))?, "b's monitors\n");
     assert_eq!(fs::read_to_string(ha.join(claude))?, "everywhere, edited\n");
-    assert_eq!(c.versions(&Path::new(MACHINES).join("c").join(claude))?.len(), 1);
+    assert_eq!(
+        c.versions(&Path::new(MACHINES).join(w.public("c")).join(claude))?.len(),
+        1
+    );
     Ok(())
 }
 

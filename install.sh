@@ -71,7 +71,8 @@ add_signed_repo() {
   home="$(getent passwd "$user" | cut -d: -f6)"
   if [[ -n $home && -d $home/.config/omarchy ]]; then
     hook_dir="$home/.config/omarchy/hooks/pre-refresh-pacman.d"
-    install -d -o "$user" -g "$(id -gn "$user")" "$hook_dir"
+    # each level named, so a missing hooks/ is the user's too, not root's
+    install -d -o "$user" -g "$(id -gn "$user")" "$home/.config/omarchy/hooks" "$hook_dir"
     {
       printf '%s\n' '#!/bin/bash' 'set -euo pipefail' \
         "# Restore the [$name] repository before Omarchy's ARM source rewrite."

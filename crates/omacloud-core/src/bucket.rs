@@ -590,6 +590,9 @@ impl Coordinator for BucketCoordinator {
     fn latest_key_record(&self) -> Result<Option<crate::bucket_key::KeyRecord>> {
         self.latest("keys")
     }
+    fn key_record(&self, seq: u64) -> Result<Option<crate::bucket_key::KeyRecord>> {
+        self.get(&Self::key("keys", seq))
+    }
     fn append_key_record(&self, record: &crate::bucket_key::KeyRecord) -> Result<bool> {
         self.append_seq("keys", record.seq, record)
     }

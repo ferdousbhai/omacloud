@@ -147,12 +147,12 @@ held for you to choose (Keep Mine, Keep Theirs, or Keep Each).
 A third kind sits between shared and local: a computer's own settings
 (`machine` entries, and shared files a computer keeps through
 `settings keep`, listed in its config). They are stored under
-`.omacloud/machines/<device>/`, so they have versions and survive the
+`.omacloud/machines/<device key>/` (names can repeat; keys can't), so they have versions and survive the
 computer, but each computer writes only its own folder and never applies
 another's; older versions ignore the folder, and their pushes leave it as it
 is. `restore-machine --replacing` copies another computer's into home, from the
 latest version that has them: removing a computer deletes its folder, so its
-files live on only in the history. A computer set up again under the same name
+files live on only in the history. A computer that keeps its key (its state lost, say)
 meets its old folder as it meets shared settings: a three-way merge, or a held
 choice, never a conflict copy beside live config. A file
 a computer keeps stays shared for the others, and shared again it is compared

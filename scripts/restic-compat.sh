@@ -11,7 +11,7 @@ set -euo pipefail
 OMACLOUD=${1:-target/debug/omacloud}
 RESTIC=${RESTIC:-restic}
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+trap 'rm -rf "${work:?}"' EXIT
 oc() { local dev=$1; shift; "$OMACLOUD" --config "$work/$dev.toml" --styled "$@"; }
 # what prints a secret (a new account's recovery code, export's password)
 # prints only to a terminal: give it one (stderr shows there too)

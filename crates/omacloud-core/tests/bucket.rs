@@ -91,6 +91,7 @@ fn an_account_with_no_service() -> Result<()> {
 
     // remove b, then change the bucket key: sealed to a and c, not b
     a.sync()?;
+    let before = b.refresh_devices()?.clone();
     a.revoke(&public_hex(&kb))?;
     let new_key = Credentials::S3 {
         access_key_id: "new-id".into(),
@@ -116,6 +117,16 @@ fn an_account_with_no_service() -> Result<()> {
     c.sync()?;
     assert_eq!(c.repository()?.2, 1);
     assert!(b.sync().is_err());
+
+    // b can't sign the next change by naming the devices from before
+    let old_key = Credentials::S3 {
+        access_key_id: "old-id".into(),
+        secret_access_key: "old-secret".into(),
+    };
+    let rogue = omacloud_core::bucket_key::KeyRecord::new(&kb, 2, &before, &old_key)?;
+    assert!(coordinator(&coord_dir)?.append_key_record(&rogue)?);
+    let err = c.key_change_since(1).unwrap_err();
+    assert!(format!("{err:#}").contains("older device list"), "{err:#}");
     Ok(())
 }
 

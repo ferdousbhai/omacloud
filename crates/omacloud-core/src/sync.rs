@@ -529,6 +529,20 @@ impl Engine {
         };
         self.refresh_devices()?;
         record.verify(&self.state.devices)?;
+        // the device list a record names never goes back, as for heads: a
+        // removed computer can't sign one naming a time it was a member
+        if record.seq > 1 {
+            let prev = self
+                .coord
+                .key_record(record.seq - 1)?
+                .ok_or_else(|| anyhow!("bucket key record {} is missing", record.seq - 1))?;
+            prev.verify(&self.state.devices)?;
+            anyhow::ensure!(
+                record.devices >= prev.devices,
+                "bucket key record {} names an older device list than the one before it",
+                record.seq
+            );
+        }
         let me = self.device_key();
         let then = self.state.devices.members_at(record.devices);
         if !record.keys.contains_key(&me) && !then.valid.contains_key(&me) && !then.revoked.contains_key(&me) {
@@ -742,7 +756,7 @@ impl Engine {
     #[must_use]
     pub fn setting_path(&self, rest: &Path) -> PathBuf {
         match &self.settings {
-            Some(s) if s.manifest.is_machine(rest) => Path::new(MACHINES).join(&self.device).join(rest),
+            Some(s) if s.manifest.is_machine(rest) => self.own_machine().join(rest),
             _ => Path::new(SETTINGS).join(rest),
         }
     }
@@ -752,7 +766,7 @@ impl Engine {
     fn home_rest<'a>(&self, path: &'a Path) -> Option<&'a Path> {
         path.strip_prefix(SETTINGS)
             .ok()
-            .or_else(|| path.strip_prefix(MACHINES).ok()?.strip_prefix(&self.device).ok())
+            .or_else(|| path.strip_prefix(self.own_machine()).ok())
     }
 
     /// The synced path for a path on disk under the folder, if it is one:
@@ -806,6 +820,12 @@ impl Engine {
     #[must_use]
     pub fn device_key(&self) -> String {
         public_hex(&self.signing)
+    }
+
+    /// Where this computer's own settings live in the synced tree: under
+    /// its key, which no other computer shares (names can repeat).
+    fn own_machine(&self) -> PathBuf {
+        Path::new(MACHINES).join(self.device_key())
     }
 
     /// This device's word for a browser session's key (see [`crate::inbox`]).
@@ -968,8 +988,8 @@ impl Engine {
     /// # Errors
     ///
     /// On storage errors, or when other computers keep winning the push.
-    pub fn forget_machine(&mut self, name: &str) -> Result<bool> {
-        let path = Path::new(MACHINES).join(name);
+    pub fn forget_machine(&mut self, key: &str) -> Result<bool> {
+        let path = Path::new(MACHINES).join(key);
         for _ in 0..MAX_ROUNDS {
             self.sync()?;
             let repo = self.open_repo()?;
@@ -1156,8 +1176,8 @@ impl Engine {
             return self.settings_on().map(|s| s.merged.join("synced").join(rest));
         }
         // this computer's own settings are in home; others' stay in the cloud
-        if let Ok(rest) = path.strip_prefix(MACHINES) {
-            let rest = rest.strip_prefix(&self.device).ok()?;
+        if path.starts_with(MACHINES) {
+            let rest = path.strip_prefix(self.own_machine()).ok()?;
             return self.settings_on().map(|s| s.home.join(rest));
         }
         match path.strip_prefix(SETTINGS) {
@@ -1196,7 +1216,7 @@ impl Engine {
             return self.settings_on().is_none_or(|s| {
                 is_dir
                     || rest
-                        .strip_prefix(&self.device)
+                        .strip_prefix(self.device_key())
                         .ok()
                         .filter(|r| !r.as_os_str().is_empty())
                         .is_none_or(|r| !s.manifest.is_machine(r) || s.manifest.through_any_link(&s.home, r))
@@ -1752,53 +1772,89 @@ impl Engine {
         self.save_state()
     }
 
-    /// Bring another computer's own settings here, for a computer taking its
-    /// place: each is written into home as it was at the last sync (what
-    /// was here is backed up first), then syncs as this computer's own.
-    /// Returns the files taken (relative to home), and which of them this
-    /// computer must keep as its own (see [`Manifest::keeping`]), being
-    /// shared files to the manifest.
+    /// The latest version holding the own settings of a computer named
+    /// `from` (another one): its seq and the folder. A computer removed
+    /// from the account left them only in the history.
+    fn find_machine(&mut self, from: &str) -> Result<Option<(u64, PathBuf, Node)>> {
+        self.refresh_devices()?;
+        let me = self.device_key();
+        let members = self.state.devices.members();
+        let keys: Vec<String> = members
+            .valid
+            .iter()
+            .chain(&members.revoked)
+            .filter(|(k, name)| *name == from && **k != me)
+            .map(|(k, _)| k.clone())
+            .collect();
+        let heads = self.verified_history()?;
+        let repo = self.open_repo()?;
+        let trees = Trees::new(&repo);
+        for (head, snap) in self.kept_history(&repo, &heads)?.into_iter().rev() {
+            for key in &keys {
+                let theirs = Path::new(MACHINES).join(key);
+                if let Some(dir) = trees.lookup(Some(snap.tree), &theirs)?.filter(Node::is_dir) {
+                    return Ok(Some((head.seq, theirs, dir)));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// The own settings of the computer named `from` that could be this
+    /// computer's (relative to home): its own by the manifest, or shared
+    /// files this one would have to keep (see [`Manifest::keeping`]).
+    ///
+    /// # Errors
+    ///
+    /// On repository errors, or with settings sync off.
+    pub fn machine_files_of(&mut self, from: &str) -> Result<Vec<PathBuf>> {
+        let manifest = self
+            .settings_on()
+            .ok_or_else(|| anyhow!("settings sync is off"))?
+            .manifest
+            .clone();
+        let Some((_, _, dir)) = self.find_machine(from)? else {
+            return Ok(Vec::new());
+        };
+        let repo = self.open_repo()?;
+        let mut files = BTreeSet::new();
+        walk_tree(&repo, dir.subtree, Path::new(""), &|_: &Path, _| false, &mut files)?;
+        Ok(files
+            .into_iter()
+            .filter(|p| manifest.is_machine(p) || manifest.can_keep(p))
+            .collect())
+    }
+
+    /// Bring the own settings of the computer named `from` here, for a
+    /// computer taking its place: each one this computer's manifest has as
+    /// its own is written into home as it was last (what was here is backed
+    /// up first), then syncs as this computer's. Keep shared files first
+    /// (see [`Engine::machine_files_of`]), so none is pushed as shared.
+    /// Returns the files taken, relative to home.
     ///
     /// # Errors
     ///
     /// On repository or I/O errors, or with settings sync off.
-    pub fn take_machine_files(&mut self, from: &str) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+    pub fn take_machine_files(&mut self, from: &str) -> Result<Vec<PathBuf>> {
         let s = self.settings_on().ok_or_else(|| anyhow!("settings sync is off"))?;
         let (home, manifest) = (s.home.clone(), s.manifest.clone());
-        let theirs = Path::new(MACHINES).join(from);
-        // the latest version that has them: a computer removed from the
-        // account left them only in the history
-        let heads = self.verified_history()?;
-        let repo = self.open_repo()?;
-        let trees = Trees::new(&repo);
-        let mut found = None;
-        for (head, snap) in self.kept_history(&repo, &heads)?.into_iter().rev() {
-            if let Some(dir) = trees.lookup(Some(snap.tree), &theirs)?.filter(Node::is_dir) {
-                found = Some((head.seq, dir));
-                break;
-            }
-        }
-        let Some((seq, dir)) = found else {
-            return Ok((Vec::new(), Vec::new()));
+        let Some((seq, theirs, dir)) = self.find_machine(from)? else {
+            return Ok(Vec::new());
         };
+        let repo = self.open_repo()?;
         let mut files = BTreeSet::new();
         walk_tree(&repo, dir.subtree, Path::new(""), &|_: &Path, _| false, &mut files)?;
-        let (mut taken, mut keep) = (Vec::new(), Vec::new());
+        let mut taken = Vec::new();
         for rest in files {
-            if !manifest.is_machine(&rest) && !manifest.can_keep(&rest) {
-                continue;
-            }
-            if manifest.through_any_link(&home, &rest) {
+            if !manifest.is_machine(&rest) || manifest.through_any_link(&home, &rest) {
                 continue;
             }
             self.back_up(&Path::new(SETTINGS).join(&rest))?;
             self.restore_version(&theirs.join(&rest), seq, &home.join(&rest))?;
-            if !manifest.is_machine(&rest) {
-                keep.push(rest.clone());
-            }
+            _ = self.pending.insert(self.setting_path(&rest));
             taken.push(rest);
         }
-        Ok((taken, keep))
+        Ok(taken)
     }
 
     /// Copy a setting aside before a pull replaces or deletes it.
@@ -2338,7 +2394,7 @@ impl Engine {
                     .into_iter()
                     .map(|p| Path::new(SETTINGS).join(p)),
             );
-            let own = Path::new(MACHINES).join(&self.device);
+            let own = self.own_machine();
             paths.extend(s.manifest.machine_files(&s.home).into_iter().map(|p| own.join(p)));
             let mut docs = BTreeSet::new();
             let synced = s.merged.join("synced");
@@ -2893,7 +2949,7 @@ impl Engine {
                 _ => return Ok(()),
             }
         }
-        if path.starts_with(SETTINGS) {
+        if is_setting(path) {
             // a setting goes to history first, and home's directories stay
             self.back_up(path)?;
             match fs::remove_file(&dest) {
@@ -2944,7 +3000,7 @@ impl Engine {
     /// moves aside as a conflict copy, and the parent directories exist.
     fn prepare_write(&mut self, path: &Path, node: &Node) -> Result<()> {
         let dest = self.local(path).ok_or_else(|| anyhow!("settings sync is off"))?;
-        if path.starts_with(SETTINGS) || path.starts_with(MERGED) {
+        if is_setting(path) || path.starts_with(MERGED) {
             self.back_up(path)?;
             fs::create_dir_all(dest.parent().ok_or_else(|| anyhow!("bad path"))?)?;
             return Ok(());
@@ -3039,7 +3095,7 @@ impl Engine {
         // saved here during the pull: the new version lands beside it
         for (i, tmp) in &kept {
             let (path, dest, node, _, _) = &dests[*i];
-            if path.starts_with(SETTINGS) {
+            if is_setting(path) {
                 // no copies among settings: hold the other version instead
                 warn!(
                     "{} changed here during a pull; kept this version, the other waits for `omacloud settings resolve`",
@@ -3600,6 +3656,12 @@ fn walk_tree_nodes(
         }
     }
     Ok(empty)
+}
+
+/// A setting written into home (shared, or this computer's own), as
+/// opposed to a file of the folder: backed up first, never a conflict copy.
+fn is_setting(path: &Path) -> bool {
+    path.starts_with(SETTINGS) || path.starts_with(MACHINES)
 }
 
 /// `notes.md` -> `notes.sync-conflict-20260928-104512-laptop.md`, Syncthing's

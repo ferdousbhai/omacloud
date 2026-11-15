@@ -20,8 +20,9 @@ function el(tag, props = {}, ...children) {
 // our own drawings, so nothing is fetched for them
 const FOLDER =
 	'<svg viewBox="0 0 64 64" aria-hidden="true"><path class="folder-back" d="M6 14a4 4 0 0 1 4-4h14l6 6h24a4 4 0 0 1 4 4v6H6z"/><path class="folder-front" d="M6 22h52v26a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4z"/></svg>';
+// a file's ending is its name's, so escaped: it is markup here
 const sheet = (kind) =>
-	`<svg viewBox="0 0 64 64" aria-hidden="true"><path class="sheet" d="M16 6h22l12 12v36a4 4 0 0 1-4 4H16a4 4 0 0 1-4-4V10a4 4 0 0 1 4-4z"/><path class="sheet" d="M38 6v12h12"/><text class="sheet-kind" x="31" y="45">${kind}</text></svg>`;
+	`<svg viewBox="0 0 64 64" aria-hidden="true"><path class="sheet" d="M16 6h22l12 12v36a4 4 0 0 1-4 4H16a4 4 0 0 1-4-4V10a4 4 0 0 1 4-4z"/><path class="sheet" d="M38 6v12h12"/><text class="sheet-kind" x="31" y="45">${kind.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}</text></svg>`;
 
 const icon = (path) => `<svg viewBox="0 0 24 24" aria-hidden="true" class="line"><path d="${path}"/></svg>`;
 const CLOCK = icon("M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 4v5l3.5 2");
