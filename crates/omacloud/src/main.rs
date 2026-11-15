@@ -3374,8 +3374,13 @@ fn chosen(paths: &Paths, config: &Config, what: &str) -> Result<Chosen> {
     if let Some(f) = &config.folders {
         names.extend(f.skip.iter().cloned());
     }
-    let first = Path::new(what).components().next();
-    if !what.starts_with(['/', '~', '.']) && first.is_some_and(|c| names.contains(&*c.as_os_str().to_string_lossy())) {
+    // whether a path is in a folder of the account, by its first part
+    let in_account = |p: &Path| {
+        p.components()
+            .next()
+            .is_some_and(|c| names.contains(&*c.as_os_str().to_string_lossy()))
+    };
+    if !what.starts_with(['/', '~', '.']) && in_account(Path::new(what)) {
         let account = PathBuf::from(what);
         return Ok(Chosen::InFolder(e.on_disk(&account), account));
     }
@@ -3383,13 +3388,7 @@ fn chosen(paths: &Paths, config: &Config, what: &str) -> Result<Chosen> {
         .strip_prefix(&config.folder)
         .ok()
         .and_then(|rel| e.account_path(rel))
-        .filter(|account| {
-            config.folders.is_none()
-                || account
-                    .components()
-                    .next()
-                    .is_some_and(|c| names.contains(&*c.as_os_str().to_string_lossy()))
-        });
+        .filter(|account| config.folders.is_none() || in_account(account));
     Ok(match in_folder {
         Some(account) => Chosen::InFolder(abs, account),
         None => Chosen::File(under_home(&abs)?),

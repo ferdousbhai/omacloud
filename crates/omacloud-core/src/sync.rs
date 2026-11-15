@@ -689,19 +689,34 @@ impl Engine {
     ///
     /// If the account has no such folder, or on storage errors.
     pub fn remove_from_cloud(&mut self, name: &str) -> Result<()> {
+        let path = PathBuf::from(name);
+        let found = self.delete_from_latest(|repo, base| present(repo, base, &path))?;
+        if found.is_none() {
+            bail!(NoCloudFolder(name.to_string()));
+        }
+        _ = self.state.dropped.insert(name.to_string());
+        _ = self.synced.remove(name);
+        self.save_state()
+    }
+
+    /// Push the deletes `pick` makes from the latest version (none: nothing
+    /// to delete), after a sync, again while other computers win the push.
+    /// Returns how many there were.
+    fn delete_from_latest(
+        &mut self,
+        pick: impl Fn(&Repo, Option<TreeId>) -> Result<BTreeMap<PathBuf, Local>>,
+    ) -> Result<Option<usize>> {
         for _ in 0..MAX_ROUNDS {
             self.sync()?;
             let repo = self.open_repo()?;
-            let trees = Trees::new(&repo);
-            let path = PathBuf::from(name);
-            if trees.lookup(self.base_tree()?, &path)?.is_none() {
-                bail!(NoCloudFolder(name.to_string()));
+            let gone = pick(&repo, self.base_tree()?)?;
+            if gone.is_empty() {
+                return Ok(None);
             }
-            if self.push(&repo, BTreeMap::from([(path, Local::Delete)]))?.is_some() {
-                _ = self.state.dropped.insert(name.to_string());
-                _ = self.synced.remove(name);
+            let n = gone.len();
+            if self.push(&repo, gone)?.is_some() {
                 self.save_state()?;
-                return Ok(());
+                return Ok(Some(n));
             }
         }
         bail!("other computers kept syncing: try again")
@@ -999,21 +1014,9 @@ impl Engine {
     /// On storage errors, or when other computers keep winning the push.
     pub fn forget_machine(&mut self, key: &str) -> Result<bool> {
         let path = Path::new(MACHINES).join(key);
-        for _ in 0..MAX_ROUNDS {
-            self.sync()?;
-            let repo = self.open_repo()?;
-            if Trees::new(&repo).lookup(self.base_tree()?, &path)?.is_none() {
-                return Ok(false);
-            }
-            if self
-                .push(&repo, BTreeMap::from([(path.clone(), Local::Delete)]))?
-                .is_some()
-            {
-                self.save_state()?;
-                return Ok(true);
-            }
-        }
-        bail!("other computers kept syncing: try again")
+        Ok(self
+            .delete_from_latest(|repo, base| present(repo, base, &path))?
+            .is_some())
     }
 
     /// Make the latest version hold only this computer's own settings: a
@@ -1028,26 +1031,15 @@ impl Engine {
         let Some(manifest) = self.settings.as_ref().map(|s| s.manifest.clone()) else {
             return Ok(0);
         };
-        for _ in 0..MAX_ROUNDS {
-            self.sync()?;
-            let repo = self.open_repo()?;
-            let own = self.own_machine();
-            let files = files_under(&repo, self.base_tree()?, &own)?;
-            let gone: BTreeMap<PathBuf, Local> = files
+        let own = self.own_machine();
+        let gone = self.delete_from_latest(|repo, base| {
+            Ok(files_under(repo, base, &own)?
                 .into_iter()
                 .filter(|rest| !manifest.is_machine(rest) && !manifest.skipped().contains(settings::group_of(rest)))
                 .map(|rest| (own.join(rest), Local::Delete))
-                .collect();
-            if gone.is_empty() {
-                return Ok(0);
-            }
-            let n = gone.len();
-            if self.push(&repo, gone)?.is_some() {
-                self.save_state()?;
-                return Ok(n);
-            }
-        }
-        bail!("other computers kept syncing: try again")
+                .collect())
+        })?;
+        Ok(gone.unwrap_or(0))
     }
 
     /// Move to a new repository with a new key, so devices removed so far
@@ -2684,7 +2676,7 @@ impl Engine {
                 continue;
             }
             stats.pulled += 1;
-            if path.starts_with(SETTINGS) || path.starts_with(MERGED) || path.starts_with(MACHINES) {
+            if is_setting(&path) || path.starts_with(MERGED) {
                 // back after being left out: what differs has no shared past
                 let base = if is_rejoining(&path) { None } else { base_tree };
                 self.pull_setting(repo, base, path, rnode, local, &mut writes, &mut deletes, stats)?;
@@ -2756,7 +2748,7 @@ impl Engine {
         // what a person would call new files: not settings, not folders
         let files = writes
             .iter()
-            .filter(|(path, node)| !node.is_dir() && ![SETTINGS, MERGED, MACHINES].iter().any(|p| path.starts_with(p)))
+            .filter(|(path, node)| !node.is_dir() && !is_setting(path) && !path.starts_with(MERGED))
             .map(|(path, _)| path.clone());
         self.arrived.files.extend(files);
         if !self.arrived.files.is_empty() {
@@ -3734,6 +3726,12 @@ fn walk_tree_nodes(
         }
     }
     Ok(empty)
+}
+
+/// A delete of `path` if `tree` has it.
+fn present(repo: &Repo, tree: Option<TreeId>, path: &Path) -> Result<BTreeMap<PathBuf, Local>> {
+    let there = Trees::new(repo).lookup(tree, path)?.is_some();
+    Ok(there.then(|| (path.to_path_buf(), Local::Delete)).into_iter().collect())
 }
 
 /// The files below `dir` in `tree`, relative to it: none if it isn't there.
