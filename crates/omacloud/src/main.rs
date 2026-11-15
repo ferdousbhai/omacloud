@@ -533,10 +533,11 @@ enum SettingsCmd {
     On,
     /// Stop syncing settings on this device (files stay as they are)
     Off,
-    /// Leave a group of settings out on this device: shell, agents, apps,
-    /// chromium or wifi
+    /// Leave a group of settings out on this device (`choose <group> off`)
+    #[command(hide = true)]
     Skip { group: String },
-    /// Sync a skipped group of settings here again
+    /// Sync a skipped group of settings here again (`choose <group> sync`)
+    #[command(hide = true)]
     Unskip { group: String },
     /// Settle a setting that changed here and on another device
     Resolve {
@@ -573,15 +574,17 @@ enum FoldersCmd {
     List,
     /// Sync a folder of home on every device (`Music`, `Videos`, ...)
     Add { name: String },
-    /// Stop syncing a folder on this device; its files stay, and other
-    /// devices keep syncing it
+    /// Stop syncing a folder on this device (`choose <folder> off`)
+    #[command(hide = true)]
     Skip { name: String },
-    /// Sync a skipped folder here again
+    /// Sync a skipped folder here again (`choose <folder> sync`)
+    #[command(hide = true)]
     Unskip { name: String },
-    /// Leave a subfolder out on this device, like `Documents/Notes`; its files
-    /// stay, and other devices keep syncing it
+    /// Leave a subfolder out on this device (`choose <subfolder> off`)
+    #[command(hide = true)]
     Exclude { path: String },
-    /// Sync an excluded subfolder here again
+    /// Sync an excluded subfolder here again (`choose <subfolder> sync`)
+    #[command(hide = true)]
     Include { path: String },
     /// Take a folder out of the cloud: no device deletes its files, each stops
     /// syncing it, and its earlier versions go within 30 days. `folders add`
@@ -1632,7 +1635,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
                 warn!("closing old drive links: {e:#}");
             }
             record_packages(config, &mut engine);
-            record_choices(paths, config, &mut engine);
+            _ = record_choices(paths, config, &mut engine);
             packages_at = Some(Instant::now());
         }
         // changes noticed while paused stay pending and go out on resume
@@ -2135,7 +2138,7 @@ fn run(cli: Cli) -> Out {
             let config = load(&paths)?;
             let mut e = engine(&paths, &config)?;
             record_packages(&config, &mut e);
-            record_choices(&paths, &config, &mut e);
+            _ = record_choices(&paths, &config, &mut e);
             let st = match e.sync() {
                 Err(err) if err.downcast_ref::<Membership>() == Some(&Membership::NotApproved) => {
                     let me = fingerprint(&e.device_key());
@@ -2432,7 +2435,7 @@ fn run(cli: Cli) -> Out {
             let mut e = engine(&paths, &config)?;
             let mut out = settings_text(&e.settings_status());
             record_packages(&config, &mut e);
-            record_choices(&paths, &config, &mut e);
+            _ = record_choices(&paths, &config, &mut e);
             let st = e.sync()?;
             say!(out, "files and settings: pulled {}", st.pulled);
             // only a computer taking another's place gets that one's own
@@ -3124,28 +3127,16 @@ fn settings(paths: &Paths, action: SettingsCmd) -> Out {
                         .into(),
                 );
             }
+            // each keeping its own: this one's is backed up only from here
+            if matches!(keep, Keep::Each) && set_file_choice(&mut config, rel, Choice::Backup)? {
+                save(paths, &config)?;
+                e = engine(paths, &config)?;
+            }
+            e.resolve_setting(rel, matches!(keep, Keep::Remote))?;
             let kept = match keep {
-                Keep::Local | Keep::Remote => {
-                    e.resolve_setting(rel, matches!(keep, Keep::Remote))?;
-                    if matches!(keep, Keep::Remote) {
-                        "remote"
-                    } else {
-                        "local"
-                    }
-                }
-                // already this computer's own (set up again under its name):
-                // each keeping its own is keeping this one's
-                Keep::Each if Manifest::load()?.is_machine(rel) || config.settings_keep.contains(rel) => {
-                    e.resolve_setting(rel, false)?;
-                    "local"
-                }
-                Keep::Each => {
-                    set_file_choice(&mut config, rel, Choice::Backup)?;
-                    save(paths, &config)?;
-                    e = engine(paths, &config)?;
-                    e.keep_each(rel)?;
-                    "each"
-                }
+                Keep::Local => "local",
+                Keep::Remote => "remote",
+                Keep::Each => "each",
             };
             e.sync()?;
             Ok(Response::new(
@@ -3207,7 +3198,7 @@ impl Choice {
             "sync" => "synced",
             "backup" => "backed up only",
             "off" => "off",
-            _ => "?",
+            _ => "-",
         }
     }
 }
@@ -3223,7 +3214,7 @@ fn set_file_choice(config: &mut Config, rel: &Path, choice: Choice) -> Result<bo
             .hint("`omacloud choose` shows what it syncs; an app's settings that merge (Chromium, an agent's settings.json) go by their group")
             .into());
     }
-    // about this computer whatever is chosen: backed up, or off
+    // about this computer whatever is chosen: backed up only, or off
     let its_own = manifest.is_machine(rel);
     if its_own && choice == Choice::Sync {
         return Err(
@@ -3233,11 +3224,7 @@ fn set_file_choice(config: &mut Config, rel: &Path, choice: Choice) -> Result<bo
         );
     }
     if choice != Choice::Sync {
-        if !config.settings {
-            return Err(fail::usage("settings don't sync on this computer")
-                .hint("`omacloud choose settings sync` first")
-                .into());
-        }
+        settings_here(config)?;
         let group = omacloud_core::settings::group_of(rel);
         if config.settings_skip.contains(group) {
             return Err(
@@ -3246,8 +3233,8 @@ fn set_file_choice(config: &mut Config, rel: &Path, choice: Choice) -> Result<bo
                     .into(),
             );
         }
-        // a link would be neither synced nor backed up as this computer's
-        if manifest.through_any_link(&home_dir()?, rel) {
+        // a link would be neither synced nor backed up from here
+        if omacloud_core::settings::via_link(&home_dir()?, rel) {
             return Err(fail::usage(format!("{shown} is a link"))
                 .hint("choose the file it points to")
                 .into());
@@ -3264,6 +3251,27 @@ fn set_file_choice(config: &mut Config, rel: &Path, choice: Choice) -> Result<bo
     Ok(before != (config.settings_keep.clone(), config.settings_off.clone()))
 }
 
+/// Fails unless settings sync on this computer.
+fn settings_here(config: &Config) -> Result<()> {
+    if config.settings {
+        return Ok(());
+    }
+    Err(fail::usage("settings don't sync on this computer")
+        .hint("`omacloud choose settings sync` first")
+        .into())
+}
+
+/// What `omacloud choose` was given.
+enum Chosen {
+    /// All settings, or one group of them
+    Settings(Option<String>),
+    /// A folder of the account, or something in one: where it is here, and
+    /// its name in the account
+    InFolder(PathBuf, PathBuf),
+    /// A settings file, relative to home
+    File(PathBuf),
+}
+
 /// `omacloud choose`: what syncs on each computer, or a change to this one's.
 fn choose(paths: &Paths, what: Option<String>, choice: Option<Choice>) -> Out {
     let (what, choice) = match (what, choice) {
@@ -3276,110 +3284,110 @@ fn choose(paths: &Paths, what: Option<String>, choice: Option<Choice>) -> Out {
         (Some(what), Some(choice)) => (what, choice),
     };
     let mut config = load(paths)?;
-    let done = |config: &Config, shown: &str| -> Out {
-        let mut e = engine(paths, config)?;
-        let mut out = String::new();
-        // the latest version holds only this computer's own settings
-        if let Err(err) = e.tidy_own() {
-            say!(out, "an older copy backed up from this computer stays for now: {err:#}");
-        }
-        record_choices(paths, config, &mut e);
-        say!(out, "{shown}: {} on this computer", Choice::label(choice.word()));
-        Ok(Response::new(
-            json!({ "what": shown, "choice": choice.word() }),
-            format!("{shown}: {}", Choice::label(choice.word())),
-        )
-        .human(out.trim_end()))
-    };
-    if what == "settings" {
-        if choice == Choice::Backup {
-            return Err(fail::usage("settings sync or are off")
-                .hint("choose single files for backup only, like `omacloud choose ~/.claude/CLAUDE.md backup`")
-                .into());
-        }
-        config.settings = choice == Choice::Sync;
-        save(paths, &config)?;
-        return done(&config, &what);
+    let chosen = chosen(paths, &config, &what)?;
+    if choice == Choice::Backup && !matches!(chosen, Chosen::File(_)) {
+        return Err(fail::usage("only a settings file can be backed up only")
+            .hint("folders and groups sync or are off; for a file: `omacloud choose ~/.claude/CLAUDE.md backup`")
+            .into());
     }
-    if SETTINGS_GROUPS.contains(&what.as_str()) {
-        if choice == Choice::Backup {
-            return Err(fail::usage(format!("{what} syncs or is off"))
-                .hint("choose single files for backup only, like `omacloud choose ~/.claude/CLAUDE.md backup`")
-                .into());
+    let on = choice == Choice::Sync;
+    let shown = match chosen {
+        Chosen::Settings(None) => {
+            config.settings = on;
+            save(paths, &config)?;
+            what
         }
-        if !config.settings {
-            return Err(fail::usage("settings don't sync on this computer")
-                .hint("`omacloud choose settings sync` first")
-                .into());
-        }
-        if choice == Choice::Sync {
-            _ = config.settings_skip.remove(&what);
-        } else {
-            _ = config.settings_skip.insert(what.clone());
-        }
-        save(paths, &config)?;
-        return done(&config, &what);
-    }
-    let home = home_dir()?;
-    let abs = match what.strip_prefix("~/") {
-        Some(rest) => home.join(rest),
-        None => absolute(Path::new(&what))?,
-    };
-    // a folder of the account by its name (`Pictures`), or a path in one
-    let in_folders = {
-        let mut e = engine(paths, &config)?;
-        e.load_folders()?;
-        let mut names: std::collections::BTreeSet<String> = e.folder_list().into_iter().map(|(n, _)| n).collect();
-        if let Some(f) = &config.folders {
-            names.extend(f.skip.iter().cloned());
-        }
-        // by the account's name for it: `Pictures`, `Documents/Notes`
-        let first = Path::new(&what).components().next();
-        let by_name = (!what.starts_with(['/', '~', '.'])
-            && first.is_some_and(|c| names.contains(&*c.as_os_str().to_string_lossy())))
-        .then(|| PathBuf::from(&what));
-        by_name.map(|p| (e.on_disk(&p), p)).or_else(|| {
-            let rel = abs.strip_prefix(&config.folder).ok()?;
-            let account = e.account_path(rel)?;
-            let first = account.components().next()?.as_os_str().to_str()?.to_string();
-            (config.folders.is_none() || names.contains(&first)).then(|| (abs.clone(), account))
-        })
-    };
-    if let Some((abs, account)) = in_folders {
-        if choice == Choice::Backup {
-            return Err(
-                fail::usage(format!("{what} syncs the same on every computer, or is off"))
-                    .hint("only settings files are backed up from one computer")
-                    .into(),
-            );
-        }
-        let name = account.to_string_lossy().into_owned();
-        let on = choice == Choice::Sync;
-        if config.folders.is_some() && account.components().count() == 1 {
-            let skipped = config.folders.as_ref().is_some_and(|f| f.skip.contains(&name));
-            let action = match (on, skipped) {
-                (true, true) => FoldersCmd::Unskip { name: name.clone() },
-                (true, false) => FoldersCmd::Add { name: name.clone() },
-                (false, _) => FoldersCmd::Skip { name: name.clone() },
-            };
-            folders(paths, action)?;
-        } else if config.folders.is_some() && abs.is_dir() {
-            let action = if on {
-                FoldersCmd::Include { path: name.clone() }
+        Chosen::Settings(Some(group)) => {
+            settings_here(&config)?;
+            if on {
+                _ = config.settings_skip.remove(&group);
             } else {
-                FoldersCmd::Exclude { path: name.clone() }
-            };
-            folders(paths, action)?;
-        } else {
-            set_ignore_rule(paths, &account, abs.is_dir(), !on)?;
+                _ = config.settings_skip.insert(group.clone());
+            }
+            save(paths, &config)?;
+            group
         }
-        return done(&load(paths)?, &name);
+        Chosen::InFolder(abs, account) => {
+            let name = account.to_string_lossy().into_owned();
+            let top = account.components().count() == 1;
+            if config.folders.is_some() && (top || abs.is_dir()) {
+                let skipped = config.folders.as_ref().is_some_and(|f| f.skip.contains(&name));
+                let action = match (top, on, skipped) {
+                    (true, true, true) => FoldersCmd::Unskip { name: name.clone() },
+                    (true, true, false) => FoldersCmd::Add { name: name.clone() },
+                    (true, false, _) => FoldersCmd::Skip { name: name.clone() },
+                    (false, true, _) => FoldersCmd::Include { path: name.clone() },
+                    (false, false, _) => FoldersCmd::Exclude { path: name.clone() },
+                };
+                folders(paths, action)?;
+                config = load(paths)?;
+            } else {
+                set_ignore_rule(paths, &account, abs.is_dir(), !on)?;
+            }
+            name
+        }
+        Chosen::File(rel) => {
+            if set_file_choice(&mut config, &rel, choice)? {
+                save(paths, &config)?;
+            }
+            format!("~/{}", rel.display())
+        }
+    };
+    let mut e = engine(paths, &config)?;
+    let mut out = String::new();
+    // the latest version holds only what this computer backs up
+    if let Err(err) = e.tidy_own() {
+        say!(out, "an older copy backed up from this computer stays for now: {err:#}");
     }
-    let rel = under_home(&abs)?;
-    if set_file_choice(&mut config, &rel, choice)? {
-        save(paths, &config)?;
+    _ = record_choices(paths, &config, &mut e);
+    let label = Choice::label(choice.word());
+    say!(out, "{shown}: {label} on this computer");
+    Ok(Response::new(
+        json!({ "what": shown, "choice": choice.word() }),
+        format!("{shown}: {label}"),
+    )
+    .human(out.trim_end()))
+}
+
+/// What `what` names: `settings`, a group, a folder of the account by its
+/// name (`Pictures`, `Documents/Notes`) or a path in one, or a settings file.
+fn chosen(paths: &Paths, config: &Config, what: &str) -> Result<Chosen> {
+    if what == "settings" {
+        return Ok(Chosen::Settings(None));
     }
-    done(&config, &format!("~/{}", rel.display()))
+    if SETTINGS_GROUPS.contains(&what) {
+        return Ok(Chosen::Settings(Some(what.to_string())));
+    }
+    let abs = match what.strip_prefix("~/") {
+        Some(rest) => home_dir()?.join(rest),
+        None => absolute(Path::new(what))?,
+    };
+    let mut e = engine(paths, config)?;
+    e.load_folders()?;
+    let mut names: std::collections::BTreeSet<String> = e.folder_list().into_iter().map(|(n, _)| n).collect();
+    if let Some(f) = &config.folders {
+        names.extend(f.skip.iter().cloned());
+    }
+    let first = Path::new(what).components().next();
+    if !what.starts_with(['/', '~', '.']) && first.is_some_and(|c| names.contains(&*c.as_os_str().to_string_lossy())) {
+        let account = PathBuf::from(what);
+        return Ok(Chosen::InFolder(e.on_disk(&account), account));
+    }
+    let in_folder = abs
+        .strip_prefix(&config.folder)
+        .ok()
+        .and_then(|rel| e.account_path(rel))
+        .filter(|account| {
+            config.folders.is_none()
+                || account
+                    .components()
+                    .next()
+                    .is_some_and(|c| names.contains(&*c.as_os_str().to_string_lossy()))
+        });
+    Ok(match in_folder {
+        Some(account) => Chosen::InFolder(abs, account),
+        None => Chosen::File(under_home(&abs)?),
+    })
 }
 
 /// Leave one path of the synced folder out here, or take it back, through
@@ -3446,6 +3454,7 @@ fn my_choices(paths: &Paths, config: &Config, e: &mut Engine) -> Value {
     }
     let mut files = serde_json::Map::new();
     if config.settings {
+        // `own` has the kept files that are here; the rest still show
         for p in e.settings_status().own.iter().chain(&config.settings_keep) {
             _ = files.insert(format!("~/{}", p.display()), json!("backup"));
         }
@@ -3456,12 +3465,14 @@ fn my_choices(paths: &Paths, config: &Config, e: &mut Engine) -> Value {
     json!({ "name": config.device, "folders": folders, "settings": settings, "files": files })
 }
 
-/// Publish this computer's choices, for `omacloud choose` on the others.
-fn record_choices(paths: &Paths, config: &Config, e: &mut Engine) {
+/// Publish this computer's choices, for `omacloud choose` on the others;
+/// the next sync carries them. Returns them.
+fn record_choices(paths: &Paths, config: &Config, e: &mut Engine) -> Value {
     let mine = my_choices(paths, config, e);
     if let Err(err) = e.record_choices(&mine) {
         warn!("recording what syncs here: {err:#}");
     }
+    mine
 }
 
 /// `omacloud choose` with nothing given: every computer's choices side by side.
@@ -3479,29 +3490,27 @@ fn choices(paths: &Paths) -> Out {
 
 /// Every computer's choices: as data (`devices`, `items`), and as a table.
 fn choice_table(paths: &Paths, config: &Config, e: &mut Engine) -> (Value, String) {
-    // recorded for the next sync to carry; showing changes nothing
-    let mine = my_choices(paths, config, e);
-    if let Err(err) = e.record_choices(&mine) {
-        warn!("recording what syncs here: {err:#}");
-    }
+    let mine = record_choices(paths, config, e);
     let me = e.device_key();
     let members = e.state().devices.members();
     let recorded = e.choices();
+    let empty = json!({});
+    let of = |k: &String| {
+        if *k == me {
+            &mine
+        } else {
+            recorded.get(k).unwrap_or(&empty)
+        }
+    };
     // this computer first, then the others by name
     let mut devices: Vec<(String, String)> = members.valid.into_iter().collect();
     devices.sort_by_key(|(k, name)| (*k != me, name.clone()));
-    let empty = json!({});
     let mut out = String::new();
     let mut rows: Vec<(&str, String)> = Vec::new();
     for kind in ["folders", "settings", "files"] {
         let mut names = std::collections::BTreeSet::new();
         for (k, _) in &devices {
-            let c = if *k == me {
-                &mine
-            } else {
-                recorded.get(k).unwrap_or(&empty)
-            };
-            if let Some(m) = c[kind].as_object() {
+            if let Some(m) = of(k)[kind].as_object() {
                 names.extend(m.keys().cloned());
             }
         }
@@ -3535,13 +3544,9 @@ fn choice_table(paths: &Paths, config: &Config, e: &mut Engine) -> (Value, Strin
         let mut line = format!("{name:width$}");
         let mut by_device = serde_json::Map::new();
         for (k, device) in &devices {
-            let c = if *k == me {
-                &mine
-            } else {
-                recorded.get(k).unwrap_or(&empty)
-            };
-            let word = c[*kind][name].as_str().unwrap_or(if c == &empty { "?" } else { "-" });
-            line.push_str(&format!("  {:<18}", Choice::label(word).replace('?', "not shown")));
+            // a computer that doesn't say (an older version): a dash
+            let word = of(k)[*kind][name].as_str().unwrap_or("-");
+            line.push_str(&format!("  {:<18}", Choice::label(word)));
             _ = by_device.insert(device.clone(), json!(word));
         }
         say!(out, "{}", line.trim_end());
@@ -3571,7 +3576,6 @@ fn settings_json(st: &omacloud_core::SettingsStatus, config: &Config) -> Value {
         "dormant": st.dormant,
         "held": st.held,
         "own": st.own,
-        "kept": config.settings_keep,
         "groups": st.groups,
         "source": settings_source(),
     })
@@ -4096,7 +4100,6 @@ fn status(paths: &Paths) -> Out {
             "dormant": settings.dormant,
             "held": settings.held,
             "own": settings.own,
-            "kept": config.settings_keep,
             "groups": settings.groups,
         },
         "secrets": e.secrets_devices(),

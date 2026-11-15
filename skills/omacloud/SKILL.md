@@ -107,30 +107,27 @@ Sync is bidirectional and can change local and remote files. Do not start
 separate destination first; `restore` over an existing file, `devices revoke`
 and `rotate` need `--yes`, which needs the owner's authority.
 
-Folder controls: `folders add Music` (a name or a path directly in home, like
-`~/Work`; `folders list` gives the ones not syncing yet as `more`), `folders skip
-Pictures`, `folders unskip Pictures`. Adding affects the shared folder set; skipping leaves this device's
-files in place and stops syncing them here. Explain scope before changing it.
+Folder controls: `choose Music sync` (a name or a path in home, like `~/Work`;
+`folders list` gives the ones not syncing yet as `more`), `choose Pictures off`,
+`choose Documents/Notes off` for a subfolder. Syncing a new folder adds it to every
+computer; off leaves this device's files in place and stops syncing them here, and
+other devices keep syncing it. Explain scope before changing it.
 
 Choices can change at any time, and a running `watch` follows them. A folder or
 subfolder coming back loses nothing: what differs from the cloud is kept, as a
 conflict copy where both have a version. `folders list --json` gives each folder's
 `size` in bytes, plus `others`, `skipped`, `excluded` and `removed_from_cloud`.
 
-- `folders exclude Documents/Notes`, `folders include Documents/Notes`: leave a
-  subfolder out here. Its files stay, and other devices keep syncing it.
-- `folders remove Documents --yes`: take it out of the cloud. No device deletes its
-  files, each stops syncing it, and earlier versions go within 30 days. Ask the
-  user first. `folders add Documents` brings it back from what's on that device.
-
-Skipping keeps the cloud's copy; only `folders remove` takes it out.
+`folders remove Documents --yes` takes a folder out of the cloud: no device deletes
+its files, each stops syncing it, and earlier versions go within 30 days. Ask the
+user first; `choose Documents sync` brings it back from what's on that device. Off
+keeps the cloud's copy; only `folders remove` takes it out.
 
 Dropbox: `init --provider dropbox` needs someone at a browser to allow it once, or a
 refresh token already allowed in OMACLOUD_DROPBOX_REFRESH_TOKEN. Each person uses their
 own Dropbox, so `invite` doesn't apply; `bucket set-key` needs no key id there.
 
-Settings: `settings on|off`, `settings skip|unskip shell|agents|apps|theme|chromium|wifi`,
-`settings resolve PATH --keep local|remote|each`. What syncs per computer:
+Settings: `settings resolve PATH --keep local|remote|each`. What syncs per computer:
 `choose` shows every computer's; `choose WHAT sync|backup|off` changes this
 one's (WHAT: a folder, `settings`, a group, or a settings file; backup is for
 files only: kept from this computer, not synced).

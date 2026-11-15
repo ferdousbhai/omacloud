@@ -139,9 +139,9 @@ project of their own ([docs/providers.md](docs/providers.md)).
   sync it: click it. Switching one
   off on a computer keeps its files there and stops syncing it there only.
   Folders match by what they are, so a German computer's `Dokumente` is
-  another's `Documents`. From the terminal: `omacloud folders add Music` (or its path, `~/Music`),
-  `omacloud folders skip Pictures`, `omacloud folders exclude Documents/Notes` for
-  a subfolder. Change these at any time: what comes back loses nothing. Skipping
+  another's `Documents`. From the terminal: `omacloud choose Music sync` (or its path, `~/Music`),
+  `omacloud choose Pictures off`, `omacloud choose Documents/Notes off` for
+  a subfolder (see Choosing what syncs). Change these at any time: what comes back loses nothing. Skipping
   keeps the cloud's copy; `omacloud folders remove Documents` takes it out, and no
   computer deletes its files.
 - **Omacloud Drive, every file, kept here or not:** `omacloud mount` (or Browse

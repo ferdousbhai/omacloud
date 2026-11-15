@@ -183,9 +183,7 @@ impl Manifest {
     /// computer's own, so one a computer can choose about.
     #[must_use]
     pub fn lists(&self, rel: &Path) -> bool {
-        (self.matching(Tier::Shared, rel) || self.matching(Tier::Machine, rel))
-            && (!self.matching(Tier::Local, rel) || self.matching(Tier::Machine, rel))
-            && !secret_name(rel)
+        self.can_keep(rel) || (self.matching(Tier::Machine, rel) && !secret_name(rel))
     }
 
     fn matching(&self, tier: Tier, rel: &Path) -> bool {
@@ -226,23 +224,11 @@ impl Manifest {
         }
         out.extend(self.keep.iter().cloned());
         out.retain(|p| {
-            self.is_machine(p)
-                && !self.through_any_link(home, p)
-                && fs::symlink_metadata(home.join(p)).is_ok_and(|m| m.is_file())
+            self.is_machine(p) && !via_link(home, p) && fs::symlink_metadata(home.join(p)).is_ok_and(|m| m.is_file())
         });
         out.sort();
         out.dedup();
         out
-    }
-
-    /// Whether `rel` under `home` is a link or passes through one.
-    #[must_use]
-    pub fn through_any_link(&self, home: &Path, rel: &Path) -> bool {
-        let mut at = home.to_path_buf();
-        rel.components().any(|c| {
-            at.push(c);
-            fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink())
-        })
     }
 
     /// Whether `rel` (relative to home) is in the shared tier. A path listed
@@ -250,13 +236,7 @@ impl Manifest {
     /// Sign-ins and tokens never are, whatever matches (see [`secret_name`]).
     #[must_use]
     pub fn is_shared(&self, rel: &Path) -> bool {
-        self.matching(Tier::Shared, rel)
-            && !self.matching(Tier::Local, rel)
-            && !self.matching(Tier::Machine, rel)
-            && !self.keep.contains(rel)
-            && !self.off.contains(rel)
-            && !secret_name(rel)
-            && !self.skip.contains(group_of(rel))
+        self.can_keep(rel) && !self.keep.contains(rel) && !self.off.contains(rel) && !self.skip.contains(group_of(rel))
     }
 
     /// Whether `rel` is shared only by Omacloud's additions.
@@ -337,7 +317,7 @@ impl Manifest {
         if !self.deep(rel) && !self.addition(rel) {
             return false;
         }
-        self.through_any_link(home, rel)
+        via_link(home, rel)
     }
 
     /// Shared files present under `home`, relative to it.
@@ -411,6 +391,16 @@ impl Manifest {
         }
         None
     }
+}
+
+/// Whether `rel` under `home` is a link or passes through one.
+#[must_use]
+pub fn via_link(home: &Path, rel: &Path) -> bool {
+    let mut at = home.to_path_buf();
+    rel.components().any(|c| {
+        at.push(c);
+        fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink())
+    })
 }
 
 /// Omacloud's additions to the manifest, from [`BUNDLED`].

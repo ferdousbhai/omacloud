@@ -1000,7 +1000,22 @@ impl Engine {
     ///
     /// On storage errors, or when other computers keep winning the push.
     pub fn forget_machine(&mut self, key: &str) -> Result<bool> {
-        self.delete_in_cloud(&Path::new(MACHINES).join(key))
+        let path = Path::new(MACHINES).join(key);
+        for _ in 0..MAX_ROUNDS {
+            self.sync()?;
+            let repo = self.open_repo()?;
+            if Trees::new(&repo).lookup(self.base_tree()?, &path)?.is_none() {
+                return Ok(false);
+            }
+            if self
+                .push(&repo, BTreeMap::from([(path.clone(), Local::Delete)]))?
+                .is_some()
+            {
+                self.save_state()?;
+                return Ok(true);
+            }
+        }
+        bail!("other computers kept syncing: try again")
     }
 
     /// Make the latest version hold only this computer's own settings: a
@@ -1019,11 +1034,7 @@ impl Engine {
             self.sync()?;
             let repo = self.open_repo()?;
             let own = self.own_machine();
-            let Some(dir) = Trees::new(&repo).lookup(self.base_tree()?, &own)?.filter(Node::is_dir) else {
-                return Ok(0);
-            };
-            let mut files = BTreeSet::new();
-            walk_tree(&repo, dir.subtree, Path::new(""), &|_: &Path, _| false, &mut files)?;
+            let files = files_under(&repo, self.base_tree()?, &own)?;
             let gone: BTreeMap<PathBuf, Local> = files
                 .into_iter()
                 .filter(|rest| !manifest.is_machine(rest) && !manifest.skipped().contains(settings::group_of(rest)))
@@ -1036,26 +1047,6 @@ impl Engine {
             if self.push(&repo, gone)?.is_some() {
                 self.save_state()?;
                 return Ok(n);
-            }
-        }
-        bail!("other computers kept syncing: try again")
-    }
-
-    /// Delete `path` from the latest version, after a sync.
-    fn delete_in_cloud(&mut self, path: &Path) -> Result<bool> {
-        let path = path.to_path_buf();
-        for _ in 0..MAX_ROUNDS {
-            self.sync()?;
-            let repo = self.open_repo()?;
-            if Trees::new(&repo).lookup(self.base_tree()?, &path)?.is_none() {
-                return Ok(false);
-            }
-            if self
-                .push(&repo, BTreeMap::from([(path.clone(), Local::Delete)]))?
-                .is_some()
-            {
-                self.save_state()?;
-                return Ok(true);
             }
         }
         bail!("other computers kept syncing: try again")
@@ -1283,7 +1274,7 @@ impl Engine {
                         .strip_prefix(self.device_key())
                         .ok()
                         .filter(|r| !r.as_os_str().is_empty())
-                        .is_none_or(|r| !s.manifest.is_machine(r) || s.manifest.through_any_link(&s.home, r))
+                        .is_none_or(|r| !s.manifest.is_machine(r) || settings::via_link(&s.home, r))
             });
         }
         match path.strip_prefix(SETTINGS) {
@@ -1854,27 +1845,8 @@ impl Engine {
             replace_file(&dest, &fs::read(&parked)?)?;
         }
         _ = fs::remove_file(&parked);
-        _ = self.pending.insert(tree_path);
-        self.save_state()
-    }
-
-    /// Settle a held setting by keeping each computer's version: this one's
-    /// stays here as its own (the manifest must keep it already, see
-    /// [`Manifest::keeping`]), and the other computers' stays shared.
-    ///
-    /// # Errors
-    ///
-    /// If the setting isn't held, or isn't kept as this computer's own.
-    pub fn keep_each(&mut self, path: &Path) -> Result<()> {
-        if !self.settings.as_ref().is_some_and(|s| s.manifest.is_machine(path)) {
-            bail!("{} is not kept as this computer's own", path.display());
-        }
-        let parked = self
-            .state
-            .held
-            .remove(&Path::new(SETTINGS).join(path))
-            .ok_or_else(|| anyhow!("{} is not waiting to be resolved", path.display()))?;
-        _ = fs::remove_file(&parked);
+        // where it syncs now: shared, or this computer's own if each keeps
+        // its own (the other computers' version then stays shared)
         _ = self.pending.insert(self.setting_path(path));
         self.save_state()
     }
@@ -1882,7 +1854,7 @@ impl Engine {
     /// The latest version holding the own settings of a computer named
     /// `from` (another one): its seq and the folder. A computer removed
     /// from the account left them only in the history.
-    fn find_machine(&mut self, from: &str) -> Result<Option<(u64, PathBuf, Node)>> {
+    fn find_machine(&mut self, from: &str) -> Result<Option<(u64, PathBuf, BTreeSet<PathBuf>)>> {
         self.refresh_devices()?;
         let me = self.device_key();
         let members = self.state.devices.members();
@@ -1895,7 +1867,6 @@ impl Engine {
         let (current, removed) = (named(&members.valid), named(&members.revoked));
         let heads = self.verified_history()?;
         let repo = self.open_repo()?;
-        let trees = Trees::new(&repo);
         // a member's own are as the latest version has them, gone or not; a
         // removed computer's are in the history only
         let history = self.kept_history(&repo, &heads)?;
@@ -1905,8 +1876,9 @@ impl Engine {
             for (head, snap) in history.into_iter().rev() {
                 for key in &keys {
                     let theirs = Path::new(MACHINES).join(key);
-                    if let Some(dir) = trees.lookup(Some(snap.tree), &theirs)?.filter(Node::is_dir) {
-                        return Ok(Some((head.seq, theirs, dir)));
+                    let files = files_under(&repo, Some(snap.tree), &theirs)?;
+                    if !files.is_empty() {
+                        return Ok(Some((head.seq, theirs, files)));
                     }
                 }
             }
@@ -1927,12 +1899,9 @@ impl Engine {
             .ok_or_else(|| anyhow!("settings sync is off"))?
             .manifest
             .clone();
-        let Some((_, _, dir)) = self.find_machine(from)? else {
+        let Some((_, _, files)) = self.find_machine(from)? else {
             return Ok(Vec::new());
         };
-        let repo = self.open_repo()?;
-        let mut files = BTreeSet::new();
-        walk_tree(&repo, dir.subtree, Path::new(""), &|_: &Path, _| false, &mut files)?;
         Ok(files
             .into_iter()
             .filter(|p| manifest.is_machine(p) || manifest.can_keep(p))
@@ -1952,15 +1921,12 @@ impl Engine {
     pub fn take_machine_files(&mut self, from: &str) -> Result<Vec<PathBuf>> {
         let s = self.settings_on().ok_or_else(|| anyhow!("settings sync is off"))?;
         let (home, manifest) = (s.home.clone(), s.manifest.clone());
-        let Some((seq, theirs, dir)) = self.find_machine(from)? else {
+        let Some((seq, theirs, files)) = self.find_machine(from)? else {
             return Ok(Vec::new());
         };
-        let repo = self.open_repo()?;
-        let mut files = BTreeSet::new();
-        walk_tree(&repo, dir.subtree, Path::new(""), &|_: &Path, _| false, &mut files)?;
         let mut taken = Vec::new();
         for rest in files {
-            if !manifest.is_machine(&rest) || manifest.through_any_link(&home, &rest) {
+            if !manifest.is_machine(&rest) || settings::via_link(&home, &rest) {
                 continue;
             }
             self.back_up(&Path::new(SETTINGS).join(&rest))?;
@@ -3770,6 +3736,15 @@ fn walk_tree_nodes(
         }
     }
     Ok(empty)
+}
+
+/// The files below `dir` in `tree`, relative to it: none if it isn't there.
+fn files_under(repo: &Repo, tree: Option<TreeId>, dir: &Path) -> Result<BTreeSet<PathBuf>> {
+    let mut files = BTreeSet::new();
+    if let Some(node) = Trees::new(repo).lookup(tree, dir)?.filter(Node::is_dir) {
+        walk_tree(repo, node.subtree, Path::new(""), &|_: &Path, _| false, &mut files)?;
+    }
+    Ok(files)
 }
 
 /// A setting written into home (shared, or this computer's own), as

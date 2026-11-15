@@ -1268,7 +1268,7 @@ fn each_computers_own_settings_are_kept_apart_and_follow_its_replacement() -> Re
     assert_eq!(b.settings_status().held, [PathBuf::from(claude)]);
     drop(b);
     let mut b = w.engine_with_parsed("b", keeping(&[claude])?)?;
-    b.keep_each(Path::new(claude))?;
+    b.resolve_setting(Path::new(claude), false)?;
     b.sync()?;
     a.sync()?;
     assert!(b.settings_status().held.is_empty());

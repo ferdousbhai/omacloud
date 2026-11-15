@@ -1538,7 +1538,7 @@ fn each_computer(ui: &Rc<Ui>, choices: &Value) -> adw::PreferencesGroup {
         "sync" => "Synced",
         "backup" => "Backed up only",
         "off" => "Off",
-        _ => "Not shown",
+        _ => "-",
     };
     let g = group(
         "What syncs on each computer",
@@ -1549,34 +1549,32 @@ fn each_computer(ui: &Rc<Ui>, choices: &Value) -> adw::PreferencesGroup {
     let empty = Vec::new();
     for item in choices["items"].as_array().unwrap_or(&empty) {
         let name = text(&item["name"]);
-        let others: Vec<String> = item["choices"]
+        let file = item["kind"] == "files";
+        // a file is chosen here; folders and settings by their own switches
+        let shown: Vec<String> = item["choices"]
             .as_object()
             .into_iter()
             .flatten()
-            .filter(|(device, _)| **device != me)
+            .filter(|(device, _)| !file || **device != me)
             .map(|(device, w)| format!("{device}: {}", label(w.as_str().unwrap_or_default())))
             .collect();
-        let rw = row(&name, &others.join(" · "));
-        // a file can be backed up only; a folder or a group syncs or is off
-        let words: Vec<&str> = if item["kind"] == "files" {
-            WORDS.to_vec()
-        } else {
-            vec!["sync", "off"]
-        };
-        let labels: Vec<&str> = words.iter().map(|w| label(w)).collect();
-        let pick = gtk::DropDown::from_strings(&labels);
-        pick.set_valign(gtk::Align::Center);
-        let mine = item["choices"][&me].as_str().unwrap_or_default();
-        if let Some(i) = words.iter().position(|w| *w == mine) {
-            pick.set_selected(i as u32);
-        }
-        let ui = ui.clone();
-        pick.connect_selected_notify(move |p| {
-            if let Some(w) = words.get(p.selected() as usize) {
-                ui.act(&["omacloud", "choose", &name, w], "Changed here");
+        let rw = row(&name, &shown.join(" · "));
+        if file {
+            let labels: Vec<&str> = WORDS.iter().map(|w| label(w)).collect();
+            let pick = gtk::DropDown::from_strings(&labels);
+            pick.set_valign(gtk::Align::Center);
+            let mine = item["choices"][&me].as_str().unwrap_or_default();
+            if let Some(i) = WORDS.iter().position(|w| *w == mine) {
+                pick.set_selected(i as u32);
             }
-        });
-        rw.add_suffix(&pick);
+            let ui = ui.clone();
+            pick.connect_selected_notify(move |p| {
+                if let Some(w) = WORDS.get(p.selected() as usize) {
+                    ui.act(&["omacloud", "choose", &name, w], "Changed here");
+                }
+            });
+            rw.add_suffix(&pick);
+        }
         g.add(&rw);
     }
     // a settings file not listed yet: backed up only, to start
@@ -1664,8 +1662,8 @@ fn settings(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         "Omarchy settings",
         "The shared files in Omarchy's dots manifest (bindings, look and feel, terminals, \
          shell), AI agents' settings and skills, Chromium's bookmarks and settings, and \
-         saved Wi-Fi networks. Machine specific ones, like monitors, and sign-in files stay \
-         on each machine; API keys written into settings files sync with them, encrypted.",
+         saved Wi-Fi networks. Ones about the computer, like monitors, are backed up only; \
+         sign-in files are off. API keys written into settings files sync with them, encrypted.",
     );
     let switch = adw::SwitchRow::builder()
         .title("Sync settings on this device")

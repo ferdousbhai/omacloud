@@ -618,7 +618,7 @@ fn versions_find_a_folder_another_computer_added() {
     let s = json(&h.run("b", &["choose", &claude, "backup"]));
     assert_eq!(s["data"]["choice"], "backup", "{s}");
     let s = json(&h.run("b", &["settings", "status"]));
-    assert_eq!(s["data"]["kept"], serde_json::json!([".claude/CLAUDE.md"]), "{s}");
+    assert_eq!(s["data"]["own"], serde_json::json!([".claude/CLAUDE.md"]), "{s}");
     let monitors = h.path("home/.config/hypr/monitors.lua");
     let monitors = monitors.to_string_lossy();
     // about the computer: backed up or off, never synced
@@ -673,7 +673,7 @@ fn versions_find_a_folder_another_computer_added() {
         "sync"
     );
     let s = json(&h.run("b", &["settings", "status"]));
-    assert_eq!(s["data"]["kept"], serde_json::json!([]), "{s}");
+    assert_eq!(s["data"]["own"], serde_json::json!([]), "{s}");
 }
 
 #[test]
