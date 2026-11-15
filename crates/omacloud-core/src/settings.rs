@@ -62,6 +62,8 @@ pub struct Manifest {
     skip: BTreeSet<String>,
     /// Files this computer keeps as its own, though the manifest shares them.
     keep: BTreeSet<PathBuf>,
+    /// Files this computer leaves out: neither shared nor kept as its own.
+    off: BTreeSet<PathBuf>,
 }
 
 impl Manifest {
@@ -108,6 +110,7 @@ impl Manifest {
             omarchy,
             skip: BTreeSet::new(),
             keep: BTreeSet::new(),
+            off: BTreeSet::new(),
         })
     }
 
@@ -163,6 +166,28 @@ impl Manifest {
         &self.keep
     }
 
+    /// The same manifest, with these files left out here (relative to home).
+    #[must_use]
+    pub fn leaving_out(mut self, files: &BTreeSet<PathBuf>) -> Self {
+        self.off.clone_from(files);
+        self
+    }
+
+    /// The files left out here.
+    #[must_use]
+    pub fn left_out(&self) -> &BTreeSet<PathBuf> {
+        &self.off
+    }
+
+    /// Whether `rel` is a settings file the manifest names, shared or a
+    /// computer's own, so one a computer can choose about.
+    #[must_use]
+    pub fn lists(&self, rel: &Path) -> bool {
+        (self.matching(Tier::Shared, rel) || self.matching(Tier::Machine, rel))
+            && (!self.matching(Tier::Local, rel) || self.matching(Tier::Machine, rel))
+            && !secret_name(rel)
+    }
+
     fn matching(&self, tier: Tier, rel: &Path) -> bool {
         self.entries
             .iter()
@@ -174,6 +199,7 @@ impl Manifest {
     #[must_use]
     pub fn is_machine(&self, rel: &Path) -> bool {
         (self.matching(Tier::Machine, rel) || self.keep.contains(rel))
+            && !self.off.contains(rel)
             && !secret_name(rel)
             && !self.skip.contains(group_of(rel))
     }
@@ -228,6 +254,7 @@ impl Manifest {
             && !self.matching(Tier::Local, rel)
             && !self.matching(Tier::Machine, rel)
             && !self.keep.contains(rel)
+            && !self.off.contains(rel)
             && !secret_name(rel)
             && !self.skip.contains(group_of(rel))
     }

@@ -65,6 +65,7 @@ fn reads_what_the_engine_wrote() {
             state_path: None,
             settings: None,
             folders: None,
+            choices: None,
         },
         coord,
     )

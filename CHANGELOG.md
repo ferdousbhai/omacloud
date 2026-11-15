@@ -2,17 +2,16 @@
 
 ## Unreleased
 
+- `omacloud choose` shows what syncs on every computer of the account, and
+  `omacloud choose <what> sync|backup|off` changes it on this one: for a folder, a group
+  of settings or one settings file. Backup keeps a file, with its versions, from this
+  computer only (a `CLAUDE.md` that only makes sense on one laptop, say). The app shows
+  the same under Devices.
 - Settings about one computer are backed up: its monitors, `hyprland.lua`, autostart,
-  touchpad, the bar's plugins and Claude Code's `settings.local.json` are kept with their
-  versions under that computer's name, and never written on another.
-- `omacloud settings keep <file>` makes a shared settings file this computer's own (a
-  `CLAUDE.md` that only makes sense on one laptop, say); `settings share` undoes it. A
-  setting changed on two computers can also be settled as Keep Each, in the app too.
-- `omacloud restore-machine --from <computer> --replacing` brings that computer's own
-  settings to the one taking its place, for 30 days after it was removed too. Removing a
-  computer takes its own settings out of the latest version.
-- The app lists this computer's own settings, keeps a file there (Choose…) and shares
-  one again.
+  touchpad, the bar's plugins and Claude Code's `settings.local.json`, never written on
+  another. A setting changed on two computers can also be settled as Keep Each.
+- `omacloud restore-machine --from <computer> --replacing` brings that computer's
+  backed-up settings to the one taking its place, for 30 days after it was removed too.
 
 ## 0.0.28 (2026-11-14)
 

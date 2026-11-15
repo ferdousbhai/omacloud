@@ -69,6 +69,7 @@ impl World {
             state_path: state,
             settings: None,
             folders: None,
+            choices: None,
         }
     }
 
@@ -513,6 +514,7 @@ fn rotation_locks_out_removed_devices_and_keeps_history() -> Result<()> {
             state_path: None,
             settings: None,
             folders: None,
+            choices: None,
         },
         w.coord.clone(),
     )?;
@@ -1295,7 +1297,7 @@ fn each_computers_own_settings_are_kept_apart_and_follow_its_replacement() -> Re
     assert_eq!(fs::read_to_string(hb.join(claude))?, "only on b, edited\n");
     assert_eq!(b.settings_status().held, [PathBuf::from(claude)]);
     // its copy as b's own goes, so a replacement wouldn't bring it back
-    assert!(b.forget_own(Path::new(claude))?);
+    assert_eq!(b.tidy_own()?, 1);
     assert_eq!(
         b.versions(&Path::new(MACHINES).join(w.public("b")).join(claude))?
             .last()

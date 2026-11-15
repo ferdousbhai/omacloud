@@ -46,6 +46,7 @@ fn engine(
             state_path: None,
             settings: None,
             folders: None,
+            choices: None,
         },
         coord,
     )

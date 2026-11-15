@@ -145,8 +145,8 @@ of anything it replaces. A change made on two machines that doesn't merge is
 held for you to choose (Keep Mine, Keep Theirs, or Keep Each).
 
 A third kind sits between shared and local: a computer's own settings
-(`machine` entries, and shared files a computer keeps through
-`settings keep`, listed in its config). They are stored under
+(`machine` entries, and shared files a computer chooses to back up only
+with `choose`, listed in its config, as are the files it turns off). They are stored under
 `.omacloud/machines/<device key>/` (names can repeat; keys can't), so they have versions and survive the
 computer, but each computer writes only its own folder and never applies
 another's; older versions ignore the folder, and their pushes leave it as it

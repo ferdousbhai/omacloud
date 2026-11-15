@@ -43,7 +43,8 @@ diff -r --no-dereference "$work/A" "$work/B"
 restic_restore() { # repository password target
   RESTIC_PASSWORD=$2 $RESTIC -r "$1" --no-lock check --read-data
   RESTIC_PASSWORD=$2 $RESTIC -r "$1" --no-lock restore latest --target "$3"
-  diff -r --no-dereference "$work/A" "$3"
+  # Omacloud's own files (what each computer chose) restore beside yours
+  diff -r --no-dereference --exclude=.omacloud "$work/A" "$3"
   [ "$(stat -c %a "$3/src/b.rs")" = 755 ]
 }
 restic_restore "$work/repo" "$password" "$work/restored"

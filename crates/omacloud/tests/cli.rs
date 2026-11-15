@@ -256,7 +256,8 @@ fn sync_reports_what_it_did() {
     h.create();
     std::fs::write(h.path("A/hello.txt"), "hi").unwrap();
     let v = json(&h.run("a", &["sync"]));
-    assert_eq!(v["data"]["pushed"], 1, "{v}");
+    // the file, and what syncs on this computer (`omacloud choose`)
+    assert_eq!(v["data"]["pushed"], 2, "{v}");
     assert_eq!(v["data"]["conflicts"], 0);
     let text = h.run("a", &["sync", "--styled"]);
     assert!(
@@ -609,34 +610,70 @@ fn versions_find_a_folder_another_computer_added() {
     let s = json(&h.run("b", &["settings", "unskip", "agents"]));
     assert_eq!(s["data"]["skipped"], serde_json::json!([]), "{s}");
 
-    // a shared file kept as this computer's own, and shared again
+    // choosing, one thing at a time
     let claude = h.path("home/.claude/CLAUDE.md");
     std::fs::create_dir_all(claude.parent().unwrap()).unwrap();
     std::fs::write(&claude, "only here\n").unwrap();
     let claude = claude.to_string_lossy();
-    let s = json(&h.run("b", &["settings", "keep", &claude]));
+    let s = json(&h.run("b", &["choose", &claude, "backup"]));
+    assert_eq!(s["data"]["choice"], "backup", "{s}");
+    let s = json(&h.run("b", &["settings", "status"]));
     assert_eq!(s["data"]["kept"], serde_json::json!([".claude/CLAUDE.md"]), "{s}");
     let monitors = h.path("home/.config/hypr/monitors.lua");
-    machine_error(
-        &h.run("b", &["settings", "keep", &monitors.to_string_lossy()]),
-        "usage",
-        2,
+    let monitors = monitors.to_string_lossy();
+    // about the computer: backed up or off, never synced
+    machine_error(&h.run("b", &["choose", &monitors, "sync"]), "usage", 2);
+    assert_eq!(
+        json(&h.run("b", &["choose", &monitors, "off"]))["data"]["choice"],
+        "off"
     );
-    machine_error(&h.run("b", &["settings", "keep", "/etc/hosts"]), "usage", 2);
-    // a link would be neither shared nor stored as this computer's
+    machine_error(&h.run("b", &["choose", "/etc/hosts", "off"]), "usage", 2);
+    machine_error(&h.run("b", &["choose", "agents", "backup"]), "usage", 2);
+    machine_error(&h.run("b", &["choose", "Documents", "backup"]), "usage", 2);
+    machine_error(&h.run("b", &["choose", &claude]), "usage", 2);
+    // a link would be neither synced nor backed up from here
     let real = h.path("home/dots-bashrc");
     std::fs::write(&real, "x\n").unwrap();
     let bashrc = h.path("home/.bashrc");
     std::os::unix::fs::symlink(&real, &bashrc).unwrap();
     machine_error(
-        &h.run("b", &["settings", "keep", &bashrc.to_string_lossy()]),
+        &h.run("b", &["choose", &bashrc.to_string_lossy(), "backup"]),
         "usage",
         2,
     );
     std::fs::remove_file(&bashrc).unwrap();
-    let s = json(&h.run("b", &["settings", "share", &claude]));
+    // a file in a folder, by this computer's ignore rules
+    let note = h.path("home/Documents/draft.md");
+    std::fs::create_dir_all(note.parent().unwrap()).unwrap();
+    std::fs::write(&note, "x\n").unwrap();
+    json(&h.run("b", &["choose", &note.to_string_lossy(), "off"]));
+    let rules = std::fs::read_to_string(h.path("b.ignore")).unwrap_or_default();
+    assert!(rules.lines().any(|l| l == "/Documents/draft.md"), "{rules}");
+    json(&h.run("b", &["choose", &note.to_string_lossy(), "sync"]));
+    let rules = std::fs::read_to_string(h.path("b.ignore")).unwrap_or_default();
+    assert!(!rules.contains("draft.md"), "{rules}");
+
+    // every computer's choices, side by side
+    json(&h.run("a", &["sync"]));
+    json(&h.run("b", &["sync"]));
+    let all = json(&h.run("a", &["choose"]));
+    let items = all["data"]["items"].as_array().unwrap();
+    let find = |name: &str| {
+        items
+            .iter()
+            .find(|i| i["name"] == name)
+            .unwrap_or_else(|| panic!("{name}: {all}"))
+    };
+    assert_eq!(find("~/.claude/CLAUDE.md")["choices"]["b"], "backup", "{all}");
+    assert_eq!(find("~/.config/hypr/monitors.lua")["choices"]["b"], "off", "{all}");
+    assert_eq!(find("agents")["choices"]["a"], "sync", "{all}");
+    // back to synced
+    assert_eq!(
+        json(&h.run("b", &["choose", &claude, "sync"]))["data"]["choice"],
+        "sync"
+    );
+    let s = json(&h.run("b", &["settings", "status"]));
     assert_eq!(s["data"]["kept"], serde_json::json!([]), "{s}");
-    machine_error(&h.run("b", &["settings", "share", &claude]), "not_found", 4);
 }
 
 #[test]

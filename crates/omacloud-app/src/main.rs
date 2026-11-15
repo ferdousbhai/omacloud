@@ -1517,6 +1517,8 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     }
     page.add(&g);
 
+    page.add(&each_computer(ui, &s["choices"]));
+
     let removed = list("removed");
     if !removed.is_empty() {
         let g = group("Removed", "");
@@ -1526,6 +1528,80 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
         page.add(&g);
     }
     page
+}
+
+/// What syncs on each computer, one row per folder, group of settings or
+/// settings file, with this computer's choice to change.
+fn each_computer(ui: &Rc<Ui>, choices: &Value) -> adw::PreferencesGroup {
+    const WORDS: [&str; 3] = ["sync", "backup", "off"];
+    let label = |w: &str| match w {
+        "sync" => "Synced",
+        "backup" => "Backed up only",
+        "off" => "Off",
+        _ => "Not shown",
+    };
+    let g = group(
+        "What syncs on each computer",
+        "Synced: the same on every computer. Backed up only: kept from that computer, not synced. \
+         Off: neither.",
+    );
+    let me = text(&choices["this_device"]);
+    let empty = Vec::new();
+    for item in choices["items"].as_array().unwrap_or(&empty) {
+        let name = text(&item["name"]);
+        let others: Vec<String> = item["choices"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(device, _)| **device != me)
+            .map(|(device, w)| format!("{device}: {}", label(w.as_str().unwrap_or_default())))
+            .collect();
+        let rw = row(&name, &others.join(" · "));
+        // a file can be backed up only; a folder or a group syncs or is off
+        let words: Vec<&str> = if item["kind"] == "files" {
+            WORDS.to_vec()
+        } else {
+            vec!["sync", "off"]
+        };
+        let labels: Vec<&str> = words.iter().map(|w| label(w)).collect();
+        let pick = gtk::DropDown::from_strings(&labels);
+        pick.set_valign(gtk::Align::Center);
+        let mine = item["choices"][&me].as_str().unwrap_or_default();
+        if let Some(i) = words.iter().position(|w| *w == mine) {
+            pick.set_selected(i as u32);
+        }
+        let ui = ui.clone();
+        pick.connect_selected_notify(move |p| {
+            if let Some(w) = words.get(p.selected() as usize) {
+                ui.act(&["omacloud", "choose", &name, w], "Changed here");
+            }
+        });
+        rw.add_suffix(&pick);
+        g.add(&rw);
+    }
+    // a settings file not listed yet: backed up only, to start
+    let add = row("Back up a settings file only", "like ~/.claude/CLAUDE.md, not synced");
+    let b = button("Choose…", Some("flat"));
+    let ui = ui.clone();
+    b.connect_clicked(move |_| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dialog = gtk::FileDialog::builder()
+            .title("Back up only")
+            .initial_folder(&gtk::gio::File::for_path(&home))
+            .build();
+        let ui = ui.clone();
+        dialog.open(Some(&ui.window.clone()), gtk::gio::Cancellable::NONE, move |file| {
+            if let Some(path) = file.ok().and_then(|f| f.path()) {
+                ui.act(
+                    &["omacloud", "choose", &path.to_string_lossy(), "backup"],
+                    "Backed up only",
+                );
+            }
+        });
+    });
+    add.add_suffix(&b);
+    g.add(&add);
+    g
 }
 
 /// A computer lost or stolen: removed, and cut off as far as the storage allows.
@@ -1626,62 +1702,6 @@ fn settings(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     }
 
     let empty = Vec::new();
-    if on && st["dormant"].is_null() {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let strings = |k: &str| -> Vec<String> {
-            st[k]
-                .as_array()
-                .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
-                .unwrap_or_default()
-        };
-        let kept = strings("kept");
-        // kept files missing here still show, to be shared again
-        let mut own = strings("own");
-        own.extend(kept.iter().filter(|k| !own.contains(k)).cloned().collect::<Vec<_>>());
-        own.sort();
-        let g = group(
-            "This computer's own",
-            "Backed up with their versions, never written on another computer.",
-        );
-        for rel in &own {
-            let rw = row(&format!("~/{rel}"), "");
-            if kept.contains(rel) {
-                let b = button("Share", Some("flat"));
-                let (ui, path) = (ui.clone(), format!("{home}/{rel}"));
-                b.connect_clicked(move |_| {
-                    ui.act(&["omacloud", "settings", "share", &path], "Shared again");
-                });
-                rw.add_suffix(&b);
-            }
-            g.add(&rw);
-        }
-        let add = row(
-            "Keep a file on this computer",
-            "a shared setting, like ~/.claude/CLAUDE.md",
-        );
-        let b = button("Choose…", Some("flat"));
-        {
-            let (ui, home) = (ui.clone(), home.clone());
-            b.connect_clicked(move |_| {
-                let dialog = gtk::FileDialog::builder()
-                    .title("Keep on this computer")
-                    .initial_folder(&gtk::gio::File::for_path(&home))
-                    .build();
-                let ui = ui.clone();
-                dialog.open(Some(&ui.window.clone()), gtk::gio::Cancellable::NONE, move |file| {
-                    if let Some(path) = file.ok().and_then(|f| f.path()) {
-                        ui.act(
-                            &["omacloud", "settings", "keep", &path.to_string_lossy()],
-                            "Kept on this computer",
-                        );
-                    }
-                });
-            });
-        }
-        add.add_suffix(&b);
-        g.add(&add);
-        page.add(&g);
-    }
     let held = st["held"].as_array().unwrap_or(&empty);
     if !held.is_empty() {
         let home = std::env::var("HOME").unwrap_or_default();

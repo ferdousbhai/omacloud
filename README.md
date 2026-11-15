@@ -231,20 +231,33 @@ are both kept, the older as `name.sync-conflict-<date>-<time>-<device>.ext`.
 Settings that already differ stay as each computer has them until you choose
 (`omacloud settings`): this one's, the other's, or each keeping its own.
 
-**Each computer's own settings** are backed up, with their versions, under its
-name, and never written on another computer: `monitors.lua`, `hyprland.lua`,
-`autostart.lua`, `input.lua`, the bar's `shell.json` and Claude Code's
-`settings.local.json`. Any other shared file can be made one computer's own,
-say a `CLAUDE.md` that only makes sense on the ThinkPad:
-`omacloud settings keep ~/.claude/CLAUDE.md` (`settings share` undoes it; the
-other computers keep the shared copy). Where only a few lines differ, keep the
-rest shared and put those lines in a file of the computer's own that the shared
-one includes (`@~/.claude/CLAUDE.thinkpad.md` in a `CLAUDE.md`, `[include]` in
-git's config). A computer taking another's place gets its own settings too:
-`omacloud restore-machine --from thinkpad --replacing`. Removing a computer
-from the account takes its own settings out of the latest version; they stay
-in the history for 30 days, so `--replacing` still finds them. In the app,
-Omarchy > This computer's own lists them, and Choose… keeps a file there. From then on a delete on one computer deletes on the others,
+**Choosing what syncs.** Each computer chooses for itself, one of three for
+every folder, group of settings and settings file:
+
+| | |
+|---|---|
+| **synced** | the same on every computer |
+| **backed up only** | kept, with its versions, from this computer; not synced |
+| **off** | neither synced nor backed up from this computer |
+
+```sh
+omacloud choose                                # what syncs on every computer
+omacloud choose Pictures off                   # a folder
+omacloud choose wifi off                       # a group of settings
+omacloud choose ~/.claude/CLAUDE.md backup     # a file only this computer uses
+```
+
+The app shows the same under Devices > What syncs on each computer. Files about
+the machine (`monitors.lua`, `hyprland.lua`, `autostart.lua`, `input.lua`, the
+bar's `shell.json`, Claude Code's `settings.local.json`) are backed up only, or
+off; they never sync. Where only a few lines of a file differ, keep it synced
+and put those lines in a file that's backed up only, which the synced one
+includes (`@~/.claude/CLAUDE.thinkpad.md` in a `CLAUDE.md`). A computer taking
+another's place gets the other's backed-up files with
+`omacloud restore-machine --from thinkpad --replacing`, for 30 days after the
+old one was removed too.
+
+From then on a delete on one computer deletes on the others,
 and stays in Recently Deleted for 30 days; name a file `name.nosync`, or switch its
 folder off, to keep it on one computer.
 

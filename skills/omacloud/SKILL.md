@@ -130,8 +130,10 @@ refresh token already allowed in OMACLOUD_DROPBOX_REFRESH_TOKEN. Each person use
 own Dropbox, so `invite` doesn't apply; `bucket set-key` needs no key id there.
 
 Settings: `settings on|off`, `settings skip|unskip shell|agents|apps|theme|chromium|wifi`,
-`settings keep|share PATH` (a shared file kept as this computer's own: backed up,
-never written elsewhere), `settings resolve PATH --keep local|remote|each`.
+`settings resolve PATH --keep local|remote|each`. What syncs per computer:
+`choose` shows every computer's; `choose WHAT sync|backup|off` changes this
+one's (WHAT: a folder, `settings`, a group, or a settings file; backup is for
+files only: kept from this computer, not synced).
 Changes can affect desktop settings, browser configuration, Wi-Fi, and agent
 settings across computers. Existing settings can contain API keys. Do not sync
 or settle conflicts without the owner's requested scope; never blindly prefer

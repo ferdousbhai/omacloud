@@ -153,6 +153,9 @@ pub struct Setup {
     /// Sync chosen folders of home (`folder` is then home), as iCloud syncs
     /// Desktop and Documents; `None` syncs all of `folder`.
     pub folders: Option<Folders>,
+    /// Where each computer's choices of what syncs are kept locally (see
+    /// [`Engine::record_choices`]); `None` doesn't publish them.
+    pub choices: Option<PathBuf>,
 }
 
 /// Which top-level folders of home sync. The account's list is every folder
@@ -203,6 +206,9 @@ const GROUP_LEFT_OUT: &str = ".settings group ";
 
 /// Where sealed secrets bundles live in the synced tree, one per device.
 pub const SECRETS: &str = ".omacloud/secrets";
+
+/// Where each computer says what syncs on it, one `<device key>.json` each.
+pub const CHOICES: &str = ".omacloud/choices";
 
 /// Settings sync on this device, as `omacloud settings` shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -403,6 +409,8 @@ pub struct Engine {
     /// Files pulls wrote here since [`Engine::take_arrived`] was last asked.
     arrived: Arrived,
     folders: Option<Folders>,
+    /// See [`Setup::choices`].
+    choices: Option<PathBuf>,
     /// The folders syncing here, when syncing chosen folders of home:
     /// the account's, less the skipped ones.
     synced: BTreeSet<String>,
@@ -457,6 +465,7 @@ impl Engine {
             state_path,
             settings,
             folders,
+            choices,
         } = setup;
         let root = root.as_str();
         let state: State = match state_path.as_deref().map(fs::read) {
@@ -494,6 +503,7 @@ impl Engine {
                 .map(|f| f.add.difference(&f.skip).cloned().collect())
                 .unwrap_or_default(),
             folders,
+            choices,
         })
     }
 
@@ -632,6 +642,7 @@ impl Engine {
                     s.manifest
                         .kept()
                         .iter()
+                        .chain(s.manifest.left_out())
                         .map(|p| Path::new(SETTINGS).join(p).to_string_lossy().into_owned()),
                 );
             }
@@ -992,26 +1003,42 @@ impl Engine {
         self.delete_in_cloud(&Path::new(MACHINES).join(key))
     }
 
-    /// Take this computer's own copy of a file it shares again out of the
-    /// latest version, so no computer taking its place brings it back
-    /// (`rest` relative to home). Returns whether there was one.
+    /// Make the latest version hold only this computer's own settings: a
+    /// copy of a file it now shares or leaves out goes (it stays in the
+    /// history), so a computer taking its place doesn't bring it back.
+    /// What a group left out here has is left alone. Returns how many went.
     ///
     /// # Errors
     ///
     /// On storage errors, or when other computers keep winning the push.
-    pub fn forget_own(&mut self, rest: &Path) -> Result<bool> {
-        // only a file the manifest shares, synced here and not kept: a
-        // machine file, or one of a group left out, keeps its copy
-        let shared_here = self.settings.as_ref().is_some_and(|s| {
-            s.manifest.can_keep(rest)
-                && !s.manifest.kept().contains(rest)
-                && !s.manifest.skipped().contains(settings::group_of(rest))
-        });
-        if !shared_here {
-            return Ok(false);
+    pub fn tidy_own(&mut self) -> Result<usize> {
+        let Some(manifest) = self.settings.as_ref().map(|s| s.manifest.clone()) else {
+            return Ok(0);
+        };
+        for _ in 0..MAX_ROUNDS {
+            self.sync()?;
+            let repo = self.open_repo()?;
+            let own = self.own_machine();
+            let Some(dir) = Trees::new(&repo).lookup(self.base_tree()?, &own)?.filter(Node::is_dir) else {
+                return Ok(0);
+            };
+            let mut files = BTreeSet::new();
+            walk_tree(&repo, dir.subtree, Path::new(""), &|_: &Path, _| false, &mut files)?;
+            let gone: BTreeMap<PathBuf, Local> = files
+                .into_iter()
+                .filter(|rest| !manifest.is_machine(rest) && !manifest.skipped().contains(settings::group_of(rest)))
+                .map(|rest| (own.join(rest), Local::Delete))
+                .collect();
+            if gone.is_empty() {
+                return Ok(0);
+            }
+            let n = gone.len();
+            if self.push(&repo, gone)?.is_some() {
+                self.save_state()?;
+                return Ok(n);
+            }
         }
-        let path = self.own_machine().join(rest);
-        self.delete_in_cloud(&path)
+        bail!("other computers kept syncing: try again")
     }
 
     /// Delete `path` from the latest version, after a sync.
@@ -1199,6 +1226,9 @@ impl Engine {
         if let Ok(name) = path.strip_prefix(SECRETS) {
             return self.settings.as_ref().map(|s| s.secrets.join(name));
         }
+        if let Ok(name) = path.strip_prefix(CHOICES) {
+            return self.choices.as_ref().map(|d| d.join(name));
+        }
         if let Ok(rest) = path.strip_prefix(MERGED) {
             return self.settings_on().map(|s| s.merged.join("synced").join(rest));
         }
@@ -1222,6 +1252,13 @@ impl Engine {
                 || is_dir
                 || name.components().count() != 1
                 || name.extension().is_none_or(|e| e != "txt");
+        }
+        // what each computer chose to sync, likewise
+        if let Ok(name) = path.strip_prefix(CHOICES) {
+            return self.choices.is_none()
+                || is_dir
+                || name.components().count() != 1
+                || name.extension().is_none_or(|e| e != "json");
         }
         // sealed secrets bundles, likewise
         if let Ok(name) = path.strip_prefix(SECRETS) {
@@ -1288,6 +1325,49 @@ impl Engine {
         fs::write(&dest, list)?;
         _ = self.pending.insert(Path::new(PACKAGES).join(name));
         Ok(true)
+    }
+
+    /// Record what syncs on this computer, for the others to show; it syncs
+    /// with the next sync, when it changed. Returns whether it did.
+    ///
+    /// # Errors
+    ///
+    /// If the file can't be written.
+    pub fn record_choices(&mut self, choices: &Value) -> Result<bool> {
+        let Some(dir) = self.choices.clone() else {
+            return Ok(false);
+        };
+        let name = format!("{}.json", self.device_key());
+        let dest = dir.join(&name);
+        let text = serde_json::to_string_pretty(choices)? + "\n";
+        if fs::read_to_string(&dest).is_ok_and(|old| old == text) {
+            return Ok(false);
+        }
+        fs::create_dir_all(&dir)?;
+        replace_file(&dest, text.as_bytes())?;
+        _ = self.pending.insert(Path::new(CHOICES).join(name));
+        Ok(true)
+    }
+
+    /// What each computer recorded as syncing on it (see
+    /// [`Engine::record_choices`]), by device key, as of the last sync.
+    #[must_use]
+    pub fn choices(&self) -> BTreeMap<String, Value> {
+        let Some(dir) = &self.choices else {
+            return BTreeMap::new();
+        };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return BTreeMap::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let key = name.strip_suffix(".json")?.to_string();
+                let value = serde_json::from_slice(&fs::read(e.path()).ok()?).ok()?;
+                Some((key, value))
+            })
+            .collect()
     }
 
     /// Store this device's sealed secrets bundle; it syncs with the next
@@ -3675,7 +3755,7 @@ fn walk_tree_nodes(
         let path = rel.join(name);
         // settings directories are walked for the files in them
         let settings_dir = node.is_dir()
-            && [SETTINGS, PACKAGES, SECRETS, MERGED, MACHINES]
+            && [SETTINGS, PACKAGES, SECRETS, MERGED, MACHINES, CHOICES]
                 .iter()
                 .any(|p| Path::new(p).starts_with(&path) || path.starts_with(p));
         if !settings_dir && skip(&path, node.is_dir()) {
