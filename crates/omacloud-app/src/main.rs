@@ -1704,10 +1704,10 @@ fn settings(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     if !held.is_empty() {
         let home = std::env::var("HOME").unwrap_or_default();
         let g = group(
-            "Changed on two machines",
-            "These changed here and on another device in ways that don't merge. \
-             This machine keeps its version until you choose. Keep Each makes it \
-             this computer's own: backed up, but no longer the same everywhere.",
+            "Changed on two computers",
+            "These changed here and on another computer in ways that don't merge. \
+             This computer keeps its version until you choose. Keep Each backs up \
+             this computer's version only, and the others' stays synced.",
         );
         for p in held {
             let rel = text(p);

@@ -1323,8 +1323,8 @@ fn each_computers_own_settings_are_kept_apart_and_follow_its_replacement() -> Re
     c.sync()?;
     assert_eq!(fs::read_to_string(hc.join(claude))?, "everywhere, edited\n");
     assert!(!hc.join(monitors).exists());
-    let theirs = c.machine_files_of("b")?;
-    assert_eq!(theirs, [PathBuf::from(claude), PathBuf::from(monitors)]);
+    // CLAUDE.md syncs here, so it's chosen backed up only first
+    assert_eq!(c.files_to_back_up_for("b")?, [PathBuf::from(claude)]);
     // CLAUDE.md is kept here first, then both are written
     drop(c);
     let mut c = w.engine_with_parsed("c", keeping(&[claude])?)?;

@@ -156,7 +156,7 @@ project of their own ([docs/providers.md](docs/providers.md)).
 - **Omarchy settings:** the shared files in Omarchy's dots manifest
   (bindings, look and feel, terminals, `.bashrc`), never what's about the
   machine, like `monitors.lua`, `input.lua` (touchpad and keyboard) or the bar's
-  `shell.json` (those are each computer's own, below), and your shell's: `.bash_aliases`, `.inputrc`,
+  `shell.json` (those are backed up only, below), and your shell's: `.bash_aliases`, `.inputrc`,
   git's settings, fish's `config.fish` and functions, Neovim, mise,
   lazygit, mpv and fastfetch (not `.bash_profile`, `.profile` or fish's
   `conf.d`, where installers add lines for one machine), herdr's

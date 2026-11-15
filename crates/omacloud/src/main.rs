@@ -254,8 +254,8 @@ enum Cmd {
         /// The device to take packages from
         #[arg(long)]
         from: String,
-        /// This computer takes that device's place: bring its own settings
-        /// too (its monitors, its own CLAUDE.md, ...)
+        /// This computer takes that one's place: bring the settings it backed
+        /// up only too (its monitors, a CLAUDE.md of its own, ...)
         #[arg(long)]
         replacing: bool,
         /// Install the packages (pacman still asks); otherwise only show
@@ -555,8 +555,8 @@ enum Keep {
     Local,
     /// The other device's version
     Remote,
-    /// Each device's own: this one's stays here as this computer's, the
-    /// others share theirs
+    /// Each computer's: this one's is backed up only from here, and the
+    /// others' stays synced
     Each,
 }
 
@@ -643,13 +643,10 @@ struct Config {
     /// Groups of settings this device leaves out
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     settings_skip: std::collections::BTreeSet<String>,
-    /// Shared settings files this device backs up as its own, not synced
-    /// (relative to home)
-    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
-    settings_keep: std::collections::BTreeSet<PathBuf>,
-    /// Settings files this device leaves out: not synced, not backed up
-    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
-    settings_off: std::collections::BTreeSet<PathBuf>,
+    /// Settings files this computer chose apart from the rest (relative to
+    /// home): backed up only, or off
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    settings_files: BTreeMap<PathBuf, Choice>,
     /// Desktop notifications from the daemon: join requests, settings that
     /// need a choice, this device being removed
     #[serde(default = "yes")]
@@ -1259,8 +1256,8 @@ fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
                     .collect();
             let manifest = Manifest::load()?
                 .skipping(&config.settings_skip)
-                .keeping(&config.settings_keep)
-                .leaving_out(&config.settings_off);
+                .keeping(&config.files_chosen(Choice::Backup))
+                .leaving_out(&config.files_chosen(Choice::Off));
             groups.push(Arc::new(
                 omacloud_core::agents::Agents::new(&home).with_manifest(manifest.clone()),
             ));
@@ -1299,6 +1296,17 @@ fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
         Err(err) => return Err(err).context("reading ignore rules"),
     }
     Ok(e)
+}
+
+impl Config {
+    /// The settings files chosen as `choice` here.
+    fn files_chosen(&self, choice: Choice) -> std::collections::BTreeSet<PathBuf> {
+        self.settings_files
+            .iter()
+            .filter(|(_, c)| **c == choice)
+            .map(|(p, _)| p.clone())
+            .collect()
+    }
 }
 
 fn already_set_up(paths: &Paths) -> CliError {
@@ -1581,8 +1589,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             if let Ok(c) = load(paths) {
                 if c.settings != config.settings
                     || c.settings_skip != config.settings_skip
-                    || c.settings_keep != config.settings_keep
-                    || c.settings_off != config.settings_off
+                    || c.settings_files != config.settings_files
                     || c.repo != config.repo
                 {
                     info!("settings sync or the bucket's key changed; restarting into it");
@@ -2125,8 +2132,7 @@ fn run(cli: Cli) -> Out {
                 limits: Limits::default(),
                 settings,
                 settings_skip: std::collections::BTreeSet::new(),
-                settings_keep: std::collections::BTreeSet::new(),
-                settings_off: std::collections::BTreeSet::new(),
+                settings_files: BTreeMap::new(),
                 notifications: true,
                 folders,
                 coordination_bucket: target.coordination_bucket,
@@ -2438,19 +2444,16 @@ fn run(cli: Cli) -> Out {
             _ = record_choices(&paths, &config, &mut e);
             let st = e.sync()?;
             say!(out, "files and settings: pulled {}", st.pulled);
-            // only a computer taking another's place gets that one's own
+            // only a computer taking another's place gets what it backed up only
             let mut taken = Vec::new();
             if replacing {
-                // shared files it kept become this one's own before any is
-                // written, so none goes out as the shared version
-                let manifest = Manifest::load()?;
-                let keep: Vec<PathBuf> = e
-                    .machine_files_of(&from)?
-                    .into_iter()
-                    .filter(|p| !manifest.is_machine(p))
-                    .collect();
+                // files it backed up only that sync here become backed up
+                // only first, so none goes out as the synced version
+                let keep = e.files_to_back_up_for(&from)?;
                 if !keep.is_empty() {
-                    config.settings_keep.extend(keep);
+                    config
+                        .settings_files
+                        .extend(keep.into_iter().map(|p| (p, Choice::Backup)));
                     save(&paths, &config)?;
                     e = engine(&paths, &config)?;
                 }
@@ -2460,7 +2463,7 @@ fn run(cli: Cli) -> Out {
                 }
                 say!(
                     out,
-                    "{from}'s own settings: {} file{} brought here",
+                    "{from}'s backed-up-only settings: {} file{} brought here",
                     taken.len(),
                     if taken.len() == 1 { "" } else { "s" }
                 );
@@ -2504,7 +2507,7 @@ fn run(cli: Cli) -> Out {
                 "from": from,
                 "pulled": st.pulled,
                 "replacing": replacing,
-                "own_settings": taken,
+                "backed_up_only": taken,
                 "packages": packages.data(),
                 "secrets_bundle": has_secrets,
                 "daemon_started": started,
@@ -2845,19 +2848,22 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
                      lost or not trusted, run `omacloud rotate` and `omacloud bucket set-key`."
                 );
             }
-            // its own settings leave the latest version; best effort, after
+            // what it backed up only leaves the latest version; best effort, after
             // the steps that lock it out, so a failure here stops none of them
             let forgot = match e.forget_machine(&key) {
                 Ok(forgot) => forgot,
                 Err(err) => {
-                    say!(out, "{name}'s own settings stay in the latest version for now: {err:#}");
+                    say!(
+                        out,
+                        "{name}'s backed-up-only settings stay in the latest version for now: {err:#}"
+                    );
                     false
                 }
             };
             if forgot {
                 say!(
                     out,
-                    "{name}'s own settings left the latest version; while versions are kept, \
+                    "{name}'s backed-up-only settings left the latest version; while versions are kept, \
                      `omacloud restore-machine --from {name} --replacing` still brings them"
                 );
             }
@@ -2882,7 +2888,7 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
                 );
             }
             let fp = fingerprint(&key);
-            let data = json!({ "removed": { "fingerprint": fp, "name": name }, "rotated": rotated, "own_settings_removed": forgot });
+            let data = json!({ "removed": { "fingerprint": fp, "name": name }, "rotated": rotated, "backed_up_only_removed": forgot });
             Ok(Response::new(data, format!("removed {name} ({fp})"))
                 .human(out.trim_end())
                 .ids(vec![fp]))
@@ -3127,7 +3133,7 @@ fn settings(paths: &Paths, action: SettingsCmd) -> Out {
                         .into(),
                 );
             }
-            // each keeping its own: this one's is backed up only from here
+            // each computer's: this one's is backed up only from here
             if matches!(keep, Keep::Each) && set_file_choice(&mut config, rel, Choice::Backup)? {
                 save(paths, &config)?;
                 e = engine(paths, &config)?;
@@ -3172,7 +3178,8 @@ fn under_home(path: &Path) -> Result<PathBuf> {
 }
 
 /// What a computer chooses for something that can sync.
-#[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 enum Choice {
     /// The same on every computer
     Sync,
@@ -3240,15 +3247,14 @@ fn set_file_choice(config: &mut Config, rel: &Path, choice: Choice) -> Result<bo
                 .into());
         }
     }
-    let before = (config.settings_keep.clone(), config.settings_off.clone());
-    _ = config.settings_keep.remove(rel);
-    _ = config.settings_off.remove(rel);
-    match choice {
-        Choice::Backup if !its_own => _ = config.settings_keep.insert(rel.to_path_buf()),
-        Choice::Off => _ = config.settings_off.insert(rel.to_path_buf()),
-        _ => {}
-    }
-    Ok(before != (config.settings_keep.clone(), config.settings_off.clone()))
+    // synced is the default, and so is backed up only for a file about
+    // this computer: neither is written down
+    let new = (choice != Choice::Sync && !(its_own && choice == Choice::Backup)).then_some(choice);
+    let was = match new {
+        Some(c) => config.settings_files.insert(rel.to_path_buf(), c),
+        None => config.settings_files.remove(rel),
+    };
+    Ok(was != new)
 }
 
 /// Fails unless settings sync on this computer.
@@ -3454,12 +3460,13 @@ fn my_choices(paths: &Paths, config: &Config, e: &mut Engine) -> Value {
     }
     let mut files = serde_json::Map::new();
     if config.settings {
-        // `own` has the kept files that are here; the rest still show
-        for p in e.settings_status().own.iter().chain(&config.settings_keep) {
+        // what's backed up only from here, then each file chosen (one that
+        // isn't here still shows)
+        for p in e.settings_status().own {
             _ = files.insert(format!("~/{}", p.display()), json!("backup"));
         }
-        for p in &config.settings_off {
-            _ = files.insert(format!("~/{}", p.display()), json!("off"));
+        for (p, c) in &config.settings_files {
+            _ = files.insert(format!("~/{}", p.display()), json!(c.word()));
         }
     }
     json!({ "name": config.device, "folders": folders, "settings": settings, "files": files })

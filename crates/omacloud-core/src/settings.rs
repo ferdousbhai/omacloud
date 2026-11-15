@@ -11,7 +11,7 @@
 //! (its monitors, what it starts) that is kept, with its versions, under
 //! that computer's key ([`MACHINES`]) and never written on another. A
 //! person can make any shared file their computer's own too (see
-//! [`Manifest::keeping`]).
+//! [`Manifest::keeping`]). People see this tier as "backed up only".
 //!
 //! As dots does, settings sync stands down ("dormant") when manifest paths
 //! are symlinks or another dotfile manager is in use: those users already
@@ -160,12 +160,6 @@ impl Manifest {
         self
     }
 
-    /// The shared files this computer keeps as its own.
-    #[must_use]
-    pub fn kept(&self) -> &BTreeSet<PathBuf> {
-        &self.keep
-    }
-
     /// The same manifest, with these files left out here (relative to home).
     #[must_use]
     pub fn leaving_out(mut self, files: &BTreeSet<PathBuf>) -> Self {
@@ -173,10 +167,10 @@ impl Manifest {
         self
     }
 
-    /// The files left out here.
-    #[must_use]
-    pub fn left_out(&self) -> &BTreeSet<PathBuf> {
-        &self.off
+    /// The files this computer chose apart from the rest: backed up only,
+    /// or off.
+    pub fn chosen(&self) -> impl Iterator<Item = &PathBuf> {
+        self.keep.iter().chain(&self.off)
     }
 
     /// Whether `rel` is a settings file the manifest names, shared or a

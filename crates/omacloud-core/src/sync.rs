@@ -640,9 +640,7 @@ impl Engine {
                 // a shared file kept here: shared again, it is compared afresh
                 out.extend(
                     s.manifest
-                        .kept()
-                        .iter()
-                        .chain(s.manifest.left_out())
+                        .chosen()
                         .map(|p| Path::new(SETTINGS).join(p).to_string_lossy().into_owned()),
                 );
             }
@@ -1886,14 +1884,14 @@ impl Engine {
         Ok(None)
     }
 
-    /// The own settings of the computer named `from` that could be this
-    /// computer's (relative to home): its own by the manifest, or shared
-    /// files this one would have to keep (see [`Manifest::keeping`]).
+    /// The files the computer named `from` backed up only that sync here
+    /// (relative to home): this computer must choose them backed up only
+    /// before taking its place (see [`Engine::take_machine_files`]).
     ///
     /// # Errors
     ///
     /// On repository errors, or with settings sync off.
-    pub fn machine_files_of(&mut self, from: &str) -> Result<Vec<PathBuf>> {
+    pub fn files_to_back_up_for(&mut self, from: &str) -> Result<Vec<PathBuf>> {
         let manifest = self
             .settings_on()
             .ok_or_else(|| anyhow!("settings sync is off"))?
@@ -1904,7 +1902,7 @@ impl Engine {
         };
         Ok(files
             .into_iter()
-            .filter(|p| manifest.is_machine(p) || manifest.can_keep(p))
+            .filter(|p| manifest.can_keep(p) && !manifest.is_machine(p))
             .collect())
     }
 
@@ -1912,7 +1910,7 @@ impl Engine {
     /// computer taking its place: each one this computer's manifest has as
     /// its own is written into home as it was last (what was here is backed
     /// up first), then syncs as this computer's. Keep shared files first
-    /// (see [`Engine::machine_files_of`]), so none is pushed as shared.
+    /// (see [`Engine::files_to_back_up_for`]), so none is pushed as shared.
     /// Returns the files taken, relative to home.
     ///
     /// # Errors

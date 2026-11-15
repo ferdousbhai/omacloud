@@ -143,7 +143,7 @@ repository to a folder first. It prints secrets: the owner runs it.
 
 Machine migration: `packages restore --from NAME` previews package installation;
 `--yes` runs pacman. `restore-machine --from NAME` is broader: settings, files,
-packages, and daemon startup; with `--replacing` it also brings NAME's own
-settings (monitors, its kept files) for a computer taking its place. It is not a harmless preview. Secret restoration
+packages, and daemon startup; with `--replacing` it also brings what NAME
+backed up only (its monitors, files it chose backup for) for a computer taking its place. It is not a harmless preview. Secret restoration
 and device revocation/key rotation likewise need explicit scope; inspect their
 help and the README first. Never run server deploy/release scripts for user setup.
