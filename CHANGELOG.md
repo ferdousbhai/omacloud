@@ -6,7 +6,9 @@
   `omacloud choose <what> sync|backup|off` changes it on this one: for a folder, a group
   of settings or one settings file. Backup keeps a file, with its versions, from this
   computer only (a `CLAUDE.md` that only makes sense on one laptop, say). The app shows
-  the same under Devices.
+  the same under Devices, a row per computer that opens to everything it keeps.
+- The app's Overview lists every folder together under Folders, your own beside
+  Documents and the rest: they always worked the same.
 - Settings about one computer are backed up: its monitors, `hyprland.lua`, autostart,
   touchpad, the bar's plugins and Claude Code's `settings.local.json`, never written on
   another. A setting changed on two computers can also be settled as Keep Each.

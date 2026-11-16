@@ -3317,13 +3317,13 @@ fn choose(paths: &Paths, what: Option<String>, choice: Option<Choice>) -> Out {
             let name = account.to_string_lossy().into_owned();
             let top = account.components().count() == 1;
             if config.folders.is_some() && (top || abs.is_dir()) {
-                let skipped = config.folders.as_ref().is_some_and(|f| f.skip.contains(&name));
-                let action = match (top, on, skipped) {
-                    (true, true, true) => FoldersCmd::Unskip { name: name.clone() },
-                    (true, true, false) => FoldersCmd::Add { name: name.clone() },
-                    (true, false, _) => FoldersCmd::Skip { name: name.clone() },
-                    (false, true, _) => FoldersCmd::Include { path: name.clone() },
-                    (false, false, _) => FoldersCmd::Exclude { path: name.clone() },
+                // adding takes a skipped folder back too, and also one that
+                // was left out here and never synced (Music, at setup)
+                let action = match (top, on) {
+                    (true, true) => FoldersCmd::Add { name: name.clone() },
+                    (true, false) => FoldersCmd::Skip { name: name.clone() },
+                    (false, true) => FoldersCmd::Include { path: name.clone() },
+                    (false, false) => FoldersCmd::Exclude { path: name.clone() },
                 };
                 folders(paths, action)?;
                 config = load(paths)?;
@@ -3366,6 +3366,10 @@ fn chosen(paths: &Paths, config: &Config, what: &str) -> Result<Chosen> {
     }
     let abs = match what.strip_prefix("~/") {
         Some(rest) => home_dir()?.join(rest),
+        // a folder of home by its name alone (`Work`), wherever this runs
+        None if !what.contains('/') && !what.starts_with('.') && config.folder.join(what).is_dir() => {
+            config.folder.join(what)
+        }
         None => absolute(Path::new(what))?,
     };
     let mut e = engine(paths, config)?;
@@ -3388,7 +3392,12 @@ fn chosen(paths: &Paths, config: &Config, what: &str) -> Result<Chosen> {
         .strip_prefix(&config.folder)
         .ok()
         .and_then(|rel| e.account_path(rel))
-        .filter(|account| config.folders.is_none() || in_account(account));
+        .filter(|account| {
+            // a folder of home not synced yet (`~/Work`) is added like Music
+            let new_folder =
+                account.components().count() == 1 && !account.to_string_lossy().starts_with('.') && abs.is_dir();
+            config.folders.is_none() || in_account(account) || new_folder
+        });
     Ok(match in_folder {
         Some(account) => Chosen::InFolder(abs, account),
         None => Chosen::File(under_home(&abs)?),

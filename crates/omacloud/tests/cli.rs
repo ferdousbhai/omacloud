@@ -653,9 +653,18 @@ fn versions_find_a_folder_another_computer_added() {
     let rules = std::fs::read_to_string(h.path("b.ignore")).unwrap_or_default();
     assert!(!rules.contains("draft.md"), "{rules}");
 
+    // a folder of one's own, by name alone, and a usual one never synced
+    std::fs::create_dir_all(h.path("home/Work")).unwrap();
+    let s = json(&h.run("b", &["choose", "Work", "sync"]));
+    assert_eq!(s["data"]["what"], "Work", "{s}");
+    let s = json(&h.run("b", &["choose", "Music", "sync"]));
+    assert_eq!(s["data"]["what"], "Music", "{s}");
+
     // every computer's choices, side by side
     json(&h.run("a", &["sync"]));
     json(&h.run("b", &["sync"]));
+    // what b chose since its last sync reaches a with the next ones
+    json(&h.run("a", &["sync"]));
     let all = json(&h.run("a", &["choose"]));
     let items = all["data"]["items"].as_array().unwrap();
     let find = |name: &str| {
@@ -667,6 +676,8 @@ fn versions_find_a_folder_another_computer_added() {
     assert_eq!(find("~/.claude/CLAUDE.md")["choices"]["b"], "backup", "{all}");
     assert_eq!(find("~/.config/hypr/monitors.lua")["choices"]["b"], "off", "{all}");
     assert_eq!(find("agents")["choices"]["a"], "sync", "{all}");
+    assert_eq!(find("Work")["choices"]["b"], "sync", "{all}");
+    assert_eq!(find("Music")["choices"]["b"], "sync", "{all}");
     // back to synced
     assert_eq!(
         json(&h.run("b", &["choose", &claude, "sync"]))["data"]["choice"],

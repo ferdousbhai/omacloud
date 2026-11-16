@@ -133,9 +133,9 @@ project of their own ([docs/providers.md](docs/providers.md)).
 - **Folders:** you choose, as on iCloud: setup shows switches for Desktop,
   Documents, Pictures, Music, Videos and Downloads with their sizes
   (Desktop, Documents and Pictures start on), and Overview has the same switches
-  later: the folders every Omarchy computer has under Omarchy folders, and
-  folders of your own under Omacloud Drive, where Add a folder from your home has
-  a switch for every other folder in your home. Make a new folder in your home and a notification offers to
+  later, in one Folders list where your own folders sit beside the usual ones
+  and Add a folder from your home has a switch for every other folder in your
+  home. Every folder works the same way. Make a new folder in your home and a notification offers to
   sync it: click it. Switching one
   off on a computer keeps its files there and stops syncing it there only.
   Folders match by what they are, so a German computer's `Dokumente` is
@@ -144,8 +144,8 @@ project of their own ([docs/providers.md](docs/providers.md)).
   a subfolder (see Choosing what syncs). Change these at any time: what comes back loses nothing. Skipping
   keeps the cloud's copy; `omacloud folders remove Documents` takes it out, and no
   computer deletes its files.
-- **Omacloud Drive, every file, kept here or not:** `omacloud mount` (or Browse
-  under Omacloud Drive in the app's Overview) shows all your folders in `~/Omacloud`, read-only,
+- **Every file, kept here or not:** `omacloud mount` (or Browse
+  beside Folders in the app's Overview) shows all your folders in `~/Omacloud`, read-only,
   including those skipped on this computer; each file is downloaded when
   it's opened, as iCloud's online-only files are. So a small laptop can
   skip Pictures and still open any photo. It needs `fuse3` (Omarchy has
@@ -247,7 +247,7 @@ omacloud choose wifi off                       # a group of settings
 omacloud choose ~/.claude/CLAUDE.md backup     # a file only this computer uses
 ```
 
-The app shows the same under Devices > What syncs on each computer. Files about
+The app shows the same under Devices > What each computer keeps: a row per computer that opens to its folders and settings, each marked synced, backed up only or off. Files about
 the machine (`monitors.lua`, `hyprland.lua`, `autostart.lua`, `input.lua`, the
 bar's `shell.json`, Claude Code's `settings.local.json`) are backed up only, or
 off; they never sync. Where only a few lines of a file differ, keep it synced

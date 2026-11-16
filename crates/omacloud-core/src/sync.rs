@@ -815,7 +815,13 @@ impl Engine {
             .iter()
             .find(|(_, local)| *local == first)
             .map_or(first, |(name, _)| name.as_str());
-        Some(Path::new(name).join(parts.as_path()))
+        // joining an empty rest would leave a trailing slash
+        let rest = parts.as_path();
+        Some(if rest.as_os_str().is_empty() {
+            PathBuf::from(name)
+        } else {
+            Path::new(name).join(rest)
+        })
     }
 
     /// Whether a synced path's folder syncs here.
@@ -1322,7 +1328,17 @@ impl Engine {
         let dest = dir.join(&name);
         let text = serde_json::to_string_pretty(choices)? + "\n";
         if fs::read_to_string(&dest).is_ok_and(|old| old == text) {
-            return Ok(false);
+            // written by `omacloud choose` since the last sync finished:
+            // that run's engine is gone, so this one pushes it
+            let since = fs::metadata(&dest)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .is_some_and(|t| t.as_secs() >= self.state.synced_at);
+            if since {
+                _ = self.pending.insert(Path::new(CHOICES).join(name));
+            }
+            return Ok(since);
         }
         fs::create_dir_all(&dir)?;
         replace_file(&dest, text.as_bytes())?;

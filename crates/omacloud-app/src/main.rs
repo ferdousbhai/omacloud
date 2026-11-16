@@ -947,7 +947,7 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     );
     // syncing one whole folder, there are no folder groups to browse from
     if whole_folder {
-        let online = row("Omacloud Drive", DRIVE_BROWSE);
+        let online = row("All your files", DRIVE_BROWSE);
         online.add_suffix(&browse_button(ui));
         files.add(&online);
     }
@@ -1266,9 +1266,8 @@ fn show_drive_link(ui: &Rc<Ui>) {
 const OMARCHY_FOLDERS: [&str; 6] = ["Desktop", "Documents", "Pictures", "Music", "Videos", "Downloads"];
 
 /// What syncs on this computer, each with a switch, as iCloud lists what it
-/// keeps in step: the folders Omarchy gives every computer, which a person
-/// may or may not sync; Omacloud Drive, the folders of their own; and
-/// Omarchy settings.
+/// keeps in step: every folder, Omarchy's usual ones first and a person's
+/// own after, all alike; and Omarchy settings.
 fn what_syncs(ui: &Rc<Ui>, s: &Value) -> Vec<adw::PreferencesGroup> {
     let empty = Vec::new();
     let folders = &s["folders"];
@@ -1283,7 +1282,8 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> Vec<adw::PreferencesGroup> {
         rows.push((text(&f["name"]), text(&f["path"]), "off"));
     }
     let order = |n: &str| OMARCHY_FOLDERS.iter().position(|u| *u == n);
-    rows.sort_by(|a, b| order(&a.0).cmp(&order(&b.0)).then(a.0.cmp(&b.0)));
+    // the usual ones first, in their order, then a person's own by name
+    rows.sort_by_key(|r| (order(&r.0).is_none(), order(&r.0), r.0.clone()));
     let folder_row = |(name, path, state): (String, String, &'static str)| {
         let (ui2, name2) = (ui.clone(), name.clone());
         let r = switch_row(&name, state == "synced", move |want| {
@@ -1315,20 +1315,10 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> Vec<adw::PreferencesGroup> {
         subtitle_with_size(&r, &path);
         r
     };
-    let (usual, own): (Vec<_>, Vec<_>) = rows.into_iter().partition(|r| order(&r.0).is_some());
-
-    let omarchy = group("Omarchy folders", "The folders every Omarchy computer has.");
-    for r in usual {
-        omarchy.add(&folder_row(r));
-    }
-
-    let drive = group(
-        "Omacloud Drive",
-        "Folders of your own, on all your computers. Browse opens every folder in ~/Omacloud, to read.",
-    );
-    drive.set_header_suffix(Some(&browse_button(ui)));
-    for r in own {
-        drive.add(&folder_row(r));
+    let folders_group = group("Folders", "Each one is the same on all your computers that sync it.");
+    folders_group.set_header_suffix(Some(&browse_button(ui)));
+    for r in rows {
+        folders_group.add(&folder_row(r));
     }
     // every other folder of home, a switch each
     let more = folders["more"].as_array().unwrap_or(&empty);
@@ -1343,7 +1333,7 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> Vec<adw::PreferencesGroup> {
             r.set_subtitle(&short_path(&text(&f["path"])));
             x.add_row(&r);
         }
-        drive.add(&x);
+        folders_group.add(&x);
     }
 
     // Omarchy settings, beside the folders, as iCloud lists more than files
@@ -1364,7 +1354,7 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> Vec<adw::PreferencesGroup> {
     settings.set_subtitle(SETTINGS_SYNCED);
     settings_group.add(&settings);
 
-    vec![omarchy, drive, settings_group]
+    vec![folders_group, settings_group]
 }
 
 /// The setup page's choice of what syncs, as iCloud asks on a new Mac:
@@ -1530,75 +1520,136 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> adw::PreferencesPage {
     page
 }
 
-/// What syncs on each computer, one row per folder, group of settings or
-/// settings file, with this computer's choice to change.
+/// What each computer keeps, one expandable row per computer: its folders,
+/// settings and settings files, each marked synced, backed up only or off.
+/// This computer's settings files are chosen here; folders and settings by
+/// their switches.
 fn each_computer(ui: &Rc<Ui>, choices: &Value) -> adw::PreferencesGroup {
     const WORDS: [&str; 3] = ["sync", "backup", "off"];
     let label = |w: &str| match w {
         "sync" => "Synced",
         "backup" => "Backed up only",
         "off" => "Off",
-        _ => "-",
+        _ => "Not known",
+    };
+    let marker = |w: &str| match w {
+        "sync" => "view-refresh-symbolic",
+        "backup" => "drive-harddisk-symbolic",
+        "off" => "action-unavailable-symbolic",
+        _ => "dialog-question-symbolic",
     };
     let g = group(
-        "What syncs on each computer",
+        "What each computer keeps",
         "Synced: the same on every computer. Backed up only: kept from that computer, not synced. \
          Off: neither.",
     );
     let me = text(&choices["this_device"]);
     let empty = Vec::new();
-    for item in choices["items"].as_array().unwrap_or(&empty) {
-        let name = text(&item["name"]);
-        let file = item["kind"] == "files";
-        // a file is chosen here; folders and settings by their own switches
-        let shown: Vec<String> = item["choices"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .filter(|(device, _)| !file || **device != me)
-            .map(|(device, w)| format!("{device}: {}", label(w.as_str().unwrap_or_default())))
-            .collect();
-        let rw = row(&name, &shown.join(" · "));
-        if file {
-            let labels: Vec<&str> = WORDS.iter().map(|w| label(w)).collect();
-            let pick = gtk::DropDown::from_strings(&labels);
-            pick.set_valign(gtk::Align::Center);
-            let mine = item["choices"][&me].as_str().unwrap_or_default();
-            if let Some(i) = WORDS.iter().position(|w| *w == mine) {
-                pick.set_selected(i as u32);
-            }
-            let ui = ui.clone();
-            pick.connect_selected_notify(move |p| {
-                if let Some(w) = WORDS.get(p.selected() as usize) {
-                    ui.act(&["omacloud", "choose", &name, w], "Changed here");
-                }
-            });
-            rw.add_suffix(&pick);
-        }
-        g.add(&rw);
-    }
-    // a settings file not listed yet: backed up only, to start
-    let add = row("Back up a settings file only", "like ~/.claude/CLAUDE.md, not synced");
-    let b = button("Choose…", Some("flat"));
-    let ui = ui.clone();
-    b.connect_clicked(move |_| {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let dialog = gtk::FileDialog::builder()
-            .title("Back up only")
-            .initial_folder(&gtk::gio::File::for_path(&home))
+    let items = choices["items"].as_array().unwrap_or(&empty);
+    for device in choices["devices"].as_array().unwrap_or(&empty) {
+        let device = text(device);
+        let here = device == me;
+        let x = adw::ExpanderRow::builder()
+            .title(&device)
+            .subtitle(if here { "This computer" } else { "" })
+            .expanded(here)
             .build();
-        let ui = ui.clone();
-        dialog.open(Some(&ui.window.clone()), gtk::gio::Cancellable::NONE, move |file| {
-            if let Some(path) = file.ok().and_then(|f| f.path()) {
-                ui.act(
-                    &["omacloud", "choose", &path.to_string_lossy(), "backup"],
-                    "Backed up only",
-                );
+        x.add_prefix(&gtk::Image::from_icon_name("computer-symbolic"));
+        let all_settings = items
+            .iter()
+            .find(|i| i["name"] == "settings")
+            .and_then(|i| i["choices"][&device].as_str())
+            .unwrap_or("-");
+        let mut heading = "";
+        for item in items {
+            let word = item["choices"][&device].as_str().unwrap_or("-");
+            let name = text(&item["name"]);
+            let section = if item["kind"] == "folders" {
+                "Folders"
+            } else {
+                "Settings"
+            };
+            // with settings off, its groups and files say nothing more
+            if section == "Settings" && all_settings != "sync" && name != "settings" {
+                continue;
             }
-        });
-    });
-    add.add_suffix(&b);
-    g.add(&add);
+            if section != heading {
+                heading = section;
+                let h = gtk::Label::builder()
+                    .label(section)
+                    .xalign(0.0)
+                    .margin_top(12)
+                    .margin_bottom(6)
+                    .margin_start(12)
+                    .build();
+                h.add_css_class("heading");
+                x.add_row(&h);
+            }
+            let kind = match item["kind"].as_str().unwrap_or_default() {
+                "folders" => "",
+                "settings" if name == "settings" => "All of them",
+                "settings" => "A group",
+                _ => "A file",
+            };
+            let title = if name == "settings" {
+                "Omarchy settings".to_string()
+            } else {
+                name.clone()
+            };
+            let r = adw::ActionRow::builder().title(&title).subtitle(kind).build();
+            let icon = gtk::Image::from_icon_name(marker(word));
+            icon.set_tooltip_text(Some(label(word)));
+            if word != "sync" {
+                icon.add_css_class("dim-label");
+            }
+            r.add_prefix(&icon);
+            if here && item["kind"] == "files" {
+                let labels: Vec<&str> = WORDS.iter().map(|w| label(w)).collect();
+                let pick = gtk::DropDown::from_strings(&labels);
+                pick.set_valign(gtk::Align::Center);
+                if let Some(i) = WORDS.iter().position(|w| *w == word) {
+                    pick.set_selected(i as u32);
+                }
+                let ui = ui.clone();
+                pick.connect_selected_notify(move |p| {
+                    if let Some(w) = WORDS.get(p.selected() as usize) {
+                        ui.act(&["omacloud", "choose", &name, w], "Changed here");
+                    }
+                });
+                r.add_suffix(&pick);
+            } else {
+                let l = gtk::Label::new(Some(label(word)));
+                l.add_css_class("dim-label");
+                r.add_suffix(&l);
+            }
+            x.add_row(&r);
+        }
+        if here && all_settings == "sync" {
+            // a settings file not listed yet: backed up only, to start
+            let add = row("Back up a settings file only", "like ~/.claude/CLAUDE.md, not synced");
+            let b = button("Choose…", Some("flat"));
+            let ui = ui.clone();
+            b.connect_clicked(move |_| {
+                let home = std::env::var("HOME").unwrap_or_default();
+                let dialog = gtk::FileDialog::builder()
+                    .title("Back up only")
+                    .initial_folder(&gtk::gio::File::for_path(&home))
+                    .build();
+                let ui = ui.clone();
+                dialog.open(Some(&ui.window.clone()), gtk::gio::Cancellable::NONE, move |file| {
+                    if let Some(path) = file.ok().and_then(|f| f.path()) {
+                        ui.act(
+                            &["omacloud", "choose", &path.to_string_lossy(), "backup"],
+                            "Backed up only",
+                        );
+                    }
+                });
+            });
+            add.add_suffix(&b);
+            x.add_row(&add);
+        }
+        g.add(&x);
+    }
     g
 }
 
