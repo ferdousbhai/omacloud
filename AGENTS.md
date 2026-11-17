@@ -72,7 +72,7 @@ stand-in S3; with `S3_*` set it proves a real provider. `scripts/restic-compat.s
   `DirCoordinator` does it with a hard link, `BucketCoordinator` with
   `If-None-Match: *`. A write that only says where a device stands must not
   move the `changed` marker, or each sync wakes the rest in turn.
-- Don't deploy or release from an agent session.
+- Deploy or release only when asked to; follow CONTRIBUTING.md (`scripts/release-ci.sh <version>`).
 - Kill test processes with `pkill -x` or by PID, never `pkill -f`; guard
   `rm -rf "${dir:?}"/...`.
 - Builds are reproducible from 0.0.4; release flow is in CONTRIBUTING.md.

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.29 (2026-11-17)
 
 - `omacloud choose` shows what syncs on every computer of the account, and
   `omacloud choose <what> sync|backup|off` changes it on this one: for a folder, a group
