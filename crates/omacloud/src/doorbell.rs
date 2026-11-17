@@ -271,7 +271,8 @@ fn same_network(mine: Option<IpAddr>, ip: IpAddr) -> bool {
     }
 }
 
-/// The other computers on this tailnet that are online, when Tailscale runs.
+/// The other Linux computers on this tailnet that are online, when
+/// Tailscale runs.
 fn tailscale_peers() -> Vec<IpAddr> {
     let Ok(out) = std::process::Command::new("tailscale")
         .args(["status", "--json"])
@@ -287,7 +288,8 @@ fn tailscale_peers() -> Vec<IpAddr> {
         .as_object()
         .into_iter()
         .flatten()
-        .filter(|(_, p)| p["Online"].as_bool() == Some(true))
+        // Omarchy computers only: a phone's radio needn't wake for these
+        .filter(|(_, p)| p["Online"].as_bool() == Some(true) && p["OS"] == "linux")
         .filter_map(|(_, p)| {
             p["TailscaleIPs"]
                 .as_array()?
