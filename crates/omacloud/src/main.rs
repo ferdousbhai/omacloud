@@ -2391,7 +2391,7 @@ fn run(cli: Cli) -> Out {
             };
             if inside {
                 return Err(fail::usage(format!("{} is inside a synced folder", dir.display()))
-                    .hint("mount outside the folders that sync, such as ~/Omacloud")
+                    .hint("mount outside the folders that sync, such as /tmp/all")
                     .into());
             }
             fs::create_dir_all(&dir)?;
