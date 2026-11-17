@@ -97,7 +97,7 @@ sleep counts as something moving. A computer that hears every other one's doorbe
 A computer that pushed also rings the others' doorbells (`doorbell.rs`), so they
 look at once instead of at their next read: a UDP packet to each online Tailscale
 peer, and to the addresses on the same local network the others publish with
-their choices. It says only "changed", and nobody can forge or link one without
+their choices. It carries no file data, and nobody can forge or link one without
 the repository password: a fresh nonce and a tag made with it. Omarchy's firewall
 refuses what comes in unasked, so each computer greets the others every twenty
 seconds from the port it listens on (41760), which makes the others' packets

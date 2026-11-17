@@ -1327,22 +1327,23 @@ impl Engine {
         let name = format!("{}.json", self.device_key());
         let dest = dir.join(&name);
         let text = serde_json::to_string_pretty(choices)? + "\n";
-        if fs::read_to_string(&dest).is_ok_and(|old| old == text) {
-            // written by `omacloud choose` since the last sync finished:
-            // that run's engine is gone, so this one pushes it
-            let since = fs::metadata(&dest)
+        let changed = fs::read_to_string(&dest).ok().is_none_or(|old| old != text);
+        if changed {
+            fs::create_dir_all(&dir)?;
+            replace_file(&dest, text.as_bytes())?;
+        }
+        // or written by `omacloud choose` since the last sync finished: that
+        // run's engine is gone, so this one pushes it
+        let since = || {
+            fs::metadata(&dest)
                 .and_then(|m| m.modified())
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .is_some_and(|t| t.as_secs() >= self.state.synced_at);
-            if since {
-                _ = self.pending.insert(Path::new(CHOICES).join(name));
-            }
-            return Ok(());
+                .is_some_and(|t| t.as_secs() >= self.state.synced_at)
+        };
+        if changed || since() {
+            _ = self.pending.insert(Path::new(CHOICES).join(name));
         }
-        fs::create_dir_all(&dir)?;
-        replace_file(&dest, text.as_bytes())?;
-        _ = self.pending.insert(Path::new(CHOICES).join(name));
         Ok(())
     }
 

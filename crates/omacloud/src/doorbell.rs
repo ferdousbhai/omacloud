@@ -1,7 +1,8 @@
 //! The doorbell: a computer that pushed says so straight to the account's
 //! other computers, over Tailscale or the local network, and they look at
-//! the storage at once instead of at their next poll. It carries nothing
-//! but "changed": the storage stays the only place anything is read from,
+//! the storage at once instead of at their next poll. It carries no file
+//! data, only that something changed, which computer says so and the newest
+//! version it has: the storage stays the only place anything is read from,
 //! and a computer the bell doesn't reach still finds the change by polling.
 //!
 //! Omarchy's firewall refuses what comes in unasked, so each computer
