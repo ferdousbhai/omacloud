@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.30 (2026-11-17)
 
 - A computer that synced a change rings your other computers, over Tailscale or the
   local network, and they fetch it within a couple of seconds instead of at their
