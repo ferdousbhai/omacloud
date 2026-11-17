@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- No more `~/Omacloud`: the app's Browse is gone, and every folder you sync, Work as much
+  as Documents, is synced where it is. `omacloud mount` still shows every file read-only
+  for those who want it, in a folder you name.
+
 ## 0.0.30 (2026-11-17)
 
 - A computer that synced a change rings your other computers, over Tailscale or the

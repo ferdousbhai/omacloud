@@ -144,13 +144,10 @@ project of their own ([docs/providers.md](docs/providers.md)).
   a subfolder (see Choosing what syncs). Change these at any time: what comes back loses nothing. Skipping
   keeps the cloud's copy; `omacloud folders remove Documents` takes it out, and no
   computer deletes its files.
-- **Every file, kept here or not:** `omacloud mount` (or Browse
-  beside Folders in the app's Overview) shows all your folders in `~/Omacloud`, read-only,
-  including those skipped on this computer; each file is downloaded when
-  it's opened, as iCloud's online-only files are. So a small laptop can
-  skip Pictures and still open any photo. It needs `fuse3` (Omarchy has
-  it); Ctrl-C or `fusermount3 -u ~/Omacloud` unmounts it, and the app
-  keeps it running as the `omacloud-mount` user unit.
+- **Every file, kept here or not, for experts:** `omacloud mount <empty folder>` shows
+  all your folders there, read-only, including those skipped on this computer; each
+  file is downloaded when it's opened. It needs `fuse3` (Omarchy has it); Ctrl-C or
+  `fusermount3 -u <folder>` unmounts it. Your folders themselves always sync in place.
 - **Not this file:** anything named like `name.nosync` stays on its
   computer, as on iCloud.
 - **Omarchy settings:** the shared files in Omarchy's dots manifest

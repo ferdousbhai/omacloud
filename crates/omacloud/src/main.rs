@@ -186,8 +186,8 @@ enum Cmd {
     /// Show every file of the account as a read-only folder, each
     /// fetched when it's opened (folders skipped here too), until Ctrl-C
     Mount {
-        /// An empty folder outside the synced ones [default: ~/Omacloud]
-        dir: Option<PathBuf>,
+        /// An empty folder outside the synced ones
+        dir: PathBuf,
     },
     /// Write a file as it was at a given version
     Restore {
@@ -2381,10 +2381,7 @@ fn run(cli: Cli) -> Out {
             // before any thread starts, so Ctrl-C reaches the unmount
             mount::block_signals();
             let config = load(&paths)?;
-            let dir = match dir {
-                Some(d) => std::path::absolute(d)?,
-                None => home_dir()?.join("Omacloud"),
-            };
+            let dir = std::path::absolute(dir)?;
             let mut e = engine(&paths, &config)?;
             e.load_folders()?;
             let inside = if config.folders.is_some() {
