@@ -1315,14 +1315,14 @@ impl Engine {
     }
 
     /// Record what syncs on this computer, for the others to show; it syncs
-    /// with the next sync, when it changed. Returns whether it did.
+    /// with the next sync, when it changed.
     ///
     /// # Errors
     ///
     /// If the file can't be written.
-    pub fn record_choices(&mut self, choices: &Value) -> Result<bool> {
+    pub fn record_choices(&mut self, choices: &Value) -> Result<()> {
         let Some(dir) = self.choices.clone() else {
-            return Ok(false);
+            return Ok(());
         };
         let name = format!("{}.json", self.device_key());
         let dest = dir.join(&name);
@@ -1338,12 +1338,12 @@ impl Engine {
             if since {
                 _ = self.pending.insert(Path::new(CHOICES).join(name));
             }
-            return Ok(since);
+            return Ok(());
         }
         fs::create_dir_all(&dir)?;
         replace_file(&dest, text.as_bytes())?;
         _ = self.pending.insert(Path::new(CHOICES).join(name));
-        Ok(true)
+        Ok(())
     }
 
     /// What each computer recorded as syncing on it (see
@@ -1876,8 +1876,8 @@ impl Engine {
         // a member's own are as the latest version has them, gone or not; a
         // removed computer's are in the history only
         let history = self.kept_history(&repo, &heads)?;
-        let latest = history.last().cloned().into_iter();
-        let searches = [(current, latest.collect::<Vec<_>>()), (removed, history)];
+        let latest: Vec<_> = history.last().cloned().into_iter().collect();
+        let searches = [(current, latest), (removed, history)];
         for (keys, history) in searches {
             for (head, snap) in history.into_iter().rev() {
                 for key in &keys {

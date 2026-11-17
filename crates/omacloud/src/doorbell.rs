@@ -44,19 +44,29 @@ pub fn reach() -> Option<String> {
     (port != 0).then(|| lan_ip().map(|ip| SocketAddr::new(ip, port).to_string()))?
 }
 
-pub struct Doorbell {
+/// A running doorbell; its two threads share it.
+pub struct Doorbell(Arc<Shared>);
+
+pub struct Shared {
     socket: UdpSocket,
-    secret: Arc<Mutex<String>>,
+    secret: Mutex<String>,
     /// Addresses the other computers published (`ip:port`).
-    published: Arc<Mutex<Vec<SocketAddr>>>,
-    rung: Arc<AtomicBool>,
+    published: Mutex<Vec<SocketAddr>>,
+    rung: AtomicBool,
     /// Each computer heard from, by its masked-in id, and when.
-    heard: Arc<Mutex<HashMap<[u8; 16], Instant>>>,
+    heard: Mutex<HashMap<[u8; 16], Instant>>,
     /// This computer's device key, which its id comes from.
     me: String,
     /// The newest version (head) this computer has.
-    latest: Arc<AtomicU64>,
+    latest: AtomicU64,
     port: u16,
+}
+
+impl std::ops::Deref for Doorbell {
+    type Target = Shared;
+    fn deref(&self) -> &Shared {
+        &self.0
+    }
 }
 
 /// The port to use, or none: the default account uses [`PORT`]; a test
@@ -79,18 +89,17 @@ impl Doorbell {
         latest: u64,
         wake: impl Fn() + Send + 'static,
     ) -> std::io::Result<Self> {
-        let socket = UdpSocket::bind(("0.0.0.0", port))?;
-        let doorbell = Self {
-            socket,
-            secret: Arc::new(Mutex::new(secret)),
-            published: Arc::new(Mutex::new(Vec::new())),
-            rung: Arc::new(AtomicBool::new(false)),
-            heard: Arc::new(Mutex::new(HashMap::new())),
+        let shared = Arc::new(Shared {
+            socket: UdpSocket::bind(("0.0.0.0", port))?,
+            secret: Mutex::new(secret),
+            published: Mutex::new(Vec::new()),
+            rung: AtomicBool::new(false),
+            heard: Mutex::new(HashMap::new()),
             me,
-            latest: Arc::new(AtomicU64::new(latest)),
+            latest: AtomicU64::new(latest),
             port,
-        };
-        let listener = doorbell.clone_for_thread()?;
+        });
+        let listener = shared.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 64];
             loop {
@@ -116,7 +125,7 @@ impl Doorbell {
                 }
             }
         });
-        let greeter = doorbell.clone_for_thread()?;
+        let greeter = shared.clone();
         std::thread::spawn(move || {
             loop {
                 greeter.send(HELLO);
@@ -125,22 +134,11 @@ impl Doorbell {
         });
         LISTENING.store(port, Ordering::Relaxed);
         info!("doorbell on port {port}");
-        Ok(doorbell)
+        Ok(Self(shared))
     }
+}
 
-    fn clone_for_thread(&self) -> std::io::Result<Self> {
-        Ok(Self {
-            socket: self.socket.try_clone()?,
-            secret: self.secret.clone(),
-            published: self.published.clone(),
-            rung: self.rung.clone(),
-            heard: self.heard.clone(),
-            me: self.me.clone(),
-            latest: self.latest.clone(),
-            port: self.port,
-        })
-    }
-
+impl Shared {
     fn key(&self) -> String {
         self.secret.lock().map(|s| s.clone()).unwrap_or_default()
     }

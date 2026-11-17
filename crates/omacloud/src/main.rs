@@ -1579,9 +1579,10 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
         .map_err(|e| info!("no doorbell: {e}"))
         .ok()
     });
-    // how long to wait between looks: the poll while anything moved in the
-    // last ten minutes, then a minute, then five, as an idle computer needn't
-    // ask the storage every few seconds
+    // how long to wait between looks: twice a day when every other computer
+    // rings this one; otherwise the poll while anything moved in the last ten
+    // minutes, then a minute, then fifteen, as an idle computer needn't ask
+    // the storage every few seconds
     let mut active_at = Instant::now();
     let wait = |active_at: Instant, all_heard: bool| {
         // every other computer rings this one, and its greetings carry its
@@ -1594,6 +1595,15 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             0..600 => poll,
             600..1800 => poll.max(Duration::from_secs(60)),
             _ => poll.max(Duration::from_secs(900)),
+        }
+    };
+    // the full sync: every ten minutes, backing off with the polling to an
+    // hour, or twice a day when every other computer rings this one
+    let full_every = |wait: Duration, all_heard: bool| {
+        if all_heard {
+            wait
+        } else {
+            FULL_SYNC.max(wait * 6).min(Duration::from_secs(3600))
         }
     };
     let all_heard = |engine: &Engine, bell: Option<&doorbell::Doorbell>| {
@@ -1638,7 +1648,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
         let (mono, wall) = (clocks.0.elapsed(), clocks.1.elapsed().unwrap_or_default());
         clocks = (Instant::now(), std::time::SystemTime::now());
         let slept = wall > mono + Duration::from_secs(30);
-        if slept || doorbell.as_ref().is_some_and(doorbell::Doorbell::was_rung) {
+        if slept || doorbell.as_ref().is_some_and(|b| b.was_rung()) {
             if slept {
                 info!("awake again: looking for changes");
             }
@@ -1719,12 +1729,25 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
         if paused {
             bar.say(bar::Standing::Paused, "paused on battery");
         }
+        // whether every other computer rings this one, once a pass
+        let heard = all_heard(&engine, doorbell.as_ref());
+        if heard != hearing {
+            hearing = heard;
+            info!(
+                "{}",
+                if heard {
+                    "every other computer rings this one: looking at the storage twice a day"
+                } else {
+                    "not every other computer rings this one: looking at the storage as usual"
+                }
+            );
+        }
         // idle: one look at the change marker instead of a sync, with a full
         // sync now and then in case a write didn't mark itself
         let refused = refused_at.is_some_and(|t: Instant| t.elapsed() < REFUSED_WAIT);
         let marker = if paused || refused {
             None
-        } else if marker_at.is_some_and(|t| t.elapsed() < wait(active_at, all_heard(&engine, doorbell.as_ref()))) {
+        } else if marker_at.is_some_and(|t| t.elapsed() < wait(active_at, heard)) {
             last_marker.clone()
         } else {
             marker_at = Some(Instant::now());
@@ -1737,12 +1760,8 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             && !folders_changed
             && marker.is_some()
             && marker == seen_marker
-            // and the full sync backs off with the polling, to an hour
-            && full_at.is_some_and(|t: Instant| t.elapsed() < {
-                    let heard = all_heard(&engine, doorbell.as_ref());
-                    let w = wait(active_at, heard);
-                    if heard { w } else { FULL_SYNC.max(w * 6).min(Duration::from_secs(3600)) }
-                });
+            // and the full sync backs off with the polling
+            && full_at.is_some_and(|t: Instant| t.elapsed() < full_every(wait(active_at, heard), heard));
         if !paused && !refused && !idle {
             folders_changed = false;
             // now and then, look at everything: a watcher can miss changes
@@ -1840,18 +1859,6 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
         if let (Some(a), true) = (alerts.as_mut(), config.folders.is_some()) {
             let synced: Vec<String> = engine.folder_list().into_iter().map(|(name, _)| name).collect();
             a.new_folders(&config.folder, &paths.data, &home_folders(&config.folder), &synced);
-        }
-        let heard = all_heard(&engine, doorbell.as_ref());
-        if heard != hearing {
-            hearing = heard;
-            info!(
-                "{}",
-                if heard {
-                    "every other computer rings this one: looking at the storage twice a day"
-                } else {
-                    "not every other computer rings this one: looking at the storage as usual"
-                }
-            );
         }
         let until = wait(active_at, heard);
         let mut notice = |changed: Option<Vec<PathBuf>>| match changed {
