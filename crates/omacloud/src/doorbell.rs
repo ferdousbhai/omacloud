@@ -11,7 +11,10 @@
 //! with the account's repository password, so a stranger on the network
 //! can neither ring it nor tell whose computer sent it. Inside, masked
 //! afresh each time, is which computer sent it: so each knows which of the
-//! others it can hear, and when that's all of them, it barely polls.
+//! others it can hear, and the newest version of the files it has: one
+//! that has seen an older version syncs at once, so a ring that was lost,
+//! or made while out of reach, is made up within 20 seconds. When it hears
+//! all the others, a computer barely polls.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
@@ -27,7 +30,7 @@ pub const PORT: u16 = 41760;
 const GREET_EVERY: Duration = Duration::from_secs(20);
 const HELLO: u8 = 0;
 const CHANGED: u8 = 1;
-const LEN: usize = 2 + 1 + 16 + 16 + 16;
+const LEN: usize = 2 + 1 + 16 + 16 + 8 + 16;
 /// A computer not heard from for this long may not hear this one either.
 const HEARD_WITHIN: Duration = Duration::from_secs(70);
 /// The port this daemon's doorbell listens on, 0 for none.
@@ -51,6 +54,8 @@ pub struct Doorbell {
     heard: Arc<Mutex<HashMap<[u8; 16], Instant>>>,
     /// This computer's device key, which its id comes from.
     me: String,
+    /// The newest version (head) this computer has.
+    latest: Arc<AtomicU64>,
     port: u16,
 }
 
@@ -67,7 +72,13 @@ pub fn port(default_account: bool) -> Option<u16> {
 impl Doorbell {
     /// Listen, and greet the others every 20 seconds. `wake` is called when
     /// another computer rings.
-    pub fn start(port: u16, secret: String, me: String, wake: impl Fn() + Send + 'static) -> std::io::Result<Self> {
+    pub fn start(
+        port: u16,
+        secret: String,
+        me: String,
+        latest: u64,
+        wake: impl Fn() + Send + 'static,
+    ) -> std::io::Result<Self> {
         let socket = UdpSocket::bind(("0.0.0.0", port))?;
         let doorbell = Self {
             socket,
@@ -76,6 +87,7 @@ impl Doorbell {
             rung: Arc::new(AtomicBool::new(false)),
             heard: Arc::new(Mutex::new(HashMap::new())),
             me,
+            latest: Arc::new(AtomicU64::new(latest)),
             port,
         };
         let listener = doorbell.clone_for_thread()?;
@@ -86,7 +98,7 @@ impl Doorbell {
                     continue;
                 };
                 let key = listener.key();
-                let Some((kind, id)) = verify(&key, &buf[..n]) else {
+                let Some((kind, id, seq)) = verify(&key, &buf[..n]) else {
                     continue;
                 };
                 if id == device_id(&key, &listener.me) {
@@ -95,8 +107,10 @@ impl Doorbell {
                 if let Ok(mut h) = listener.heard.lock() {
                     _ = h.insert(id, Instant::now());
                 }
-                if kind == CHANGED {
-                    debug!("rung by {from}");
+                // rung, or a greeting from one with a newer version than
+                // this one has
+                if kind == CHANGED || seq > listener.latest.load(Ordering::SeqCst) {
+                    debug!("rung by {from}, which has version {seq}");
                     listener.rung.store(true, Ordering::SeqCst);
                     wake();
                 }
@@ -122,6 +136,7 @@ impl Doorbell {
             rung: self.rung.clone(),
             heard: self.heard.clone(),
             me: self.me.clone(),
+            latest: self.latest.clone(),
             port: self.port,
         })
     }
@@ -150,6 +165,11 @@ impl Doorbell {
         self.rung.swap(false, Ordering::SeqCst)
     }
 
+    /// The newest version this computer has, after a sync.
+    pub fn set_latest(&self, seq: u64) {
+        self.latest.store(seq, Ordering::SeqCst);
+    }
+
     /// The account's password changed (a new epoch).
     pub fn set_secret(&self, secret: String) {
         if let Ok(mut s) = self.secret.lock() {
@@ -169,7 +189,7 @@ impl Doorbell {
         if key.is_empty() {
             return;
         }
-        let packet = make(&key, kind, &self.me);
+        let packet = make(&key, kind, &self.me, self.latest.load(Ordering::SeqCst));
         let mine = lan_ip();
         // a published address only on this network: one from a network
         // this computer left may be someone else's now
@@ -209,12 +229,17 @@ fn mask(key: &str, nonce: &[u8]) -> [u8; 16] {
     hash16(&[b"omacloud doorbell mask\0", key.as_bytes(), nonce])
 }
 
+fn seq_mask(key: &str, nonce: &[u8]) -> [u8; 16] {
+    hash16(&[b"omacloud doorbell version\0", key.as_bytes(), nonce])
+}
+
 fn tag(key: &str, body: &[u8]) -> [u8; 16] {
     hash16(&[b"omacloud doorbell\0", key.as_bytes(), body])
 }
 
-/// `OC`, the kind, a nonce, the sender's id masked with it, and a tag.
-fn make(key: &str, kind: u8, me: &str) -> Vec<u8> {
+/// `OC`, the kind, a nonce, the sender's id and newest version masked with
+/// it, and a tag.
+fn make(key: &str, kind: u8, me: &str, seq: u64) -> Vec<u8> {
     static COUNT: AtomicU64 = AtomicU64::new(0);
     // unique, not secret: the tag is what can't be forged
     let now = SystemTime::now()
@@ -232,13 +257,14 @@ fn make(key: &str, kind: u8, me: &str) -> Vec<u8> {
     p.push(kind);
     p.extend_from_slice(&nonce);
     p.extend(id.iter().zip(m).map(|(a, b)| a ^ b));
+    p.extend(seq.to_le_bytes().iter().zip(seq_mask(key, &nonce)).map(|(a, b)| a ^ b));
     let t = tag(key, &p[2..]);
     p.extend_from_slice(&t);
     p
 }
 
-/// The kind and sender of a genuine packet.
-fn verify(key: &str, p: &[u8]) -> Option<(u8, [u8; 16])> {
+/// The kind, sender and sender's newest version of a genuine packet.
+fn verify(key: &str, p: &[u8]) -> Option<(u8, [u8; 16], u64)> {
     if key.is_empty() || p.len() != LEN || &p[..2] != b"OC" {
         return None;
     }
@@ -250,7 +276,11 @@ fn verify(key: &str, p: &[u8]) -> Option<(u8, [u8; 16])> {
     for ((o, a), b) in id.iter_mut().zip(masked).zip(mask(key, nonce)) {
         *o = a ^ b;
     }
-    Some((p[2], id))
+    let mut seq = [0u8; 8];
+    for ((o, a), b) in seq.iter_mut().zip(&p[35..43]).zip(seq_mask(key, nonce)) {
+        *o = a ^ b;
+    }
+    Some((p[2], id, u64::from_le_bytes(seq)))
 }
 
 /// This computer's address on its local network: the one it would send
@@ -306,14 +336,14 @@ mod tests {
 
     #[test]
     fn only_the_account_can_ring() {
-        let p = make("secret", CHANGED, "laptop");
-        assert_eq!(verify("secret", &p), Some((CHANGED, device_id("secret", "laptop"))));
+        let p = make("secret", CHANGED, "laptop", 42);
+        assert_eq!(verify("secret", &p), Some((CHANGED, device_id("secret", "laptop"), 42)));
         assert_eq!(verify("other", &p), None);
         let mut forged = p.clone();
         forged[2] = HELLO;
         assert_eq!(verify("secret", &forged), None);
         // two packets from one computer look unrelated
-        let q = make("secret", CHANGED, "laptop");
-        assert_ne!(p[19..35], q[19..35]);
+        let q = make("secret", CHANGED, "laptop", 42);
+        assert_ne!(p[19..43], q[19..43]);
     }
 }

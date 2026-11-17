@@ -1557,6 +1557,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     let mut watches = Watches::new(watcher);
     // another computer that pushed rings this one, over Tailscale or the
     // local network: it looks at once instead of at the next poll
+    let version = |e: &Engine| e.state().base.as_ref().map_or(0, |b| b.seq);
     let password = |e: &Engine| {
         e.state()
             .secret
@@ -1565,10 +1566,16 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             .unwrap_or_default()
     };
     let doorbell = doorbell::port(paths.is_default()).and_then(|port| {
-        doorbell::Doorbell::start(port, password(&engine), engine.device_key(), move || {
-            // an empty change: wakes the loop, which asks the bell why
-            _ = bell_wake.send(Some(Vec::new()));
-        })
+        doorbell::Doorbell::start(
+            port,
+            password(&engine),
+            engine.device_key(),
+            version(&engine),
+            move || {
+                // an empty change: wakes the loop, which asks the bell why
+                _ = bell_wake.send(Some(Vec::new()));
+            },
+        )
         .map_err(|e| info!("no doorbell: {e}"))
         .ok()
     });
@@ -1577,9 +1584,11 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     // ask the storage every few seconds
     let mut active_at = Instant::now();
     let wait = |active_at: Instant, all_heard: bool| {
-        // every other computer rings this one: polling is only a safety net
+        // every other computer rings this one, and its greetings carry its
+        // newest version: polling only guards against a write none of them
+        // made, and waking from sleep looks too
         if all_heard {
-            return poll.max(Duration::from_secs(3600));
+            return poll.max(Duration::from_secs(12 * 3600));
         }
         match active_at.elapsed().as_secs() {
             0..600 => poll,
@@ -1729,7 +1738,11 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             && marker.is_some()
             && marker == seen_marker
             // and the full sync backs off with the polling, to an hour
-            && full_at.is_some_and(|t: Instant| t.elapsed() < FULL_SYNC.max(wait(active_at, all_heard(&engine, doorbell.as_ref())) * 6).min(Duration::from_secs(3600)));
+            && full_at.is_some_and(|t: Instant| t.elapsed() < {
+                    let heard = all_heard(&engine, doorbell.as_ref());
+                    let w = wait(active_at, heard);
+                    if heard { w } else { FULL_SYNC.max(w * 6).min(Duration::from_secs(3600)) }
+                });
         if !paused && !refused && !idle {
             folders_changed = false;
             // now and then, look at everything: a watcher can miss changes
@@ -1748,6 +1761,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             }
             if let Some(bell) = &doorbell {
                 bell.set_secret(password(&engine));
+                bell.set_latest(version(&engine));
                 if moved.pushed > 0 {
                     bell.ring();
                 }
@@ -1833,7 +1847,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             info!(
                 "{}",
                 if heard {
-                    "every other computer rings this one: looking at the storage hourly"
+                    "every other computer rings this one: looking at the storage twice a day"
                 } else {
                     "not every other computer rings this one: looking at the storage as usual"
                 }

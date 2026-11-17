@@ -92,7 +92,7 @@ full sync now and then regardless. It reads every ten seconds while anything mov
 in the last ten minutes, then every minute, and after half an hour every fifteen
 minutes, with the full sync backing off from ten minutes to an hour; waking from
 sleep counts as something moving. A computer that hears every other one's doorbell
-(below) reads it only hourly: the bell tells it when to look.
+(below) reads it only twice a day and on waking: the bell tells it when to look.
 
 A computer that pushed also rings the others' doorbells (`doorbell.rs`), so they
 look at once instead of at their next read: a UDP packet to each online Tailscale
@@ -102,8 +102,10 @@ the repository password: a fresh nonce and a tag made with it. Omarchy's firewal
 refuses what comes in unasked, so each computer greets the others every twenty
 seconds from the port it listens on (41760), which makes the others' packets
 replies. Inside each packet, masked afresh with its nonce, is which computer
-sent it, so a computer counts the others it heard in the last 70 seconds without an
-onlooker being able to follow one between networks. A computer the bell doesn't
+sent it and the newest head it has, so a computer counts the others it heard in the
+last 70 seconds without an onlooker being able to follow one between networks, and
+syncs when a greeting shows a newer head than its own: a lost ring, or a push made
+out of reach, is made up within twenty seconds of the two hearing each other. A computer the bell doesn't
 reach still finds the change by reading `changed`; the storage stays the only place
 anything is read from.
 
