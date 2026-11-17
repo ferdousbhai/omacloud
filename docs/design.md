@@ -87,10 +87,22 @@ a create-only write (`If-None-Match: *`, or Dropbox's add mode): the storage ref
 if another computer took that position first, which makes it a compare and swap.
 For development they are files in a shared directory (`DirCoordinator`), each
 hard linked into place so a taken name fails. Every write the others need also rewrites an
-object named `changed`; an idle computer reads it every ten seconds and syncs
-when it moves, with a full sync every ten minutes regardless. So an idle computer
-costs one read most of the time, and a small sync's worth of requests every ten
-minutes.
+object named `changed`; a computer reads it and syncs when it moves, with a
+full sync now and then regardless. It reads every ten seconds while anything moved
+in the last ten minutes, then every minute, and after half an hour every five
+minutes, with the full sync backing off from ten minutes to thirty; waking from
+sleep counts as something moving. So an idle computer costs one read every five
+minutes, and a small sync's worth of requests every half hour.
+
+A computer that pushed also rings the others' doorbells (`doorbell.rs`), so they
+look at once instead of at their next read: a UDP packet to each online Tailscale
+peer, and to the addresses on the same local network the others publish with
+their choices. It says only "changed", and nobody can forge or link one without
+the repository password: a fresh nonce and a tag made with it. Omarchy's firewall
+refuses what comes in unasked, so each computer greets the others every twenty
+seconds from the port it listens on (41760), which makes the others' packets
+replies. A computer the bell doesn't reach still finds the change by reading
+`changed`; the storage stays the only place anything is read from.
 
 ## In a browser
 

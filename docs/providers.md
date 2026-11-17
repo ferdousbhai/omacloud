@@ -39,11 +39,12 @@ Any S3-compatible storage with create-only writes (`If-None-Match: *`) works:
 | A key can be limited to one bucket | yes | no: it reaches its whole project |
 | Delete protection | bucket locks, with a second bucket for the records | object lock, with a second bucket for the records |
 
-Prices change: check the provider's page. An idle computer reads one object every ten
-seconds and does a small sync every ten minutes: by our estimate, about 300,000
-reads and 13,000 listings a month, not measured yet. R2 bills listings with writes.
-Its free 10 million reads and 1 million writes cover about 30 idle computers; changing
-files costs more.
+Prices change: check the provider's page. An idle computer reads one object every five
+minutes and does a small sync every half hour (every ten seconds and ten minutes while
+things are changing; another computer's doorbell, over Tailscale or the local network,
+makes it look at once): by our estimate, about 9,000 reads and 4,500 listings a month
+idle, not measured yet. R2 bills listings with writes. Its free 10 million reads and
+1 million writes cover hundreds of idle computers; changing files costs more.
 
 The rule for keys: make one that can read and write **that bucket** and nothing
 else if the provider allows it. A key that reaches only this bucket is all a lost

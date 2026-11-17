@@ -16,6 +16,7 @@ use std::{
 mod agent_skill;
 mod alerts;
 mod bar;
+mod doorbell;
 mod dropbox;
 mod fail;
 mod mount;
@@ -1538,8 +1539,13 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     let mut refused_at: Option<Instant> = None;
     // a path changed, or `None`: events were lost, look at everything
     let (files, rx) = mpsc::channel();
+    let bell_wake = files.clone();
     let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         _ = files.send(match res {
+            // a file or folder opened or read changed nothing, and this
+            // daemon's own looks raise them: woken by them, it would look
+            // again, once a second for good
+            Ok(event) if event.kind.is_access() => return,
             Ok(event) if !event.need_rescan() => Some(event.paths),
             Ok(_) => None,
             Err(e) => {
@@ -1549,6 +1555,35 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
         });
     })?;
     let mut watches = Watches::new(watcher);
+    // another computer that pushed rings this one, over Tailscale or the
+    // local network: it looks at once instead of at the next poll
+    let password = |e: &Engine| {
+        e.state()
+            .secret
+            .as_ref()
+            .map(|(_, s)| s.password.clone())
+            .unwrap_or_default()
+    };
+    let doorbell = doorbell::port(paths.is_default()).and_then(|port| {
+        doorbell::Doorbell::start(port, password(&engine), move || {
+            // an empty change: wakes the loop, which asks the bell why
+            _ = bell_wake.send(Some(Vec::new()));
+        })
+        .map_err(|e| info!("no doorbell: {e}"))
+        .ok()
+    });
+    // how long to wait between looks: the poll while anything moved in the
+    // last ten minutes, then a minute, then five, as an idle computer needn't
+    // ask the storage every few seconds
+    let mut active_at = Instant::now();
+    let wait = |active_at: Instant| match active_at.elapsed().as_secs() {
+        0..600 => poll,
+        600..1800 => poll.max(Duration::from_secs(60)),
+        _ => poll.max(Duration::from_secs(300)),
+    };
+    // waking from sleep counts as activity: the wall clock jumps, the
+    // monotonic one doesn't
+    let mut clocks = (Instant::now(), std::time::SystemTime::now());
     info!("watching {}", config.folder.display());
 
     // wait for a second of quiet before pushing, but no longer than ten
@@ -1580,6 +1615,16 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     // through: a sync that keeps failing mustn't walk every file each poll
     let mut rescan_at: Option<Instant> = None;
     loop {
+        let (mono, wall) = (clocks.0.elapsed(), clocks.1.elapsed().unwrap_or_default());
+        clocks = (Instant::now(), std::time::SystemTime::now());
+        let slept = wall > mono + Duration::from_secs(30);
+        if slept || doorbell.as_ref().is_some_and(doorbell::Doorbell::was_rung) {
+            if slept {
+                info!("awake again: looking for changes");
+            }
+            marker_at = None;
+            active_at = Instant::now();
+        }
         // the config was edited: folders are followed as they are; settings
         // sync turned on or off, or a new bucket key, restarts into it (exit
         // 75, as for an upgrade, which the unit restarts)
@@ -1659,7 +1704,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
         let refused = refused_at.is_some_and(|t: Instant| t.elapsed() < REFUSED_WAIT);
         let marker = if paused || refused {
             None
-        } else if marker_at.is_some_and(|t| t.elapsed() < poll) {
+        } else if marker_at.is_some_and(|t| t.elapsed() < wait(active_at)) {
             last_marker.clone()
         } else {
             marker_at = Some(Instant::now());
@@ -1672,7 +1717,8 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             && !folders_changed
             && marker.is_some()
             && marker == seen_marker
-            && full_at.is_some_and(|t: Instant| t.elapsed() < FULL_SYNC);
+            // and the full sync backs off with the polling, to half an hour
+            && full_at.is_some_and(|t: Instant| t.elapsed() < FULL_SYNC.max(wait(active_at) * 6));
         if !paused && !refused && !idle {
             folders_changed = false;
             // now and then, look at everything: a watcher can miss changes
@@ -1684,7 +1730,23 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             if engine.has_pending() || marker != seen_marker {
                 bar.say(bar::Standing::Syncing, "syncing");
             }
-            let synced = run_sync(&mut engine, &mut waiting, alerts.as_mut());
+            let mut moved = omacloud_core::Stats::default();
+            let synced = run_sync(&mut engine, &mut waiting, alerts.as_mut(), &mut moved);
+            if moved != omacloud_core::Stats::default() || marker != seen_marker {
+                active_at = Instant::now();
+            }
+            if let Some(bell) = &doorbell {
+                bell.set_secret(password(&engine));
+                if moved.pushed > 0 {
+                    bell.ring();
+                }
+                let published = engine
+                    .choices()
+                    .values()
+                    .filter_map(|c| c["doorbell"].as_str()?.parse().ok())
+                    .collect();
+                bell.set_published(published);
+            }
             match &synced {
                 Synced::Ok => bar.say(bar::Standing::Synced, "up to date"),
                 Synced::Failed if waiting => {
@@ -1759,8 +1821,12 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             Some(paths) => _ = engine.notice(paths),
             None => engine.request_rescan(),
         };
-        match rx.recv_timeout(poll) {
+        match rx.recv_timeout(wait(active_at)) {
             Ok(changed) => {
+                // the doorbell's empty wake isn't a change here
+                if changed.as_ref().is_none_or(|c| !c.is_empty()) {
+                    active_at = Instant::now();
+                }
                 notice(changed);
                 let first = Instant::now();
                 loop {
@@ -1884,10 +1950,16 @@ enum Synced {
 }
 
 /// One sync.
-fn run_sync(engine: &mut Engine, waiting: &mut bool, alerts: Option<&mut alerts::Alerts>) -> Synced {
+fn run_sync(
+    engine: &mut Engine,
+    waiting: &mut bool,
+    alerts: Option<&mut alerts::Alerts>,
+    moved: &mut omacloud_core::Stats,
+) -> Synced {
     match engine.sync() {
         Ok(st) => {
             *waiting = false;
+            *moved = st;
             if st != omacloud_core::Stats::default() {
                 info!("synced: {st:?}");
             }
@@ -3477,7 +3549,8 @@ fn my_choices(paths: &Paths, config: &Config, e: &mut Engine) -> Value {
             _ = files.insert(format!("~/{}", p.display()), json!(c.word()));
         }
     }
-    json!({ "name": config.device, "folders": folders, "settings": settings, "files": files })
+    json!({ "name": config.device, "folders": folders, "settings": settings, "files": files,
+            "doorbell": doorbell::reach() })
 }
 
 /// Publish this computer's choices, for `omacloud choose` on the others;
