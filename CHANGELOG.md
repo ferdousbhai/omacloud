@@ -5,8 +5,10 @@
 - A computer that synced a change rings your other computers, over Tailscale or the
   local network, and they fetch it within a couple of seconds instead of at their
   next look. Nothing but "changed" is sent, and only your computers can read it.
-- An idle computer asks your storage far less often: every ten seconds while things
-  change, backing off to every five minutes, and at once when it wakes from sleep.
+- Your computers ask your storage far less often. One that hears all the others'
+  doorbells looks only hourly, as they tell it when to look. Otherwise it looks every
+  ten seconds while things change, backing off to every fifteen minutes, and at once
+  when it wakes from sleep.
 - The daemon no longer wakes every second while idle: its own reads of a folder
   woke it to read the folder again.
 

@@ -89,10 +89,10 @@ For development they are files in a shared directory (`DirCoordinator`), each
 hard linked into place so a taken name fails. Every write the others need also rewrites an
 object named `changed`; a computer reads it and syncs when it moves, with a
 full sync now and then regardless. It reads every ten seconds while anything moved
-in the last ten minutes, then every minute, and after half an hour every five
-minutes, with the full sync backing off from ten minutes to thirty; waking from
-sleep counts as something moving. So an idle computer costs one read every five
-minutes, and a small sync's worth of requests every half hour.
+in the last ten minutes, then every minute, and after half an hour every fifteen
+minutes, with the full sync backing off from ten minutes to an hour; waking from
+sleep counts as something moving. A computer that hears every other one's doorbell
+(below) reads it only hourly: the bell tells it when to look.
 
 A computer that pushed also rings the others' doorbells (`doorbell.rs`), so they
 look at once instead of at their next read: a UDP packet to each online Tailscale
@@ -101,8 +101,11 @@ their choices. It says only "changed", and nobody can forge or link one without
 the repository password: a fresh nonce and a tag made with it. Omarchy's firewall
 refuses what comes in unasked, so each computer greets the others every twenty
 seconds from the port it listens on (41760), which makes the others' packets
-replies. A computer the bell doesn't reach still finds the change by reading
-`changed`; the storage stays the only place anything is read from.
+replies. Inside each packet, masked afresh with its nonce, is which computer
+sent it, so a computer counts the others it heard in the last 70 seconds without an
+onlooker being able to follow one between networks. A computer the bell doesn't
+reach still finds the change by reading `changed`; the storage stays the only place
+anything is read from.
 
 ## In a browser
 

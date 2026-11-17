@@ -1565,7 +1565,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             .unwrap_or_default()
     };
     let doorbell = doorbell::port(paths.is_default()).and_then(|port| {
-        doorbell::Doorbell::start(port, password(&engine), move || {
+        doorbell::Doorbell::start(port, password(&engine), engine.device_key(), move || {
             // an empty change: wakes the loop, which asks the bell why
             _ = bell_wake.send(Some(Vec::new()));
         })
@@ -1576,14 +1576,25 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
     // last ten minutes, then a minute, then five, as an idle computer needn't
     // ask the storage every few seconds
     let mut active_at = Instant::now();
-    let wait = |active_at: Instant| match active_at.elapsed().as_secs() {
-        0..600 => poll,
-        600..1800 => poll.max(Duration::from_secs(60)),
-        _ => poll.max(Duration::from_secs(300)),
+    let wait = |active_at: Instant, all_heard: bool| {
+        // every other computer rings this one: polling is only a safety net
+        if all_heard {
+            return poll.max(Duration::from_secs(3600));
+        }
+        match active_at.elapsed().as_secs() {
+            0..600 => poll,
+            600..1800 => poll.max(Duration::from_secs(60)),
+            _ => poll.max(Duration::from_secs(900)),
+        }
+    };
+    let all_heard = |engine: &Engine, bell: Option<&doorbell::Doorbell>| {
+        let others = engine.state().devices.members().valid.len().saturating_sub(1);
+        bell.is_some_and(|b| others > 0 && b.heard() >= others)
     };
     // waking from sleep counts as activity: the wall clock jumps, the
     // monotonic one doesn't
     let mut clocks = (Instant::now(), std::time::SystemTime::now());
+    let mut hearing = false;
     info!("watching {}", config.folder.display());
 
     // wait for a second of quiet before pushing, but no longer than ten
@@ -1704,7 +1715,7 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
         let refused = refused_at.is_some_and(|t: Instant| t.elapsed() < REFUSED_WAIT);
         let marker = if paused || refused {
             None
-        } else if marker_at.is_some_and(|t| t.elapsed() < wait(active_at)) {
+        } else if marker_at.is_some_and(|t| t.elapsed() < wait(active_at, all_heard(&engine, doorbell.as_ref()))) {
             last_marker.clone()
         } else {
             marker_at = Some(Instant::now());
@@ -1717,8 +1728,8 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             && !folders_changed
             && marker.is_some()
             && marker == seen_marker
-            // and the full sync backs off with the polling, to half an hour
-            && full_at.is_some_and(|t: Instant| t.elapsed() < FULL_SYNC.max(wait(active_at) * 6));
+            // and the full sync backs off with the polling, to an hour
+            && full_at.is_some_and(|t: Instant| t.elapsed() < FULL_SYNC.max(wait(active_at, all_heard(&engine, doorbell.as_ref())) * 6).min(Duration::from_secs(3600)));
         if !paused && !refused && !idle {
             folders_changed = false;
             // now and then, look at everything: a watcher can miss changes
@@ -1816,12 +1827,25 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             let synced: Vec<String> = engine.folder_list().into_iter().map(|(name, _)| name).collect();
             a.new_folders(&config.folder, &paths.data, &home_folders(&config.folder), &synced);
         }
+        let heard = all_heard(&engine, doorbell.as_ref());
+        if heard != hearing {
+            hearing = heard;
+            info!(
+                "{}",
+                if heard {
+                    "every other computer rings this one: looking at the storage hourly"
+                } else {
+                    "not every other computer rings this one: looking at the storage as usual"
+                }
+            );
+        }
+        let until = wait(active_at, heard);
         let mut notice = |changed: Option<Vec<PathBuf>>| match changed {
             // what matters is pending now; the rest needs nothing
             Some(paths) => _ = engine.notice(paths),
             None => engine.request_rescan(),
         };
-        match rx.recv_timeout(wait(active_at)) {
+        match rx.recv_timeout(until) {
             Ok(changed) => {
                 // the doorbell's empty wake isn't a change here
                 if changed.as_ref().is_none_or(|c| !c.is_empty()) {
