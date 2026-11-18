@@ -2060,6 +2060,12 @@ fn leave_dialog(ui: &Rc<Ui>, data: &Value) {
                 "{subtitle}. Alerts, priorities, flags, list colours, repeats, sections and shared lists stay in iCloud only"
             ));
         }
+        if word_is(app, "photos") && state == "ready" {
+            r.set_subtitle(&format!(
+                "{subtitle}. Every original is downloaded, then uploaded to your storage; albums become lists. \
+                 An iPhone keeps sending new photos to iCloud"
+            ));
+        }
         apps.add(&r);
     }
     page.add(&apps);
@@ -2120,6 +2126,7 @@ fn leave_outcome(d: &Value) -> String {
             "notes" => "Notes",
             "reminders" => "Reminders",
             "drive" => "iCloud Drive",
+            "photos" => "Photos",
             other => other,
         }
         .to_string()

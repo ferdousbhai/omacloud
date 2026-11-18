@@ -155,7 +155,7 @@ project of their own ([docs/providers.md](docs/providers.md)).
   and `~/iCloud Drive` while iCloud keeps them). When that file goes, the folder
   joins the others' copies and nothing on either side is deleted.
 - **Move from iCloud:** with iCloud for Omarchy installed, the app's menu has
-  Move from iCloud…, which hands Notes, Reminders or iCloud Drive to Omacloud
+  Move from iCloud…, which hands Notes, Reminders, iCloud Drive or Photos to Omacloud
   for good on this computer (`icloud-session leave`). Optional: nothing is
   chosen to start with, and it waits until you type `leave`.
 - **Omarchy settings:** the shared files in Omarchy's dots manifest

@@ -6,8 +6,8 @@
   (iCloud for Omarchy's Notes, Reminders and iCloud Drive) is never synced twice. Take the file
   out and the folder joins your other computers' copies, deleting nothing.
 - A folder that comes back into sync is looked at on disk even when the cloud never had it.
-- Move from iCloud… in the app's menu (with iCloud for Omarchy installed): Notes, Reminders or
-  iCloud Drive handed to Omacloud, for good, after you type `leave`.
+- Move from iCloud… in the app's menu (with iCloud for Omarchy installed): Notes, Reminders,
+  iCloud Drive or Photos handed to Omacloud, for good, after you type `leave`.
 
 ## 0.0.31 (2026-11-18)
 
