@@ -4407,6 +4407,8 @@ fn more_folders(home: &Path, synced: &[(String, PathBuf)], skip: &std::collectio
         .filter_map(|n| folder_name(home, &n).ok())
         .filter(|n| !USUAL_FOLDERS.contains(&n.as_str()))
         .filter(|n| !synced.iter().any(|(s, _)| s == n) && !skip.contains(n))
+        // another sync keeps it (`~/iCloud Drive`)
+        .filter(|n| !home.join(n).join(omacloud_core::sync::HELD_MARKER).is_file())
         .collect()
 }
 

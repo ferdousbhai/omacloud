@@ -414,7 +414,17 @@ pub struct Engine {
     /// The folders syncing here, when syncing chosen folders of home:
     /// the account's, less the skipped ones.
     synced: BTreeSet<String>,
+    /// Folders another program keeps in sync here, so they stay on this
+    /// computer: see [`HELD_MARKER`].
+    held: BTreeSet<String>,
 }
+
+/// A file that keeps its folder on this computer, left out as a subfolder
+/// left out with `omacloud folders exclude` is: what another sync keeps
+/// (iCloud's Notes and Reminders, `~/iCloud Drive`) puts it in its folder
+/// while it does, and Omacloud takes the folder in, losing nothing, once it
+/// is gone. Only a folder of home or one directly in it is looked at.
+pub const HELD_MARKER: &str = ".nosync";
 
 /// One row for AI agents: the files of Codex and pi that sync without their
 /// machine-only parts are agents' settings too, so they get no row of their
@@ -498,6 +508,7 @@ impl Engine {
             held_docs: BTreeMap::new(),
             due_now: BTreeSet::new(),
             arrived: Arrived::default(),
+            held: BTreeSet::new(),
             synced: folders
                 .as_ref()
                 .map(|f| f.add.difference(&f.skip).cloned().collect())
@@ -634,6 +645,7 @@ impl Engine {
             out.extend(folders.difference(&self.synced).cloned());
             out.extend(f.exclude.iter().cloned());
         }
+        out.extend(self.held.iter().cloned());
         match self.settings_on() {
             Some(s) => {
                 out.extend(s.manifest.skipped().iter().map(|g| format!("{GROUP_LEFT_OUT}{g}")));
@@ -662,6 +674,9 @@ impl Engine {
         let base = self.base_tree()?;
         let trees = Trees::new(repo);
         let mut back = BTreeSet::new();
+        // what's back is looked for on disk too, in the cloud or not: a
+        // folder another sync kept here may never have gone up
+        self.rescan |= self.state.away.difference(&now).next().is_some();
         for name in self.state.away.difference(&now) {
             // a group's files aren't apart in the tree: all settings come back
             // through the same rules, and what didn't change is no difference
@@ -758,6 +773,44 @@ impl Engine {
             self.synced = names;
         }
         Ok(())
+    }
+
+    /// The folders holding a [`HELD_MARKER`]: a synced folder of home (or,
+    /// syncing one folder, one in it), or a folder directly in one.
+    fn find_held(&self) -> BTreeSet<String> {
+        let marked = |dir: &Path| dir.join(HELD_MARKER).is_file();
+        let dirs_in = |dir: &Path| -> Vec<String> {
+            let Ok(entries) = fs::read_dir(dir) else {
+                return Vec::new();
+            };
+            entries
+                .flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect()
+        };
+        let tops: Vec<String> = if self.folders.is_some() {
+            self.synced.iter().cloned().collect()
+        } else {
+            dirs_in(&self.folder)
+        };
+        let mut out = BTreeSet::new();
+        for top in tops {
+            let dir = self.on_disk(Path::new(&top));
+            if marked(&dir) {
+                _ = out.insert(top);
+                continue;
+            }
+            for sub in dirs_in(&dir) {
+                if marked(&dir.join(&sub)) {
+                    _ = out.insert(format!("{top}/{sub}"));
+                }
+            }
+        }
+        if out != self.held {
+            info!("kept on this computer by another sync: {out:?}");
+        }
+        out
     }
 
     /// Where a path of the synced folder lives on disk: under the folder,
@@ -1290,6 +1343,7 @@ impl Engine {
                         .folders
                         .as_ref()
                         .is_some_and(|f| f.exclude.iter().any(|x| path.starts_with(x)))
+                    || self.held.iter().any(|x| path.starts_with(x))
                     || self.ignores.is_ignored(path, is_dir)
             }
         }
@@ -2095,6 +2149,7 @@ impl Engine {
             let repo = self.open_repo()?;
             let base = self.base_tree()?;
             self.refresh_synced(&repo, base)?;
+            self.held = self.find_held();
             let rejoining = self.find_rejoining(&repo)?;
             if std::mem::take(&mut self.rescan) {
                 self.queue_rescan(&repo)?;

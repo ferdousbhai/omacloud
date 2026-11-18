@@ -149,7 +149,11 @@ project of their own ([docs/providers.md](docs/providers.md)).
   file is downloaded when it's opened. It needs `fuse3` (Omarchy has it); Ctrl-C or
   `fusermount3 -u <folder>` unmounts it. Your folders themselves always sync in place.
 - **Not this file:** anything named like `name.nosync` stays on its
-  computer, as on iCloud.
+  computer, as on iCloud. So does a folder of home, or a folder directly in
+  one, holding a file named `.nosync`: another program keeps it in sync there
+  (iCloud for Omarchy puts one in `~/Documents/Notes`, `~/Documents/Reminders`
+  and `~/iCloud Drive` while iCloud keeps them). When that file goes, the folder
+  joins the others' copies and nothing on either side is deleted.
 - **Omarchy settings:** the shared files in Omarchy's dots manifest
   (bindings, look and feel, terminals, `.bashrc`), never what's about the
   machine, like `monitors.lua`, `input.lua` (touchpad and keyboard) or the bar's

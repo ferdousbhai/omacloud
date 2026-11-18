@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- A folder holding a file named `.nosync` stays on its computer: what another sync keeps there
+  (iCloud for Omarchy's Notes, Reminders and iCloud Drive) is never synced twice. Take the file
+  out and the folder joins your other computers' copies, deleting nothing.
+- A folder that comes back into sync is looked at on disk even when the cloud never had it.
+
 ## 0.0.31 (2026-11-18)
 
 - No more `~/Omacloud`: the app's Browse is gone, and every folder you sync, Work as much

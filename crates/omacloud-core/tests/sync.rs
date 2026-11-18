@@ -8,7 +8,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ed25519_dalek::SigningKey;
 use omacloud_core::{
     Anchor, Coordinator, DirCoordinator, Engine, Head, HeadError, JoinRequest, Membership, RepoSpec, Setup, Stats,
@@ -1671,6 +1671,47 @@ fn a_folder_switched_back_on_loses_nothing() -> Result<()> {
     b.sync()?;
     assert_eq!(a.sync()?.conflicts, 0);
     assert_eq!(fs::read_to_string(ha.join("Documents/keep"))?, "keep two\n");
+    Ok(())
+}
+
+/// A folder another sync keeps (it holds a `.nosync` file) stays out both
+/// ways, and comes in, losing nothing, when the file goes.
+#[test]
+fn a_folder_another_sync_keeps_stays_here() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ha, hb) = (w.home("a"), w.home("b"));
+    write(&ha, "Documents/rest", "rest\n");
+    write(&ha, "Documents/Notes/shared", "from a\n");
+    write(&ha, "Documents/Notes/.nosync", "");
+    write(&ha, "Documents/Notes/.engine/state", "a's state\n");
+    write(&hb, "Documents/Notes/theirs", "from b\n");
+    write(&hb, "Documents/Notes/.nosync", "");
+    let mut a = w.engine_home("a", &["Documents"], &[])?;
+    let mut b = w.engine_home("b", &["Documents"], &[])?;
+    a.sync()?;
+    b.sync()?;
+    a.sync()?;
+    assert_eq!(fs::read_to_string(hb.join("Documents/rest"))?, "rest\n");
+    assert!(!hb.join("Documents/Notes/shared").exists());
+    assert!(!ha.join("Documents/Notes/theirs").exists());
+
+    // a leaves the other sync: its folder goes up, b's stays out
+    fs::remove_file(ha.join("Documents/Notes/.nosync")).context("a's marker")?;
+    fs::remove_dir_all(ha.join("Documents/Notes/.engine")).context("a's engine")?;
+    assert!(a.sync()?.pushed > 0);
+    b.sync()?;
+    assert!(!hb.join("Documents/Notes/shared").exists());
+    assert!(hb.join("Documents/Notes/.nosync").exists());
+
+    // then b: the union, nothing deleted on either side
+    fs::remove_file(hb.join("Documents/Notes/.nosync")).context("b's marker")?;
+    assert_eq!(b.sync()?.conflicts, 0);
+    a.sync()?;
+    for home in [&ha, &hb] {
+        assert_eq!(fs::read_to_string(home.join("Documents/Notes/shared"))?, "from a\n");
+        assert_eq!(fs::read_to_string(home.join("Documents/Notes/theirs"))?, "from b\n");
+    }
+    assert!(!hb.join("Documents/Notes/.engine").exists());
     Ok(())
 }
 

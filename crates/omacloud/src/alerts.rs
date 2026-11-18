@@ -216,7 +216,8 @@ impl Alerts {
             let list: Vec<&str> = settled.iter().map(String::as_str).collect();
             _ = fs::write(&file, list.join("\n"));
         }
-        for name in fresh.into_iter().filter(|n| !synced.contains(n)) {
+        let held = |n: &String| home.join(n).join(omacloud_core::sync::HELD_MARKER).is_file();
+        for name in fresh.into_iter().filter(|n| !synced.contains(n) && !held(n)) {
             self.offer_folder(home, &name);
         }
     }
