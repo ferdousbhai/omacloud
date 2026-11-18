@@ -41,7 +41,7 @@ def check(architecture, omarchy_repo=False, omarchy_has_omacloud=False, earlier_
             'uname': f'echo {architecture}',
             'sudo': 'exec "$@"',
             'curl': 'echo "curl $*" >> "$TEST_LOG"; echo key > "$4"',
-            'gpg': f'echo "fpr:::::::::{FINGERPRINT}:"',
+            'gpg': f'printf "pub:u:4096:1:A89CA1A6A1E74251:1:::u:::scESC:\\nfpr:::::::::{FINGERPRINT}:\\n"',
             'pacman-key': 'echo "pacman-key $*" >> "$TEST_LOG"',
             'pacman-conf': f'[[ $1 == --repo-list ]] && {repos}',
             'pacman': 'echo "pacman $*" >> "$TEST_LOG"\n'
