@@ -406,6 +406,19 @@ fn build(app: &adw::Application, page: Option<&str>) {
         .tooltip_text("Sync now")
         .build();
     header.pack_end(&sync);
+    // leaving iCloud is optional and rare: in this menu only, and only with
+    // the iCloud apps installed
+    let menu_button = on_path("icloud-session").then(|| {
+        let menu = gio::Menu::new();
+        menu.append(Some("Move from iCloud…"), Some("win.move-from-icloud"));
+        let b = gtk::MenuButton::builder()
+            .icon_name("open-menu-symbolic")
+            .tooltip_text("Main menu")
+            .menu_model(&menu)
+            .build();
+        header.pack_end(&b);
+        b
+    });
     let view = adw::ToolbarView::new();
     view.add_top_bar(&header);
     view.add_bottom_bar(&bottom);
@@ -445,6 +458,12 @@ fn build(app: &adw::Application, page: Option<&str>) {
     {
         let ui = ui.clone();
         sync.connect_clicked(move |_| ui.act(&["omacloud", "sync"], "Synced"));
+    }
+    if menu_button.is_some() {
+        let action = gio::SimpleAction::new("move-from-icloud", None);
+        let ui = ui.clone();
+        action.connect_activate(move |_, _| move_from_icloud(&ui));
+        window.add_action(&action);
     }
     if let Some(page) = page {
         stack.set_visible_child_name(page);
@@ -1937,6 +1956,196 @@ fn recovery() -> adw::PreferencesPage {
 }
 
 /// Show text to copy.
+fn on_path(bin: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file()))
+}
+
+/// Move from iCloud: iCloud for Omarchy's Notes, Reminders and iCloud Drive
+/// handed to Omacloud (`icloud-session leave`). Optional and for good, so
+/// nothing is chosen at the start, and leaving waits for the word `leave`.
+fn move_from_icloud(ui: &Rc<Ui>) {
+    let ui = ui.clone();
+    cli_then(
+        &["icloud-session", "leave", "--dry-run"],
+        Vec::new(),
+        move |r| match r {
+            Ok(data) => leave_dialog(&ui, &data),
+            Err(e) => ui.toast(&e.shown()),
+        },
+    );
+}
+
+fn leave_dialog(ui: &Rc<Ui>, data: &Value) {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let page = adw::PreferencesPage::new();
+    let intro = group(
+        "",
+        "Optional. Each app you choose syncs with iCloud a last time; then Omacloud syncs its folder \
+         and the app stops using iCloud on this computer, for good. iCloud keeps its copy as it is: \
+         nothing there is deleted. Do this on each of your computers.",
+    );
+    page.add(&intro);
+    let apps = group("Apps", "");
+    let dialog = adw::Dialog::builder()
+        .title("Move from iCloud")
+        .content_width(520)
+        .content_height(560)
+        .build();
+    let chosen: Rc<std::cell::RefCell<Vec<String>>> = Rc::default();
+    let leave = button("Leave iCloud", Some("destructive-action"));
+    leave.set_sensitive(false);
+    let confirm = adw::EntryRow::builder().title("Type leave to confirm").build();
+    let update = {
+        let (chosen, leave, confirm) = (chosen.clone(), leave.clone(), confirm.clone());
+        Rc::new(move || leave.set_sensitive(!chosen.borrow().is_empty() && confirm.text().trim() == "leave"))
+    };
+    let empty = Vec::new();
+    for app in data["apps"].as_array().unwrap_or(&empty) {
+        let (word, name, state) = (text(&app["app"]), text(&app["name"]), text(&app["state"]));
+        let folder = text(&app["folder"]);
+        let shown = folder
+            .strip_prefix(&home)
+            .map_or_else(|| folder.clone(), |rest| format!("~{rest}"));
+        let subtitle = match state.as_str() {
+            "ready" => format!("{shown} goes to Omacloud"),
+            "left" => "Left iCloud: Omacloud syncs it".to_string(),
+            "not_used" => "Not used on this computer".to_string(),
+            "not_installed" => continue,
+            _ => text(&app["message"]),
+        };
+        let r = row(&name, &subtitle);
+        if state == "ready" {
+            let check = gtk::CheckButton::builder().valign(gtk::Align::Center).build();
+            let (chosen, update) = (chosen.clone(), update.clone());
+            check.connect_toggled(move |c| {
+                let mut list = chosen.borrow_mut();
+                list.retain(|w| w != &word);
+                if c.is_active() {
+                    list.push(word.clone());
+                }
+                drop(list);
+                update();
+            });
+            r.add_prefix(&check);
+            r.set_activatable_widget(Some(&check));
+        } else if text(&app["code"]) == "omacloud_folder_off" {
+            // its folder of home isn't synced here: turning it on is
+            // Omacloud's own choice, made here in so many words
+            let top = folder
+                .strip_prefix(&format!("{home}/"))
+                .and_then(|rest| rest.split('/').next())
+                .unwrap_or_default()
+                .to_string();
+            let b = button(&format!("Sync ~/{top}"), Some("flat"));
+            let (ui2, dialog2) = (ui.clone(), dialog.clone());
+            b.connect_clicked(move |_| {
+                let (ui3, dialog3) = (ui2.clone(), dialog2.clone());
+                let path = format!("{}/{top}", std::env::var("HOME").unwrap_or_default());
+                cli_then(&["omacloud", "folders", "add", &path], Vec::new(), move |r| match r {
+                    Ok(_) => {
+                        dialog3.close();
+                        ui3.refresh();
+                        move_from_icloud(&ui3);
+                    }
+                    Err(e) => ui3.toast(&e.shown()),
+                });
+            });
+            r.add_suffix(&b);
+            r.set_sensitive(true);
+        } else {
+            r.set_sensitive(false);
+        }
+        if word_is(app, "reminders") && state == "ready" {
+            r.set_subtitle(&format!(
+                "{subtitle}. Alerts, priorities, flags, list colours, repeats, sections and shared lists stay in iCloud only"
+            ));
+        }
+        apps.add(&r);
+    }
+    page.add(&apps);
+    let last = group("", "");
+    {
+        let update = update.clone();
+        confirm.connect_changed(move |_| update());
+    }
+    last.add(&confirm);
+    page.add(&last);
+
+    let bottom = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    bottom.set_halign(gtk::Align::End);
+    bottom.set_margin_top(12);
+    bottom.set_margin_bottom(12);
+    bottom.set_margin_end(12);
+    bottom.append(&leave);
+    let view = adw::ToolbarView::new();
+    view.add_top_bar(&adw::HeaderBar::new());
+    view.set_content(Some(&page));
+    view.add_bottom_bar(&bottom);
+    dialog.set_child(Some(&view));
+    {
+        let (ui, dialog) = (ui.clone(), dialog.clone());
+        leave.connect_clicked(move |_| {
+            let mut argv = vec!["icloud-session".to_string(), "leave".to_string()];
+            argv.extend(chosen.borrow().iter().cloned());
+            argv.push("--yes".to_string());
+            dialog.close();
+            let busy = waiting(
+                &ui,
+                "Syncing with iCloud a last time, then handing the folders to Omacloud.",
+            );
+            let ui = ui.clone();
+            let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+            cli_then(&argv, Vec::new(), move |r| {
+                busy.force_close();
+                ui.toast(&match r {
+                    Ok(d) => leave_outcome(&d),
+                    Err(e) => e.shown(),
+                });
+                ui.refresh();
+            });
+        });
+    }
+    dialog.present(Some(&ui.window));
+}
+
+fn word_is(app: &Value, word: &str) -> bool {
+    app["app"].as_str() == Some(word)
+}
+
+/// What `icloud-session leave` did, in a sentence.
+fn leave_outcome(d: &Value) -> String {
+    let empty = Vec::new();
+    let names = |app: &str| {
+        match app {
+            "notes" => "Notes",
+            "reminders" => "Reminders",
+            "drive" => "iCloud Drive",
+            other => other,
+        }
+        .to_string()
+    };
+    let left: Vec<String> = d["left"]
+        .as_array()
+        .unwrap_or(&empty)
+        .iter()
+        .map(|l| names(&text(&l["app"])))
+        .collect();
+    let mut out = if left.is_empty() {
+        "Nothing left iCloud".to_string()
+    } else {
+        let them = if left.len() == 1 { "it" } else { "them" };
+        format!("{} left iCloud; Omacloud syncs {them} now", left.join(", "))
+    };
+    if d["failed"].is_object() {
+        out.push_str(&format!(
+            ". {} didn't: {}",
+            names(&text(&d["failed"]["app"])),
+            text(&d["failed"]["message"])
+        ));
+    }
+    out
+}
+
 fn show_text(ui: &Rc<Ui>, heading: &str, body: &str, content: &str) {
     let view = gtk::TextView::builder()
         .monospace(true)
@@ -2004,6 +2213,22 @@ mod tests {
         assert_eq!(e.shown(), "it broke. Do this");
         assert!(start.elapsed() < Duration::from_secs(3));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn leave_outcome_names_what_left_and_what_failed() {
+        let d = serde_json::json!({"left": [{"app": "notes"}, {"app": "drive"}], "skipped": [], "failed": null});
+        assert_eq!(
+            super::leave_outcome(&d),
+            "Notes, iCloud Drive left iCloud; Omacloud syncs them now"
+        );
+        let d = serde_json::json!({"left": [{"app": "notes"}], "failed": null});
+        assert_eq!(super::leave_outcome(&d), "Notes left iCloud; Omacloud syncs it now");
+        let d = serde_json::json!({"left": [], "failed": {"app": "reminders", "message": "the folder is not in step"}});
+        assert_eq!(
+            super::leave_outcome(&d),
+            "Nothing left iCloud. Reminders didn't: the folder is not in step"
+        );
     }
 
     #[test]

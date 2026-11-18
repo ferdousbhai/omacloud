@@ -154,6 +154,10 @@ project of their own ([docs/providers.md](docs/providers.md)).
   (iCloud for Omarchy puts one in `~/Documents/Notes`, `~/Documents/Reminders`
   and `~/iCloud Drive` while iCloud keeps them). When that file goes, the folder
   joins the others' copies and nothing on either side is deleted.
+- **Move from iCloud:** with iCloud for Omarchy installed, the app's menu has
+  Move from iCloud…, which hands Notes, Reminders or iCloud Drive to Omacloud
+  for good on this computer (`icloud-session leave`). Optional: nothing is
+  chosen to start with, and it waits until you type `leave`.
 - **Omarchy settings:** the shared files in Omarchy's dots manifest
   (bindings, look and feel, terminals, `.bashrc`), never what's about the
   machine, like `monitors.lua`, `input.lua` (touchpad and keyboard) or the bar's
