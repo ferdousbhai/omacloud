@@ -573,9 +573,10 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>, wait: &s
                 dialog.add_response("done", "I Wrote It Down");
                 dialog.set_response_appearance("done", Appearance::Suggested);
                 dialog.set_response_enabled("done", false);
-                // Escape copies it too, and never closes the dialog: only the
-                // code typed back does
-                dialog.set_close_response("copy");
+                // copying leaves it open, the code still to be written down, and
+                // Escape does nothing: only the code typed back closes it
+                dialog.set_response_closes("copy", false);
+                dialog.set_can_close(false);
                 let tail: String = {
                     let chars: Vec<char> = code.chars().filter(char::is_ascii_alphanumeric).collect();
                     chars[chars.len().saturating_sub(4)..]
@@ -599,11 +600,9 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>, wait: &s
                     });
                 }
                 let (window, ui3) = (ui2.window.clone(), ui2.clone());
-                dialog.connect_response(move |d, id| {
+                dialog.connect_response(move |_, id| {
                     if id == "copy" {
                         window.clipboard().set_text(&code);
-                        // copying doesn't close it: the code is still to be written down
-                        d.present(&window);
                     } else {
                         ui3.refresh();
                     }
