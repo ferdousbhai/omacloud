@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.32 (2026-11-19)
 
 - A folder holding a file named `.nosync` stays on its computer: what another sync keeps there
   (iCloud for Omarchy's Notes, Reminders and iCloud Drive) is never synced twice. Take the file
@@ -8,6 +8,7 @@
 - A folder that comes back into sync is looked at on disk even when the cloud never had it.
 - Move from iCloud… in the app's menu (with iCloud for Omarchy installed): Notes, Reminders,
   iCloud Drive or Photos handed to Omacloud, for good, after you type `leave`.
+- The installer accepts only the one pinned signing key, and writes its Omarchy hook as you.
 
 ## 0.0.31 (2026-11-18)
 
