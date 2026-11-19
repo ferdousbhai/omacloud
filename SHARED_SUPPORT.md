@@ -1,9 +1,15 @@
 # Shared support copies
 
 These products vendor a small set of identical support files. Their installed
-apps and CLIs stay independent: there is no new runtime package or cross-repo
-import. Product services, application UI, provider logic, commands and embedded
-skill text are outside this shared boundary.
+apps and CLIs stay independent: there is no new runtime package. Product
+services, each app's own screens, provider logic, commands and embedded skill
+text are outside this shared boundary.
+
+The desktop apps' look, icons and common widgets are shared too, but not as a
+copy: an app depends on [omui](https://github.com/ferdousbhai/omui) at a git
+revision pinned in its `Cargo.toml` and `Cargo.lock`, and cargo compiles it
+into the app's binary. A newer omui reaches an app when that revision is
+changed there, so `bin/check-shared-support` has nothing to compare for it.
 
 | Canonical implementation | Copies |
 | --- | --- |

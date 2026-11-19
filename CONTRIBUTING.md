@@ -15,8 +15,9 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 ```
 
-The GTK app needs `gtk4` and `libadwaita` (CI installs `libgtk-4-dev
-libadwaita-1-dev`). After changing `server/`, run `npm run check` there
+The GTK app needs `gtk4` (CI installs `libgtk-4-dev`); cargo fetches
+[omui](https://github.com/ferdousbhai/omui), its look and widgets, at the
+revision pinned in `crates/omacloud-app/Cargo.toml`. After changing `server/`, run `npm run check` there
 (types and unit tests). Deploy with `server/deploy.sh`.
 
 ## Storage backend features
@@ -59,16 +60,19 @@ coordinator on OpenDAL's filesystem service.
   `restic/restic` image with paths mounted 1:1 works.
 - Where `/tmp` is small, put `CARGO_TARGET_DIR` under `~/.cache`.
 
-## The app without a desktop
+## The app without touching your desktop
 
-Run `gtk4-broadwayd :7`, start `omacloud-app <page>` with
-`GDK_BACKEND=broadway BROADWAY_DISPLAY=:7`, and open `http://localhost:8087`
-in a browser kept open for a few seconds (the page renders after it
-connects). Clicks through Broadway are unreliable; `omacloud-app devices`
-opens a page directly. `OMACLOUD_CONFIG` and `OMACLOUD_BIN` point the app at
-a test account and a local build. The setup wizard's settings switch starts on,
-and even with a scratch `HOME` it would upload this computer's Wi-Fi passwords:
-turn it off before Continue when testing on real storage.
+`crates/omacloud-app/dev/preview.sh <directory> [theme-dir]` runs the app in a
+nested Hyprland with a private home and session bus, on the made-up account
+`dev/fake-omacloud` answers with, and writes pictures of it: no real account,
+storage or setting is read. `OMACLOUD_PREVIEW_STEPS` says what to open, which
+keys to press and when to take a picture (the script's head lists the steps);
+`<directory>/calls.log` then lists every `omacloud` the app ran. To run the app
+by hand instead, `OMACLOUD_CONFIG` and `OMACLOUD_BIN` point it at a test account
+and a local build, and `omacloud-app devices` opens a page directly. The setup
+wizard's settings switch starts on, and even with a scratch `HOME` it would
+upload this computer's Wi-Fi passwords: turn it off before Continue when testing
+on real storage.
 
 ## Secrets
 

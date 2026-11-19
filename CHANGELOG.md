@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.33
+
+- The app has the look of the other Omarchy apps and follows your theme as you switch it. It
+  no longer needs libadwaita. In a narrow window its pages are icons in the header, in place
+  of the bar at the bottom.
+
 ## 0.0.32 (2026-11-19)
 
 - A folder holding a file named `.nosync` stays on its computer: what another sync keeps there

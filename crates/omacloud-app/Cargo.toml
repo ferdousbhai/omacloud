@@ -1,14 +1,13 @@
 [package]
 name = "omacloud-app"
-description = "The Omacloud app (GTK4, libadwaita)"
+description = "The Omacloud app (GTK4, omui)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-gtk = { package = "gtk4", version = "0.11", features = ["v4_10"] }
-adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
+omui = { git = "https://github.com/ferdousbhai/omui", rev = "8258e01de5c47f19396126a3ed3e4fc37b8203d6" } # v0.3.0
 serde_json.workspace = true
 libc.workspace = true
 qrcode.workspace = true

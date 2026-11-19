@@ -424,7 +424,7 @@ everyday edits.
 |---|---|
 | `crates/omacloud-core` | sync engine (`sync.rs`), coordination in the bucket and its key (`bucket.rs`, `bucket_key.rs`), settings (`settings.rs`; Chromium and Wi-Fi as merged documents: `merged.rs`, `chromium/`, `wifi.rs`), signed heads (`head.rs`), device chain (`devices.rs`, `account.rs`), repository keys and rotation (`epoch.rs`), secrets bundle (`secrets.rs`), Shamir split (`shamir.rs`) |
 | `crates/omacloud` | CLI and `watch` daemon |
-| `crates/omacloud-app` | the Omacloud app (GTK4, libadwaita), driving the CLI |
+| `crates/omacloud-app` | the Omacloud app (GTK4, with [omui](https://github.com/ferdousbhai/omui)), driving the CLI |
 | `vendor/rustic_core` | rustic_core 0.13 plus pack padding and `splice_tree` (upstream PRs in `vendor/upstream-patches`) |
 | `scripts/` | end to end checks (an account in a bucket, upstream restic; see CONTRIBUTING.md) and the release scripts |
 | `server/` | the Cloudflare Worker behind omacloud.computer: the public pages (see its README) |

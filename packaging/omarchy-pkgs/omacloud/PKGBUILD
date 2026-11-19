@@ -5,8 +5,8 @@ pkgrel=1
 pkgdesc="Your files and settings on every Omarchy computer, end to end encrypted, in storage of your own (CLI, daemon, GTK app)"
 arch=('x86_64' 'aarch64')
 url="https://github.com/ferdousbhai/omacloud"
-license=('MIT')
-depends=('glibc' 'libgcc' 'gtk4' 'libadwaita')
+license=('MIT' 'ISC')  # ISC: the Lucide icons compiled into omacloud-app (THIRD_PARTY_NOTICES.md)
+depends=('glibc' 'libgcc' 'gtk4')
 makedepends=('cargo')
 options=('!debug' '!lto')
 optdepends=('restic: restore without omacloud (see `omacloud export`)'
@@ -48,5 +48,5 @@ package() {
   install -dm755 "$pkgdir/usr/lib/systemd/user/default.target.wants"
   ln -s ../omacloud.service "$pkgdir/usr/lib/systemd/user/default.target.wants/omacloud.service"
   install -Dm644 README.md docs/design.md -t "$pkgdir/usr/share/doc/$pkgname"
-  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 LICENSE THIRD_PARTY_NOTICES.md -t "$pkgdir/usr/share/licenses/$pkgname"
 }

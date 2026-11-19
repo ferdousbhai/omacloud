@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""A stand-in `omacloud` for dev/preview.sh: a made-up account, so the app has every page to draw.
+
+It answers what the app asks (`status` above all) from the state named in $OMACLOUD_FAKE_STATE/state:
+`new` (not set up), `gone` (set up on storage Omacloud left), `error` (storage unreachable) or `account`.
+`init` makes the account and prints its recovery code, to a terminal only, as the real one does. Nothing
+is read or written outside that directory. Each call is added to its `calls.log`, with the names (never
+the values) of the secrets it was handed.
+"""
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+STATE = Path(os.environ['OMACLOUD_FAKE_STATE'])
+HOME = os.environ.get('HOME', '')
+RECOVERY_CODE = 'K7QM-2XDP-9TTW-H3CA-VN5R-8LGE-4YZB'
+ME, OTHER, ASKING = 'harbour-laptop', 'pier-desktop', 'tide-notebook'
+
+
+def fingerprint(seed):
+    return ' '.join(f'{(seed * 7919 + i * 104729) % 65536:04x}' for i in range(8))
+
+
+def account():
+    folder = lambda name: {'name': name, 'path': f'{HOME}/{name}'}
+    choice = lambda name, kind, mine, theirs: {'name': name, 'kind': kind, 'choices': {ME: mine, OTHER: theirs}}
+    return {
+        'set_up': True,
+        'daemon': True,
+        'synced_at': int(time.time()) - 120,
+        'synced_head': 412,
+        'epoch': 3,
+        'account': 'b3f1c2d49a7e',
+        'account_fingerprint': fingerprint(1),
+        'repo': {'kind': 'bucket', 'bucket': 'harbour-files', 'endpoint': 'https://fsn1.your-objectstorage.com'},
+        'folders': {
+            'synced': [folder('Documents'), folder('Pictures'), folder('Work')],
+            'skipped': [folder('Music')],
+            'others': [folder('Videos')],
+            'more': [folder('Projects'), folder('Recipes')],
+        },
+        'this_device': {'name': ME, 'role': 'member'},
+        'requests': [{'name': ASKING, 'fingerprint': fingerprint(4)}],
+        'devices': [
+            {'name': ME, 'fingerprint': fingerprint(2), 'this': True},
+            {'name': OTHER, 'fingerprint': fingerprint(3), 'this': False},
+        ],
+        'removed': [{'name': 'old-netbook', 'fingerprint': fingerprint(5)}],
+        'choices': {
+            'this_device': ME,
+            'devices': [ME, OTHER],
+            'items': [
+                choice('Documents', 'folders', 'sync', 'sync'),
+                choice('Music', 'folders', 'off', 'sync'),
+                choice('settings', 'settings', 'sync', 'sync'),
+                choice('hypr', 'settings', 'sync', 'backup'),
+                choice('.claude/CLAUDE.md', 'files', 'backup', 'off'),
+            ],
+        },
+        'settings': {
+            'on': True,
+            'dormant': None,
+            'groups': [
+                {'group': 'shell', 'title': 'Shell', 'detail': 'bash, starship, aliases', 'state': 'synced'},
+                {
+                    'group': 'chromium',
+                    'title': 'Chromium',
+                    'detail': 'Bookmarks, settings and extensions',
+                    'state': 'waiting',
+                    'install': [{
+                        'name': 'uBlock Origin Lite',
+                        'url': 'https://chromewebstore.google.com/detail/ddkjiahejlhfcafbddmgiahcphecmpfh',
+                        'command': ['true'],
+                    }],
+                    'not_synced': ['History, passwords, cookies and open tabs'],
+                },
+                {'group': 'wifi', 'title': 'Wi-Fi', 'detail': '4 saved networks', 'state': 'conflict'},
+            ],
+            'held': ['.config/hypr/bindings.conf'],
+        },
+        'secrets': [ME, OTHER],
+    }
+
+
+def status():
+    state = (STATE / 'state').read_text().strip()
+    if state == 'new':
+        return {'set_up': False}
+    if state == 'gone':
+        return {'set_up': False, 'storage_gone': 'Hetzner Storage Box'}
+    if state == 'error':
+        fail('unavailable', 'the bucket did not answer', 'check the network, then sync again')
+    return account()
+
+
+def fail(code, message, hint):
+    if JSON:
+        print(json.dumps({'ok': False, 'error': {'code': code, 'message': message, 'hint': hint}}))
+    else:
+        print(f'error: {message}\nhint: {hint}', file=sys.stderr)
+    sys.exit(1)
+
+
+def secret(what):
+    """A command that prints a secret does so on a terminal only."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        fail('usage', f'{what} is shown on a terminal only', 'run it in a terminal')
+
+
+args = sys.argv[1:]
+if args[:1] == ['--config']:
+    args = args[2:]
+JSON = '--json' in args
+args = [a for a in args if a != '--json']
+SECRETS = ('OMACLOUD_RECOVERY_CODE', 'OMACLOUD_JOIN_CODE', 'OMACLOUD_SECRET_ACCESS_KEY')
+secrets = [name for name in SECRETS if name in os.environ]
+with open(STATE / 'calls.log', 'a') as log:
+    print(' '.join(['omacloud', *args, *(f'[{name}]' for name in secrets)]), file=log)
+
+data = {}
+match args:
+    case ['status']:
+        data = status()
+    case ['init', *_]:
+        secret('a recovery code')
+        # Setup takes a while: long enough to see what the app shows meanwhile.
+        time.sleep(2.5)
+        (STATE / 'state').write_text('account')
+        if 'OMACLOUD_JOIN_CODE' in os.environ:
+            print(f"asked to join the account\n\nthis device's fingerprint: {fingerprint(2)}\n")
+        else:
+            print(f'created repository and account\n\nrecovery code: {RECOVERY_CODE}\n\nWrite it down.')
+        sys.exit(0)
+    case ['join-code']:
+        secret('a join code')
+        print('omacloud-join-' + 'mQ3xT7vK2pLs9dRw' * 6)
+        sys.exit(0)
+    case ['drive-link', '--keep']:
+        secret('a drive link')
+        print('https://omacloud.computer/drive/#link=b3f1c2d49a7e.' + 'Zk4nP8sV' * 8)
+        sys.exit(0)
+    case ['deleted']:
+        data = [
+            {'relative': 'Documents/Taxes/2025.pdf', 'path': f'{HOME}/Documents/Taxes/2025.pdf', 'device': OTHER,
+             'size': 482133, 'version': 409},
+            {'relative': 'Pictures/harbour.jpg', 'path': f'{HOME}/Pictures/harbour.jpg', 'device': ME,
+             'size': 3204551, 'version': 411},
+        ]
+    case ['secrets', 'restore', *rest]:
+        data = {'written': 2} if '--yes' in rest else {
+            'changes': [{'action': 'replace', 'path': '~/.ssh/id_ed25519'}, {'action': 'write', 'path': '~/.ssh/config'}]}
+print(json.dumps({'ok': True, 'data': data}))
