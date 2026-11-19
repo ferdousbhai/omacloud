@@ -1001,7 +1001,8 @@ fn show_deleted(ui: &Rc<Ui>) {
     column.append(&list.widget);
     let dialog = Dialog::new(Some("Recently Deleted"), None);
     dialog.set_extra_child(Some(page.upcast_ref()));
-    dialog.set_content_size(560, 520);
+    // The list's own height; the heading and Close add 126 px, for the 520 the dialog had with libadwaita.
+    dialog.set_content_size(560, 394);
     dialog.add_response("close", "Close");
     dialog.set_close_response("close");
     dialog.present(&ui.window);
@@ -1049,6 +1050,10 @@ fn show_deleted(ui: &Rc<Ui>) {
             });
             rw.add_suffix(&put);
             list.add(&rw.widget);
+            // The dialog gave the keyboard out before the rows were here, to the list itself, where nothing shows it.
+            if page.is_focus() {
+                put.grab_focus();
+            }
         }
     });
 }
@@ -1957,7 +1962,9 @@ fn leave_dialog(ui: &Rc<Ui>, data: &Value) {
     let apps = group("Apps", "");
     let dialog = Dialog::new(Some("Move from iCloud"), None);
     dialog.set_extra_child(Some(page.upcast_ref()));
-    dialog.set_content_size(520, 560);
+    // As tall as what it says, which is all known now; a lower window scrolls it.
+    page.set_propagate_natural_height(true);
+    dialog.set_content_size(520, -1);
     dialog.add_response("cancel", "Cancel");
     dialog.add_response("leave", "Leave iCloud");
     dialog.set_response_appearance("leave", Appearance::Destructive);

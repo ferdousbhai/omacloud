@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.33
+## Unreleased
 
 - The app has the look of the other Omarchy apps and follows your theme as you switch it. It
   no longer needs libadwaita. In a narrow window its pages are icons in the header, in place
