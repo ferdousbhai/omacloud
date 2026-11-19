@@ -67,7 +67,13 @@ nested Hyprland with a private home and session bus, on the made-up account
 `dev/fake-omacloud` answers with, and writes pictures of it: no real account,
 storage or setting is read. `OMACLOUD_PREVIEW_STEPS` says what to open, which
 keys to press and when to take a picture (the script's head lists the steps);
-`<directory>/calls.log` then lists every `omacloud` the app ran. To run the app
+`<directory>/calls.log` then lists every `omacloud` the app ran.
+`crates/omacloud-app/dev/qa.sh <app> <script> [directory]` drives an app built
+with `--features qa` through one of `dev/qa/*.jsonl` (omui's scripted QA: widgets
+found by role and name, clicks, keys, waits and shots) on the same made-up
+account, on a broadway display of its own: no window opens. `bin/check` runs
+every script; any GLib warning fails one. Release builds leave the feature off.
+Pictures of themes and of the real compositor stay `preview.sh`'s. To run the app
 by hand instead, `OMACLOUD_CONFIG` and `OMACLOUD_BIN` point it at a test account
 and a local build, and `omacloud-app devices` opens a page directly. The setup
 wizard's settings switch starts on, and even with a scratch `HOME` it would

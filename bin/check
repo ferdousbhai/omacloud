@@ -17,6 +17,17 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 step "cargo test"
 cargo test --locked --workspace
 
+step "the app, driven through its scripted QA (needs gtk4-broadwayd)"
+cargo build --locked -q -p omacloud-app --features qa
+for script in crates/omacloud-app/dev/qa/*.jsonl; do
+  echo "$script"
+  # Each command with its answer, shown only when one fails.
+  if ! transcript=$(crates/omacloud-app/dev/qa.sh target/debug/omacloud-app "$script" 2>&1); then
+    printf '%s\n' "$transcript"
+    exit 1
+  fi
+done
+
 cargo build --locked -q -p omacloud
 if command -v restic >/dev/null; then
   step "restore with plain restic"

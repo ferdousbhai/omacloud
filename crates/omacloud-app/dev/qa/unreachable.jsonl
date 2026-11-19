@@ -1,0 +1,9 @@
+# Storage that does not answer: every page says why, with the CLI's advice.
+# dev/qa.sh target/debug/omacloud-app dev/qa/unreachable.jsonl [directory for the shots]
+# state: error
+
+{"do":"wait","role":"label","name":"Can't reach your storage: the bucket did not answer. Check the network, then sync again","visible":true}
+{"do":"shot","path":"unreachable.png"}
+{"do":"click","role":"toggle-button","name":"Devices"}
+{"do":"wait","role":"label","name":"Can't reach your storage: the bucket did not answer. Check the network, then sync again","visible":true}
+{"do":"quit"}

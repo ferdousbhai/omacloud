@@ -95,13 +95,8 @@ export OMACLOUD_BIN=$here/fake-omacloud OMACLOUD_CONFIG=$root/config/omacloud/co
 export OMACLOUD_FAKE_STATE=$root/fake
 calls=$root/fake/calls.log
 : > "$calls"
-# The other programs the app runs are stand-ins too, ahead of anything installed: setup starts the daemon, and the
-# menu's Move from iCloud asks iCloud for Omarchy.
-printf '%s\n' '#!/bin/sh' "echo \"systemctl \$*\" >> '$calls'" > "$root/bin/systemctl"
-printf '%s\n' '#!/bin/sh' "echo \"icloud-session \$*\" >> '$calls'" \
-  "echo '{\"ok\":true,\"data\":{\"apps\":[{\"app\":\"notes\",\"name\":\"Notes\",\"state\":\"ready\",\"folder\":\"$HOME/Documents/Notes\"},{\"app\":\"reminders\",\"name\":\"Reminders\",\"state\":\"not_used\",\"folder\":\"\"},{\"app\":\"drive\",\"name\":\"iCloud Drive\",\"state\":\"blocked\",\"code\":\"omacloud_folder_off\",\"folder\":\"$HOME/Drive/iCloud\",\"message\":\"~/Drive is not synced here\"}]}}'" \
-  > "$root/bin/icloud-session"
-chmod +x "$root/bin/systemctl" "$root/bin/icloud-session"
+# The other programs the app runs are stand-ins too, ahead of anything installed.
+"$here/stand-ins" "$root/bin" "$calls"
 export PATH=$root/bin:/usr/bin
 mkdir -p "$HOME"/{Documents,Pictures,Work,Music}
 head -c 300000 /dev/zero > "$HOME/Documents/report.pdf"

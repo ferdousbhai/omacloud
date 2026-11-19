@@ -1,0 +1,112 @@
+# A set-up account: every page, its dialogs, the keyboard where it matters, and a narrow window.
+# dev/qa.sh target/debug/omacloud-app dev/qa/account.jsonl [directory for the shots]
+# state: account
+#
+# What the app does redraws its pages from a new `omacloud status` as that answers. A shot taken while that is laid
+# out comes back empty, so each step that redraws either waits until it has, or comes after the last shot.
+
+# The overview, once the status has answered.
+{"do":"wait","role":"list-item","name":"Documents","visible":true}
+{"do":"wait","focus":{"role":"toggle-button","name":"Overview"}}
+{"do":"shot","path":"overview.png"}
+
+# Recently Deleted: the keyboard starts on the first Put Back, Enter puts it back, and Escape closes the dialog.
+{"do":"click","role":"button","name":"Show…"}
+{"do":"wait","dialog":"Recently Deleted"}
+{"do":"wait","role":"list-item","name":"Documents/Taxes/2025.pdf","visible":true}
+{"do":"wait","focus":{"role":"button","name":"Put Back"}}
+{"do":"shot","path":"recently-deleted.png"}
+{"do":"key","keys":"Return"}
+{"do":"wait","role":"list-item","name":"Documents/Taxes/2025.pdf","visible":false}
+{"do":"wait","toasts":["Put back"]}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+
+# Open on a Phone: the QR code, and Copy Link, which closes it and says for how long the link works. A toast without a
+# button takes the place of the one before.
+{"do":"click","role":"button","name":"Open on a Phone…"}
+{"do":"wait","dialog":"Open on a phone"}
+{"do":"shot","path":"open-on-a-phone.png"}
+{"do":"click","role":"button","name":"Copy Link"}
+{"do":"wait","dialog":null}
+{"do":"wait","toasts":["Link copied: it works for five minutes"]}
+
+# The menu's Move from iCloud: Leave iCloud waits for an app chosen and "leave" typed, and Escape cancels.
+{"do":"action","name":"win.move-from-icloud"}
+{"do":"wait","dialog":"Move from iCloud"}
+{"do":"wait","role":"button","name":"Leave iCloud","sensitive":false}
+{"do":"shot","path":"move-from-icloud.png"}
+{"do":"type","text":"leave","role":"text-box","in":{"role":"dialog","name":"Move from iCloud"}}
+{"do":"wait","role":"button","name":"Leave iCloud","sensitive":false}
+{"do":"set","role":"checkbox","in":{"role":"list-item","name":"Notes"},"checked":true}
+{"do":"wait","role":"button","name":"Leave iCloud","sensitive":true}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+
+# Devices: removing asks whether it was lost, the join code is shown, and approving asks with the fingerprint.
+{"do":"click","role":"toggle-button","name":"Devices"}
+{"do":"wait","role":"button","name":"Approve…","visible":true}
+{"do":"shot","path":"devices.png"}
+{"do":"click","role":"button","name":"Remove…"}
+{"do":"wait","dialog":"Remove pier-desktop?"}
+{"do":"shot","path":"remove.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"click","role":"button","name":"Show Join Code"}
+{"do":"wait","dialog":"Join code"}
+{"do":"shot","path":"join-code.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"click","role":"button","name":"Approve…"}
+{"do":"wait","dialog":"Approve tide-notebook?"}
+{"do":"shot","path":"approve.png"}
+{"do":"click","role":"button","name":"Approve","in":{"role":"dialog","name":"Approve tide-notebook?"}}
+{"do":"wait","dialog":null}
+{"do":"wait","toasts":["Approved"]}
+# Redrawn: the button the keyboard went back to is gone, and its row has it.
+{"do":"wait","focus":{"role":"list-item","name":"tide-notebook"}}
+
+# Omarchy settings, and Keys: restoring a device's secrets asks for the recovery code, then shows what it writes.
+{"do":"click","role":"toggle-button","name":"Omarchy"}
+{"do":"wait","role":"button","name":"Keep Mine","visible":true}
+{"do":"shot","path":"omarchy.png"}
+{"do":"click","role":"toggle-button","name":"Keys"}
+{"do":"wait","role":"button","name":"Save…","visible":true}
+{"do":"shot","path":"keys.png"}
+{"do":"click","role":"button","name":"Restore…","in":{"role":"list-item","name":"pier-desktop"}}
+{"do":"wait","dialog":"Restore pier-desktop's secrets?"}
+{"do":"type","text":"K7QM-2XDP-9TTW-H3CA-VN5R-8LGE-4YZB"}
+{"do":"shot","path":"restore-secrets.png"}
+{"do":"click","role":"button","name":"Continue"}
+{"do":"wait","dialog":"Write these files?"}
+{"do":"shot","path":"write-these-files.png"}
+{"do":"click","role":"button","name":"Write"}
+{"do":"wait","dialog":null}
+{"do":"wait","toasts":["Wrote 2 files"]}
+
+{"do":"click","role":"toggle-button","name":"Recovery"}
+{"do":"wait","role":"group","name":"If you lose everything","visible":true}
+{"do":"shot","path":"recovery.png"}
+
+# A narrow window: the tabs keep their icons, and the pages their column. The first resize stops at the width the
+# tabs need with their labels, which drop below 700 px; the second then gets there.
+{"do":"click","role":"toggle-button","name":"Devices"}
+{"do":"resize","width":420,"height":640}
+{"do":"wait","role":"toggle-button","name":"Overview","width":16}
+{"do":"resize","width":420,"height":640}
+{"do":"wait","size":[420,640]}
+{"do":"shot","path":"devices-narrow.png"}
+{"do":"click","role":"toggle-button","name":"Overview"}
+{"do":"shot","path":"overview-narrow.png"}
+
+# Last, as they redraw: stopping a folder asks first, and Escape cancels and leaves its switch on; Sync now says how
+# it went.
+{"do":"set","role":"switch","in":{"role":"list-item","name":"Documents"},"checked":false}
+{"do":"wait","dialog":"Stop syncing Documents here?"}
+{"do":"shot","path":"stop-syncing.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"wait","role":"switch","in":{"role":"list-item","name":"Documents"},"checked":true}
+{"do":"click","role":"button","name":"Sync now"}
+{"do":"wait","toasts":["Synced"]}
+{"do":"quit"}

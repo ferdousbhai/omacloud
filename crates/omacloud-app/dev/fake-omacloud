@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A stand-in `omacloud` for dev/preview.sh: a made-up account, so the app has every page to draw.
+"""A stand-in `omacloud` for dev/preview.sh and dev/qa.sh: a made-up account, so the app has every page to draw.
 
 It answers what the app asks (`status` above all) from the state named in $OMACLOUD_FAKE_STATE/state:
 `new` (not set up), `gone` (set up on storage Omacloud left), `error` (storage unreachable) or `account`.
