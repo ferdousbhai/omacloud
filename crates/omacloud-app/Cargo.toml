@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-omui = { git = "https://github.com/ferdousbhai/omui", rev = "422c8602886614021104e250c3aef2577b98c2de" } # v0.5.2
+omui = { git = "https://github.com/ferdousbhai/omui", rev = "ad8058e157b028074bb4c492723cd0316b283968" } # v0.5.3
 serde_json.workspace = true
 libc.workspace = true
 qrcode.workspace = true
