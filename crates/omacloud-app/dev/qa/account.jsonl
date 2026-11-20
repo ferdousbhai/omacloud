@@ -76,7 +76,8 @@
 # Redrawn: the button the keyboard went back to is gone, and its row has it.
 {"do":"wait","focus":{"role":"list-item","name":"tide-notebook"}}
 
-# Omarchy settings, and Keys: restoring a device's secrets asks for the recovery code, then shows what it writes.
+# Omarchy settings, and Keys: restoring a device's secrets asks for the recovery code, where Enter goes on, then shows
+# what it writes.
 {"do":"click","role":"toggle-button","name":"Omarchy"}
 {"do":"wait","role":"button","name":"Keep Mine","visible":true}
 {"do":"shot","path":"omarchy.png"}
@@ -87,7 +88,7 @@
 {"do":"wait","dialog":"Restore pier-desktop's secrets?"}
 {"do":"type","text":"K7QM-2XDP-9TTW-H3CA-VN5R-8LGE-4YZB","role":"text-box","name":"Recovery code"}
 {"do":"shot","path":"restore-secrets.png"}
-{"do":"click","role":"button","name":"Continue"}
+{"do":"key","keys":"Return"}
 {"do":"wait","dialog":"Write these files?"}
 {"do":"shot","path":"write-these-files.png"}
 {"do":"click","role":"button","name":"Write"}

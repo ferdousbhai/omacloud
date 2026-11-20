@@ -1862,6 +1862,9 @@ fn restore_secrets(ui: &Rc<Ui>, device: &str) {
     dialog.add_response("next", "Continue");
     dialog.set_response_appearance("next", Appearance::Suggested);
     dialog.set_close_response("cancel");
+    // Enter after the code goes on, as Continue does
+    dialog.set_default_response("next");
+    entry.set_activates_default(true);
     let (ui2, device) = (ui.clone(), device.to_string());
     dialog.connect_response(move |_, id| {
         if id != "next" {
