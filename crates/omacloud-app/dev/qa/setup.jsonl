@@ -36,13 +36,13 @@
 {"do":"shot","path":"one-moment.png"}
 {"do":"wait","dialog":"Your recovery code","timeout_ms":10000}
 {"do":"wait","role":"button","name":"I Wrote It Down","sensitive":false}
-{"do":"wait","role":"text-box","in":{"role":"dialog","name":"Your recovery code"},"focused":true}
+{"do":"wait","focus":{"role":"text-box","name":"Type its last four characters"}}
 {"do":"shot","path":"recovery-code.png"}
 {"do":"click","role":"button","name":"Copy"}
 {"do":"wait","dialog":"Your recovery code"}
 {"do":"key","keys":"Escape"}
 {"do":"wait","dialog":"Your recovery code"}
-{"do":"type","text":"4yzb","role":"text-box","in":{"role":"dialog","name":"Your recovery code"}}
+{"do":"type","text":"4yzb","role":"text-box","name":"Type its last four characters"}
 {"do":"wait","role":"button","name":"I Wrote It Down","sensitive":true}
 {"do":"shot","path":"recovery-code-typed.png"}
 {"do":"click","role":"button","name":"I Wrote It Down"}

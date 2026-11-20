@@ -1,14 +1,21 @@
 # A set-up account: every page, its dialogs, the keyboard where it matters, and a narrow window.
 # dev/qa.sh target/debug/omacloud-app dev/qa/account.jsonl [directory for the shots]
 # state: account
-#
-# What the app does redraws its pages from a new `omacloud status` as that answers. A shot taken while that is laid
-# out comes back empty, so each step that redraws either waits until it has, or comes after the last shot.
 
 # The overview, once the status has answered.
 {"do":"wait","role":"list-item","name":"Documents","visible":true}
 {"do":"wait","focus":{"role":"toggle-button","name":"Overview"}}
 {"do":"shot","path":"overview.png"}
+
+# Stopping a folder asks first, and Escape cancels and leaves its switch on; Sync now says how it went.
+{"do":"set","role":"switch","name":"Documents","checked":false}
+{"do":"wait","dialog":"Stop syncing Documents here?"}
+{"do":"shot","path":"stop-syncing.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"wait","role":"switch","name":"Documents","checked":true}
+{"do":"click","role":"button","name":"Sync now"}
+{"do":"wait","toasts":["Synced"]}
 
 # Recently Deleted: the keyboard starts on the first Put Back, Enter puts it back, and Escape closes the dialog.
 {"do":"click","role":"button","name":"Show…"}
@@ -31,12 +38,15 @@
 {"do":"wait","dialog":null}
 {"do":"wait","toasts":["Link copied: it works for five minutes"]}
 
-# The menu's Move from iCloud: Leave iCloud waits for an app chosen and "leave" typed, and Escape cancels.
-{"do":"action","name":"win.move-from-icloud"}
+# The menu opens with the keyboard on Move from iCloud, which Enter chooses: Leave iCloud waits for an app chosen and
+# "leave" typed, and Escape cancels.
+{"do":"click","role":"button","name":"Main menu"}
+{"do":"wait","focus":{"role":"menu-item","name":"Move from iCloud…"}}
+{"do":"key","keys":"Return"}
 {"do":"wait","dialog":"Move from iCloud"}
 {"do":"wait","role":"button","name":"Leave iCloud","sensitive":false}
 {"do":"shot","path":"move-from-icloud.png"}
-{"do":"type","text":"leave","role":"text-box","in":{"role":"dialog","name":"Move from iCloud"}}
+{"do":"type","text":"leave","role":"text-box","name":"Type leave to confirm"}
 {"do":"wait","role":"button","name":"Leave iCloud","sensitive":false}
 {"do":"set","role":"checkbox","in":{"role":"list-item","name":"Notes"},"checked":true}
 {"do":"wait","role":"button","name":"Leave iCloud","sensitive":true}
@@ -75,7 +85,7 @@
 {"do":"shot","path":"keys.png"}
 {"do":"click","role":"button","name":"Restore…","in":{"role":"list-item","name":"pier-desktop"}}
 {"do":"wait","dialog":"Restore pier-desktop's secrets?"}
-{"do":"type","text":"K7QM-2XDP-9TTW-H3CA-VN5R-8LGE-4YZB"}
+{"do":"type","text":"K7QM-2XDP-9TTW-H3CA-VN5R-8LGE-4YZB","role":"text-box","name":"Recovery code"}
 {"do":"shot","path":"restore-secrets.png"}
 {"do":"click","role":"button","name":"Continue"}
 {"do":"wait","dialog":"Write these files?"}
@@ -98,15 +108,4 @@
 {"do":"shot","path":"devices-narrow.png"}
 {"do":"click","role":"toggle-button","name":"Overview"}
 {"do":"shot","path":"overview-narrow.png"}
-
-# Last, as they redraw: stopping a folder asks first, and Escape cancels and leaves its switch on; Sync now says how
-# it went.
-{"do":"set","role":"switch","in":{"role":"list-item","name":"Documents"},"checked":false}
-{"do":"wait","dialog":"Stop syncing Documents here?"}
-{"do":"shot","path":"stop-syncing.png"}
-{"do":"key","keys":"Escape"}
-{"do":"wait","dialog":null}
-{"do":"wait","role":"switch","in":{"role":"list-item","name":"Documents"},"checked":true}
-{"do":"click","role":"button","name":"Sync now"}
-{"do":"wait","toasts":["Synced"]}
 {"do":"quit"}
