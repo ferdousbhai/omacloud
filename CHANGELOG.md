@@ -10,6 +10,7 @@
   settings backups. Anything else that differs still waits for you.
 - Claude Code's output styles and pi's keybindings sync with the other agent settings.
 - In the app, Enter after the recovery code goes on to restoring a computer's secrets.
+- In the app, Enter after the last four characters of a new recovery code closes it, as the button does.
 - The keyboard stays on the button or switch you used when the app's page updates after it.
 
 ## 0.0.32 (2026-11-19)

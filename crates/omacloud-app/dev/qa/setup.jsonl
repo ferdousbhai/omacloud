@@ -57,7 +57,7 @@
 {"do":"type","text":"4yzb","role":"text-box","name":"Type its last four characters"}
 {"do":"wait","role":"button","name":"I Wrote It Down","sensitive":true}
 {"do":"shot","path":"recovery-code-typed.png"}
-{"do":"click","role":"button","name":"I Wrote It Down"}
+{"do":"key","keys":"Return"}
 {"do":"wait","dialog":null}
 
 # Set up: the account's pages and their tabs.

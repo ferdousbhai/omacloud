@@ -691,6 +691,9 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>, wait: &s
                 dialog.add_response("done", "I Wrote It Down");
                 dialog.set_response_appearance("done", Appearance::Suggested);
                 dialog.set_response_enabled("done", false);
+                // Enter after the four characters is the button, once it is on
+                dialog.set_default_response("done");
+                check.set_activates_default(true);
                 // copying leaves it open, the code still to be written down, and
                 // Escape does nothing: only the code typed back closes it
                 dialog.set_response_closes("copy", false);
