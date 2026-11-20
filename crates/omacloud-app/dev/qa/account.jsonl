@@ -125,8 +125,8 @@
 {"do":"wait","role":"button","name":"Remove…","visible":false}
 {"do":"wait","focus":{"role":"list-item","name":"harbour-laptop"}}
 
-# Approving asks with the fingerprint, from the keyboard, and the computer joins the devices. It is then cut off as
-# lost.
+# Approving asks with the fingerprint, from the keyboard, and the computer joins the devices, where the keyboard goes
+# with its row: Approve… is gone, and Remove… stands in its place. It is then cut off as lost.
 {"do":"focus","role":"button","name":"Approve…"}
 {"do":"key","keys":"Return"}
 {"do":"wait","dialog":"Approve tide-notebook?"}
@@ -135,6 +135,7 @@
 {"do":"wait","toasts":["Approved"]}
 {"do":"wait","role":"button","name":"Approve…","visible":false}
 {"do":"wait","role":"button","name":"Remove…","visible":true}
+{"do":"wait","focus":{"role":"list-item","name":"tide-notebook"}}
 {"do":"shot","path":"devices-approved.png"}
 {"do":"click","role":"button","name":"Remove…"}
 {"do":"wait","dialog":"Remove tide-notebook?"}

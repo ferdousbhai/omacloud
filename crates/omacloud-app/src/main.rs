@@ -452,13 +452,65 @@ fn build(app: &gtk::Application, page: Option<&str>) {
     window.present();
 }
 
-/// Where the keyboard is under `root`: the place of each widget among its siblings, from `root` down to the focused
-/// one. `None` when the keyboard is elsewhere (the title bar, a dialog).
-fn focus_path(root: &gtk::Widget) -> Option<Vec<usize>> {
+/// One widget on the way from the pages down to the one with the keyboard: what it is, and where it stood.
+struct Step {
+    kind: glib::Type,
+    /// A group's or a row's title, a button's label; empty for anything else.
+    title: String,
+    /// Its place among its siblings of that kind and title,
+    nth: usize,
+    /// and among them all.
+    place: usize,
+}
+
+impl Step {
+    fn of(widget: &gtk::Widget) -> Self {
+        let like = |other: &gtk::Widget| other.type_() == widget.type_() && title(other) == title(widget);
+        let before = || std::iter::successors(widget.prev_sibling(), gtk::Widget::prev_sibling);
+        Self {
+            kind: widget.type_(),
+            title: title(widget),
+            nth: before().filter(like).count(),
+            place: before().count(),
+        }
+    }
+
+    fn is(&self, widget: &gtk::Widget) -> bool {
+        widget.type_() == self.kind && title(widget) == self.title
+    }
+}
+
+fn children(of: &gtk::Widget) -> impl Iterator<Item = gtk::Widget> + use<> {
+    std::iter::successors(of.first_child(), gtk::Widget::next_sibling)
+}
+
+/// What names `widget` on a page however the page is laid out: a button's label, and the title of one of omui's rows
+/// or groups, read from the label omui gives the class `row-title` or `group-title`. Empty for any other widget.
+fn title(widget: &gtk::Widget) -> String {
+    fn label(under: &gtk::Widget, class: &str) -> Option<String> {
+        children(under).find_map(|child| match child.downcast_ref::<gtk::Label>() {
+            Some(label) if label.has_css_class(class) => Some(label.label().into()),
+            _ => label(&child, class),
+        })
+    }
+    if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+        button.label().unwrap_or_default().into()
+    } else if widget.is::<gtk::ListBoxRow>() {
+        label(widget, "row-title").unwrap_or_default()
+    } else if widget.has_css_class("group") {
+        label(widget, "group-title").unwrap_or_default()
+    } else {
+        String::new()
+    }
+}
+
+/// Where the keyboard is under `root`: each widget from `root` down to the focused one. `None` when the keyboard is
+/// elsewhere (the title bar, a dialog).
+fn focus_path(root: &gtk::Widget) -> Option<Vec<Step>> {
     let mut at = root.root()?.focus()?;
     let mut path = Vec::new();
     while at != *root {
-        path.push(std::iter::successors(at.prev_sibling(), gtk::Widget::prev_sibling).count());
+        path.push(Step::of(&at));
         at = at.parent()?;
     }
     path.reverse();
@@ -466,22 +518,46 @@ fn focus_path(root: &gtk::Widget) -> Option<Vec<usize>> {
 }
 
 /// Gives the keyboard to the widget at `path` ([`focus_path`]) under `root`. The pages are built again from each
-/// new status, and the keyboard would otherwise be left on a row near the control someone used, or nowhere. A page
-/// built again has that control in the same place unless the status changed around it: then the row now nearest
-/// that place has the keyboard, or the first stop for Tab around it.
-fn focus_at(root: &gtk::Widget, path: &[usize]) {
+/// new status, and the keyboard would otherwise be left on a row near the control someone used, or nowhere. Each
+/// step is found by what it is, not by where it stood: a group that came or went above it moves every place after.
+/// When the status changed the control itself, the keyboard goes to its row; when the row left with its group for
+/// another (a computer approved), to the row there; and when the row is gone, to the row now nearest its place, or
+/// the first stop for Tab around it. Never to a control that only stands where the old one did: Enter there would
+/// do another thing.
+fn focus_at(root: &gtk::Widget, path: &[Step]) {
+    fn find(under: &gtk::Widget, step: &Step) -> Option<gtk::Widget> {
+        children(under).find_map(|child| {
+            if step.is(&child) {
+                Some(child)
+            } else {
+                find(&child, step)
+            }
+        })
+    }
+    let row = gtk::ListBoxRow::static_type();
     let mut at = root.clone();
-    for &place in path {
-        let Some(last) = at.last_child() else { break };
-        at = std::iter::successors(at.first_child(), gtk::Widget::next_sibling)
-            .nth(place)
-            .unwrap_or(last);
+    let mut left = path;
+    while let Some((step, rest)) = left.split_first() {
+        let Some(same) = children(&at).filter(|child| step.is(child)).nth(step.nth) else {
+            break;
+        };
+        (at, left) = (same, rest);
+    }
+    if let Some(gone) = left.first() {
+        if let Some(around) = at.ancestor(row) {
+            at = around;
+        } else if let Some(i) = left.iter().position(|step| step.kind == row && !step.title.is_empty())
+            && let Some(moved) = find(&at, &left[i])
+        {
+            return focus_at(&moved, &left[i + 1..]);
+        } else if let Some(nearest) = children(&at).nth(gone.place).or_else(|| at.last_child()) {
+            at = nearest;
+        }
     }
     // as Tab arrives: at a control itself, and in a list at a row, never at the list, where nothing shows it
     while !at.child_focus(gtk::DirectionType::TabForward) && at != *root {
         // from inside a row to the row, not to the text in it that Tab stops at first
-        let row = at.ancestor(gtk::ListBoxRow::static_type()).filter(|row| *row != at);
-        let Some(around) = row.or_else(|| at.parent()) else {
+        let Some(around) = at.ancestor(row).filter(|row| *row != at).or_else(|| at.parent()) else {
             break;
         };
         at = around;
