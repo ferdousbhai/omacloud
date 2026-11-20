@@ -1,0 +1,20 @@
+# A new computer added to an account with a join code: it ends on the fingerprint to approve on another computer.
+# dev/qa.sh target/debug/omacloud-app dev/qa/join.jsonl [directory for the shots]
+# state: new
+
+# The keyboard starts in the code's field.
+{"do":"wait","role":"button","name":"I Already Use Omacloud","visible":true}
+{"do":"click","role":"button","name":"I Already Use Omacloud"}
+{"do":"wait","focus":{"role":"text-box","name":"Join code"}}
+{"do":"type","text":"omacloud-join-mQ3xT7vK2pLs9dRw"}
+{"do":"click","role":"button","name":"Add This Computer"}
+{"do":"wait","dialog":"One Moment"}
+
+# Copy closes the fingerprint, over the account's pages.
+{"do":"wait","dialog":"Approve this computer","timeout_ms":10000}
+{"do":"wait","role":"button","name":"Sync now","visible":true}
+{"do":"shot","path":"approve-this-computer.png"}
+{"do":"click","role":"button","name":"Copy"}
+{"do":"wait","dialog":null}
+{"do":"wait","role":"button","name":"Open on a Phone…","visible":true}
+{"do":"quit"}

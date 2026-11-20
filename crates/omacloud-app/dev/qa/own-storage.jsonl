@@ -1,0 +1,40 @@
+# A new computer on a bucket of one's own: the provider chosen names where the bucket is, the form is filled in by
+# its rows' titles, and the account made ends on the recovery code.
+# dev/qa.sh target/debug/omacloud-app dev/qa/own-storage.jsonl [directory for the shots]
+# state: new
+
+# Nothing to say about storage Omacloud left; the keyboard starts on what most people want.
+{"do":"wait","focus":{"role":"button","name":"Set Up With Dropbox"}}
+{"do":"wait","toasts":[]}
+
+# The provider is a drop-down the keyboard opens: its last, any S3, asks for an endpoint.
+{"do":"click","role":"button","name":"Use My Own Storage"}
+{"do":"wait","focus":{"role":"combo-box","name":"Provider"}}
+{"do":"wait","role":"text-box","name":"Cloudflare account ID","visible":true}
+{"do":"key","keys":"Return"}
+{"do":"wait","focus":{"role":"list-item","name":"Cloudflare R2"}}
+{"do":"key","keys":"End"}
+{"do":"wait","focus":{"role":"list-item","name":"Other S3"}}
+{"do":"key","keys":"Return"}
+{"do":"wait","role":"text-box","name":"Cloudflare account ID","visible":false}
+{"do":"wait","focus":{"role":"combo-box","name":"Provider"}}
+
+# All but the secret typed: still not enough.
+{"do":"type","text":"https://s3.example.net","role":"text-box","name":"Endpoint (https://...)"}
+{"do":"type","text":"harbour-files","role":"text-box","name":"Bucket name"}
+{"do":"type","text":"AKIAEXAMPLE","role":"text-box","name":"Access key ID"}
+{"do":"click","role":"button","name":"Create Account"}
+{"do":"wait","toasts":["Fill in where your bucket is, and its key"]}
+{"do":"type","text":"not-a-real-secret","role":"text-box","name":"Secret access key"}
+{"do":"shot","path":"own-storage-filled.png"}
+
+# One Moment while it sets up, then the recovery code and the account's pages.
+{"do":"click","role":"button","name":"Create Account"}
+{"do":"wait","dialog":"One Moment"}
+{"do":"wait","dialog":"Your recovery code","timeout_ms":10000}
+{"do":"type","text":"4YZB","role":"text-box","name":"Type its last four characters"}
+{"do":"click","role":"button","name":"I Wrote It Down"}
+{"do":"wait","dialog":null}
+{"do":"wait","role":"button","name":"Sync now","visible":true}
+{"do":"wait","role":"button","name":"Open on a Phone…","visible":true}
+{"do":"quit"}

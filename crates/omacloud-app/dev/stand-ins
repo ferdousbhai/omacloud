@@ -3,7 +3,8 @@ set -Eeuo pipefail
 
 # Writes stand-ins for the programs other than `omacloud` that the app runs into <directory>, for dev/preview.sh and
 # dev/qa.sh to put ahead of anything installed: setup starts the daemon (`systemctl`), and the menu's Move from iCloud
-# asks iCloud for Omarchy (`icloud-session`). Each call is added to <calls.log>.
+# asks iCloud for Omarchy (`icloud-session`, where leaving for good, `--yes`, answers that Notes left). Each call is
+# added to <calls.log>.
 #
 #   dev/stand-ins <directory> <calls.log>
 (( $# == 2 )) || { echo "usage: $0 <directory> <calls.log>" >&2; exit 2; }
@@ -13,6 +14,7 @@ mkdir -p "$dir"
 printf '%s\n' '#!/bin/sh' "echo \"systemctl \$*\" >> '$calls'" > "$dir/systemctl"
 # The folders are under the HOME the app runs with, which dev/qa.sh only knows once it starts.
 printf '%s\n' '#!/bin/sh' "echo \"icloud-session \$*\" >> '$calls'" \
+  "case \" \$* \" in *' --yes '*) echo '{\"ok\":true,\"data\":{\"left\":[{\"app\":\"notes\"}],\"skipped\":[],\"failed\":null}}'; exit ;; esac" \
   "echo '{\"ok\":true,\"data\":{\"apps\":[{\"app\":\"notes\",\"name\":\"Notes\",\"state\":\"ready\",\"folder\":\"'\"\$HOME\"'/Documents/Notes\"},{\"app\":\"reminders\",\"name\":\"Reminders\",\"state\":\"not_used\",\"folder\":\"\"},{\"app\":\"drive\",\"name\":\"iCloud Drive\",\"state\":\"blocked\",\"code\":\"omacloud_folder_off\",\"folder\":\"'\"\$HOME\"'/Drive/iCloud\",\"message\":\"~/Drive is not synced here\"}]}}'" \
   > "$dir/icloud-session"
 chmod +x "$dir/systemctl" "$dir/icloud-session"

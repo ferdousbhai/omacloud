@@ -3,9 +3,11 @@
 
 It answers what the app asks (`status` above all) from the state named in $OMACLOUD_FAKE_STATE/state:
 `new` (not set up), `gone` (set up on storage Omacloud left), `error` (storage unreachable) or `account`.
-`init` makes the account and prints its recovery code, to a terminal only, as the real one does. Nothing
-is read or written outside that directory. Each call is added to its `calls.log`, with the names (never
-the values) of the secrets it was handed.
+`init` makes the account and prints its recovery code, to a terminal only, as the real one does. What the
+app then changes (a folder, settings sync, a device, a choice, a held file, saved secrets, a sync) shows in
+the next `status`, so that a page drawn again from it can be told from the one before. Nothing is read or
+written outside that directory. Each call is added to its `calls.log`, with the names (never the values) of
+the secrets it was handed, and to `calls.jsonl`, which `status` reads the changes from.
 """
 import json
 import os
@@ -23,10 +25,13 @@ def fingerprint(seed):
     return ' '.join(f'{(seed * 7919 + i * 104729) % 65536:04x}' for i in range(8))
 
 
+def folder(name):
+    return {'name': name, 'path': f'{HOME}/{name}'}
+
+
 def account():
-    folder = lambda name: {'name': name, 'path': f'{HOME}/{name}'}
     choice = lambda name, kind, mine, theirs: {'name': name, 'kind': kind, 'choices': {ME: mine, OTHER: theirs}}
-    return {
+    made_up = {
         'set_up': True,
         'daemon': True,
         'synced_at': int(time.time()) - 120,
@@ -80,8 +85,43 @@ def account():
             ],
             'held': ['.config/hypr/bindings.conf'],
         },
-        'secrets': [ME, OTHER],
+        'secrets': [OTHER],
     }
+    for call in (STATE / 'calls.jsonl').read_text().splitlines():
+        change(made_up, json.loads(call))
+    return made_up
+
+
+def change(a, call):
+    """What a call the app made changes in the account `a`."""
+    folders, settings = a['folders'], a['settings']
+    match call:
+        case ['folders', 'skip' | 'unskip' | 'add' as verb, name]:
+            # `add` takes a path as well
+            name = name.rsplit('/', 1)[-1]
+            for kind in folders:
+                folders[kind] = [f for f in folders[kind] if f['name'] != name]
+            folders['skipped' if verb == 'skip' else 'synced'].append(folder(name))
+        case ['settings', 'on' | 'off' as word]:
+            settings['on'] = word == 'on'
+        case ['settings', 'resolve', path, *_]:
+            settings['held'] = [held for held in settings['held'] if not path.endswith(held)]
+        case ['devices', 'approve', print_]:
+            asked = [r for r in a['requests'] if r['fingerprint'] == print_]
+            a['requests'] = [r for r in a['requests'] if r['fingerprint'] != print_]
+            a['devices'] += [{**r, 'this': False} for r in asked]
+        case ['devices', 'revoke', print_, *_]:
+            gone = [d for d in a['devices'] if d['fingerprint'] == print_]
+            a['devices'] = [d for d in a['devices'] if d['fingerprint'] != print_]
+            a['removed'] += [{'name': d['name'], 'fingerprint': print_} for d in gone]
+        case ['choose', name, word]:
+            for item in a['choices']['items']:
+                if item['name'] == name:
+                    item['choices'][ME] = word
+        case ['secrets', 'save'] if ME not in a['secrets']:
+            a['secrets'].insert(0, ME)
+        case ['sync']:
+            a['synced_at'] = int(time.time())
 
 
 def status():
@@ -118,6 +158,8 @@ SECRETS = ('OMACLOUD_RECOVERY_CODE', 'OMACLOUD_JOIN_CODE', 'OMACLOUD_SECRET_ACCE
 secrets = [name for name in SECRETS if name in os.environ]
 with open(STATE / 'calls.log', 'a') as log:
     print(' '.join(['omacloud', *args, *(f'[{name}]' for name in secrets)]), file=log)
+with open(STATE / 'calls.jsonl', 'a') as calls:
+    print(json.dumps(args), file=calls)
 
 data = {}
 match args:

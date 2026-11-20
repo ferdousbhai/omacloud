@@ -1,21 +1,45 @@
-# A set-up account: every page, its dialogs, the keyboard where it matters, and a narrow window.
+# A set-up account: every page, its dialogs, what each control does, the keyboard where it matters, and a narrow window.
 # dev/qa.sh target/debug/omacloud-app dev/qa/account.jsonl [directory for the shots]
 # state: account
+#
+# What the app does says how it went in a toast, then redraws its pages from a new `omacloud status` as that answers.
+# The made-up account shows each change, so a step waits for what the new page shows before it goes on: a toast alone
+# comes before the page. The keyboard stays on the control that was used, or goes to the row nearest when that is gone.
 
 # The overview, once the status has answered.
 {"do":"wait","role":"list-item","name":"Documents","visible":true}
 {"do":"wait","focus":{"role":"toggle-button","name":"Overview"}}
 {"do":"shot","path":"overview.png"}
 
-# Stopping a folder asks first, and Escape cancels and leaves its switch on; Sync now says how it went.
-{"do":"set","role":"switch","name":"Documents","checked":false}
+# Folders, from the keyboard: stopping one asks first, and Escape cancels and leaves its switch on; Stop Syncing stops
+# it. One that is off and one of home's other folders start at once; Omarchy settings go off and on.
+{"do":"focus","role":"switch","name":"Documents"}
+{"do":"key","keys":"space"}
 {"do":"wait","dialog":"Stop syncing Documents here?"}
 {"do":"shot","path":"stop-syncing.png"}
 {"do":"key","keys":"Escape"}
 {"do":"wait","dialog":null}
 {"do":"wait","role":"switch","name":"Documents","checked":true}
-{"do":"click","role":"button","name":"Sync now"}
-{"do":"wait","toasts":["Synced"]}
+{"do":"wait","focus":{"role":"switch","name":"Documents"}}
+{"do":"key","keys":"space"}
+{"do":"wait","dialog":"Stop syncing Documents here?"}
+{"do":"click","role":"button","name":"Stop Syncing"}
+{"do":"wait","toasts":["Stopped syncing here"]}
+{"do":"wait","role":"switch","name":"Documents","checked":false}
+{"do":"wait","focus":{"role":"switch","name":"Documents"}}
+{"do":"set","role":"switch","name":"Videos","checked":true}
+{"do":"wait","toasts":["Syncing"]}
+{"do":"wait","role":"switch","name":"Videos","checked":true}
+{"do":"click","role":"list-item","name":"Add a folder from your home"}
+{"do":"set","role":"switch","name":"Recipes","checked":true}
+{"do":"wait","role":"switch","name":"Recipes","checked":true}
+{"do":"set","role":"switch","name":"Omarchy settings","checked":false}
+{"do":"wait","toasts":["Omarchy settings stay here"]}
+{"do":"wait","role":"switch","name":"Omarchy settings","checked":false}
+{"do":"set","role":"switch","name":"Omarchy settings","checked":true}
+{"do":"wait","toasts":["Omarchy settings sync"]}
+{"do":"wait","role":"switch","name":"Omarchy settings","checked":true}
+{"do":"shot","path":"overview-changed.png"}
 
 # Recently Deleted: the keyboard starts on the first Put Back, Enter puts it back, and Escape closes the dialog.
 {"do":"click","role":"button","name":"Show…"}
@@ -38,9 +62,13 @@
 {"do":"wait","dialog":null}
 {"do":"wait","toasts":["Link copied: it works for five minutes"]}
 
-# The menu opens with the keyboard on Move from iCloud, which Enter chooses: Leave iCloud waits for an app chosen and
-# "leave" typed, and Escape cancels.
+# The menu: it opens with the keyboard on Move from iCloud, Escape closes it, and Enter on its button opens it again
+# and then chooses. Leave iCloud waits for an app chosen and "leave" typed, and Escape cancels.
 {"do":"click","role":"button","name":"Main menu"}
+{"do":"wait","focus":{"role":"menu-item","name":"Move from iCloud…"}}
+{"do":"key","keys":"Escape"}
+{"do":"wait","focus":{"role":"button","name":"Main menu"}}
+{"do":"key","keys":"Return"}
 {"do":"wait","focus":{"role":"menu-item","name":"Move from iCloud…"}}
 {"do":"key","keys":"Return"}
 {"do":"wait","dialog":"Move from iCloud"}
@@ -53,37 +81,103 @@
 {"do":"key","keys":"Escape"}
 {"do":"wait","dialog":null}
 
-# Devices: removing asks whether it was lost, the join code is shown, and approving asks with the fingerprint.
+# Leaving says what left. Sync now, in the title bar, says how it went, and the page when.
+{"do":"click","role":"button","name":"Main menu"}
+{"do":"key","keys":"Return"}
+{"do":"wait","dialog":"Move from iCloud"}
+{"do":"set","role":"checkbox","in":{"role":"list-item","name":"Notes"},"checked":true}
+{"do":"type","text":"leave","role":"text-box","name":"Type leave to confirm"}
+{"do":"click","role":"button","name":"Leave iCloud"}
+{"do":"wait","toasts":["Notes left iCloud; Omacloud syncs it now"]}
+{"do":"wait","dialog":null}
+{"do":"click","role":"button","name":"Sync now"}
+{"do":"wait","toasts":["Synced"]}
+{"do":"wait","role":"label","name":"Synced just now · in harbour-files at https://fsn1.your-objectstorage.com","visible":true}
+
+# Devices. A file's choice is a drop-down, which End and Enter change to its last; the join code is shown.
 {"do":"click","role":"toggle-button","name":"Devices"}
 {"do":"wait","role":"button","name":"Approve…","visible":true}
 {"do":"shot","path":"devices.png"}
-{"do":"click","role":"button","name":"Remove…"}
-{"do":"wait","dialog":"Remove pier-desktop?"}
-{"do":"shot","path":"remove.png"}
-{"do":"key","keys":"Escape"}
-{"do":"wait","dialog":null}
+{"do":"click","role":"combo-box","in":{"role":"list-item","name":".claude/CLAUDE.md"}}
+{"do":"key","keys":"End"}
+{"do":"wait","focus":{"role":"list-item","name":"Off"}}
+{"do":"key","keys":"Return"}
+{"do":"wait","toasts":["Changed here"]}
+{"do":"wait","focus":{"role":"combo-box","name":""}}
 {"do":"click","role":"button","name":"Show Join Code"}
 {"do":"wait","dialog":"Join code"}
 {"do":"shot","path":"join-code.png"}
 {"do":"key","keys":"Escape"}
 {"do":"wait","dialog":null}
-{"do":"click","role":"button","name":"Approve…"}
+
+# Removing asks whether it was lost: Escape cancels, and Remove takes its row away, which leaves the keyboard on the
+# row before.
+{"do":"click","role":"button","name":"Remove…"}
+{"do":"wait","dialog":"Remove pier-desktop?"}
+{"do":"shot","path":"remove.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"wait","focus":{"role":"button","name":"Remove…"}}
+{"do":"key","keys":"Return"}
+{"do":"wait","dialog":"Remove pier-desktop?"}
+{"do":"click","role":"button","name":"Remove"}
+{"do":"wait","toasts":["Removed"]}
+{"do":"wait","role":"button","name":"Remove…","visible":false}
+{"do":"wait","focus":{"role":"list-item","name":"harbour-laptop"}}
+
+# Approving asks with the fingerprint, from the keyboard, and the computer joins the devices. It is then cut off as
+# lost.
+{"do":"focus","role":"button","name":"Approve…"}
+{"do":"key","keys":"Return"}
 {"do":"wait","dialog":"Approve tide-notebook?"}
 {"do":"shot","path":"approve.png"}
 {"do":"click","role":"button","name":"Approve","in":{"role":"dialog","name":"Approve tide-notebook?"}}
-{"do":"wait","dialog":null}
 {"do":"wait","toasts":["Approved"]}
-# The page is drawn again from the new status, and the keyboard is still on the button it went back to.
-{"do":"wait","focus":{"role":"button","name":"Approve…"}}
+{"do":"wait","role":"button","name":"Approve…","visible":false}
+{"do":"wait","role":"button","name":"Remove…","visible":true}
+{"do":"shot","path":"devices-approved.png"}
+{"do":"click","role":"button","name":"Remove…"}
+{"do":"wait","dialog":"Remove tide-notebook?"}
+{"do":"click","role":"button","name":"It's Lost or Stolen"}
+{"do":"wait","toasts":["Removed. Now make a new key at your provider, and run omacloud bucket set-key"]}
+{"do":"wait","role":"button","name":"Remove…","visible":false}
+{"do":"wait","dialog":null}
 
-# Omarchy settings, and Keys: restoring a device's secrets asks for the recovery code, where Enter goes on, then shows
-# what it writes.
+# Omarchy settings: a file changed on two computers is resolved, and the switch turns settings sync off and on.
 {"do":"click","role":"toggle-button","name":"Omarchy"}
 {"do":"wait","role":"button","name":"Keep Mine","visible":true}
 {"do":"shot","path":"omarchy.png"}
+{"do":"click","role":"button","name":"Keep Theirs"}
+{"do":"wait","toasts":["Resolved"]}
+{"do":"wait","role":"button","name":"Keep Theirs","visible":false}
+{"do":"focus","role":"switch","name":"Sync settings on this device"}
+{"do":"key","keys":"space"}
+{"do":"wait","toasts":["Settings sync is off"]}
+{"do":"wait","role":"group","name":"What syncs","visible":false}
+{"do":"wait","focus":{"role":"switch","name":"Sync settings on this device"}}
+{"do":"shot","path":"omarchy-off.png"}
+
+# Keys travel with settings sync: off, the page says where to turn it on.
+{"do":"click","role":"toggle-button","name":"Keys"}
+{"do":"wait","role":"group","name":"Secrets","visible":true}
+{"do":"shot","path":"keys-off.png"}
+{"do":"click","role":"toggle-button","name":"Omarchy"}
+{"do":"set","role":"switch","name":"Sync settings on this device","checked":true}
+{"do":"wait","toasts":["Settings sync is on"]}
+{"do":"wait","role":"group","name":"What syncs","visible":true}
+
+# Saving asks first, and this computer joins the saved. Restoring a device's secrets asks for the recovery code, where
+# Enter goes on, then shows what it writes.
 {"do":"click","role":"toggle-button","name":"Keys"}
 {"do":"wait","role":"button","name":"Save…","visible":true}
 {"do":"shot","path":"keys.png"}
+{"do":"focus","role":"button","name":"Save…"}
+{"do":"key","keys":"Return"}
+{"do":"wait","dialog":"Save secrets?"}
+{"do":"click","role":"button","name":"Save"}
+{"do":"wait","toasts":["Secrets saved"]}
+{"do":"wait","role":"button","name":"Restore…","in":{"role":"list-item","name":"harbour-laptop","in":{"role":"group","name":"Saved"}},"visible":true}
+{"do":"wait","focus":{"role":"button","name":"Save…"}}
 {"do":"click","role":"button","name":"Restore…","in":{"role":"list-item","name":"pier-desktop"}}
 {"do":"wait","dialog":"Restore pier-desktop's secrets?"}
 {"do":"type","text":"K7QM-2XDP-9TTW-H3CA-VN5R-8LGE-4YZB","role":"text-box","name":"Recovery code"}

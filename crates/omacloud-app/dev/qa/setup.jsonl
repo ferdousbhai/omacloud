@@ -11,6 +11,7 @@
 # Your own storage: the keyboard starts in the form, an empty one says what it needs, and Escape goes back.
 {"do":"click","role":"button","name":"Use My Own Storage"}
 {"do":"wait","role":"button","name":"Create Account","visible":true}
+{"do":"wait","focus":{"role":"combo-box","name":"Provider"}}
 {"do":"shot","path":"own-storage.png"}
 {"do":"click","role":"button","name":"Create Account"}
 {"do":"wait","toasts":["Fill in where your bucket is, and its key"]}
@@ -26,13 +27,24 @@
 {"do":"click","role":"button","name":"Back"}
 {"do":"wait","role":"button","name":"Add This Computer","visible":false}
 
-# Dropbox: One Moment while it sets up, then the recovery code. Neither Copy nor Escape closes it: only its last four
-# characters typed back let it close.
+# Dropbox, with one more folder. A recovery code that cannot be one is refused before anything runs.
 {"do":"click","role":"button","name":"Set Up With Dropbox"}
 {"do":"wait","role":"button","name":"Continue","visible":true}
 {"do":"shot","path":"what-to-sync.png"}
+{"do":"set","role":"switch","name":"Music","checked":true}
+{"do":"click","role":"list-item","name":"Lost every computer?"}
+{"do":"type","text":"K7QM-2XDP","role":"text-box","name":"Recovery code"}
+{"do":"click","role":"button","name":"Continue"}
+{"do":"wait","toasts":["That's not a recovery code (28 characters)"]}
+{"do":"focus","role":"text-box","name":"Recovery code"}
+{"do":"key","keys":"<Control>a"}
+{"do":"key","keys":"BackSpace"}
+
+# One Moment while it sets up, then the recovery code. Neither Copy nor Escape closes it: only its last four
+# characters typed back let it close.
 {"do":"click","role":"button","name":"Continue"}
 {"do":"wait","dialog":"One Moment"}
+# Its spinner turns on a compositor (dev/preview.sh shows it); a shot here draws the dialog without it.
 {"do":"shot","path":"one-moment.png"}
 {"do":"wait","dialog":"Your recovery code","timeout_ms":10000}
 {"do":"wait","role":"button","name":"I Wrote It Down","sensitive":false}
