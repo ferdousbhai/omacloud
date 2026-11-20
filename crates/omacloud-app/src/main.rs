@@ -323,12 +323,18 @@ impl Ui {
                 }
                 Ok(s) => {
                     ui.show_tabs(true);
-                    ui.setting_up.set(false);
+                    // setup's pages are another thing: the keyboard has no place to keep there
+                    let focus = (!ui.setting_up.replace(false))
+                        .then(|| focus_path(ui.stack.upcast_ref()))
+                        .flatten();
                     put(&ui.overview, &overview(&ui, &s));
                     put(&ui.devices, &devices(&ui, &s));
                     put(&ui.settings, &settings(&ui, &s));
                     put(&ui.secrets, &secrets(&ui, &s));
                     put(&ui.recovery, &recovery());
+                    if let Some(path) = focus {
+                        focus_at(ui.stack.upcast_ref(), &path);
+                    }
                 }
                 Err(e) => {
                     ui.show_tabs(true);
@@ -444,6 +450,42 @@ fn build(app: &gtk::Application, page: Option<&str>) {
     }
     ui.refresh();
     window.present();
+}
+
+/// Where the keyboard is under `root`: the place of each widget among its siblings, from `root` down to the focused
+/// one. `None` when the keyboard is elsewhere (the title bar, a dialog).
+fn focus_path(root: &gtk::Widget) -> Option<Vec<usize>> {
+    let mut at = root.root()?.focus()?;
+    let mut path = Vec::new();
+    while at != *root {
+        path.push(std::iter::successors(at.prev_sibling(), gtk::Widget::prev_sibling).count());
+        at = at.parent()?;
+    }
+    path.reverse();
+    Some(path)
+}
+
+/// Gives the keyboard to the widget at `path` ([`focus_path`]) under `root`. The pages are built again from each
+/// new status, and the keyboard would otherwise be left on a row near the control someone used, or nowhere. A page
+/// built again has that control in the same place unless the status changed around it: then the row now nearest
+/// that place has the keyboard, or the first stop for Tab around it.
+fn focus_at(root: &gtk::Widget, path: &[usize]) {
+    let mut at = root.clone();
+    for &place in path {
+        let Some(last) = at.last_child() else { break };
+        at = std::iter::successors(at.first_child(), gtk::Widget::next_sibling)
+            .nth(place)
+            .unwrap_or(last);
+    }
+    // as Tab arrives: at a control itself, and in a list at a row, never at the list, where nothing shows it
+    while !at.child_focus(gtk::DirectionType::TabForward) && at != *root {
+        // from inside a row to the row, not to the text in it that Tab stops at first
+        let row = at.ancestor(gtk::ListBoxRow::static_type()).filter(|row| *row != at);
+        let Some(around) = row.or_else(|| at.parent()) else {
+            break;
+        };
+        at = around;
+    }
 }
 
 fn text(v: &Value) -> String {

@@ -73,8 +73,8 @@
 {"do":"click","role":"button","name":"Approve","in":{"role":"dialog","name":"Approve tide-notebook?"}}
 {"do":"wait","dialog":null}
 {"do":"wait","toasts":["Approved"]}
-# Redrawn: the button the keyboard went back to is gone, and its row has it.
-{"do":"wait","focus":{"role":"list-item","name":"tide-notebook"}}
+# The page is drawn again from the new status, and the keyboard is still on the button it went back to.
+{"do":"wait","focus":{"role":"button","name":"Approve…"}}
 
 # Omarchy settings, and Keys: restoring a device's secrets asks for the recovery code, where Enter goes on, then shows
 # what it writes.

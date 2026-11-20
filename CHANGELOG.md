@@ -6,6 +6,7 @@
   no longer needs libadwaita. In a narrow window its pages are icons in the header, in place
   of the bar at the bottom.
 - In the app, Enter after the recovery code goes on to restoring a computer's secrets.
+- The keyboard stays on the button or switch you used when the app's page updates after it.
 
 ## 0.0.32 (2026-11-19)
 
