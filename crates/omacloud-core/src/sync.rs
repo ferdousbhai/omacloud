@@ -2850,7 +2850,10 @@ impl Engine {
 
     /// A remote change to a setting. Changed on both sides: a three way merge
     /// against the base; if the changes overlap, the local file stays and the
-    /// remote version is parked, held back until `resolve`. No conflict
+    /// remote version is parked, held back until `resolve`. Without a base
+    /// (computers meeting for the first time), a version that is the other
+    /// with lines added is taken, the replaced one kept in the backups: the
+    /// usual difference there is a line an installer or a person appended. No conflict
     /// copies: apps load their config directories by pattern, and a copy
     /// could be loaded as live config.
     #[allow(clippy::too_many_arguments)]
@@ -2907,6 +2910,20 @@ impl Engine {
                     info!("merged {} with another computer's changes", path.display());
                     self.back_up(&path)?;
                     replace_file(&dest, &merged)?;
+                    _ = self.pending.insert(path);
+                } else if base.is_none() && settings::holds_lines(&theirs, &ours) {
+                    info!(
+                        "{} here only lacked lines the account's version has; took that one",
+                        path.display()
+                    );
+                    self.back_up(&path)?;
+                    replace_file(&dest, &theirs)?;
+                    self.adopt_metadata(&path, &r)?;
+                } else if base.is_none() && settings::holds_lines(&ours, &theirs) {
+                    info!(
+                        "{} on the account only lacked lines this version has; sending this one",
+                        path.display()
+                    );
                     _ = self.pending.insert(path);
                 } else {
                     stats.conflicts += 1;

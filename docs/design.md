@@ -173,7 +173,9 @@ files live on only in the history. A computer that keeps its key (its state lost
 meets its old folder as it meets shared settings: a three-way merge, or a held
 choice, never a conflict copy beside live config. A file
 a computer keeps stays shared for the others, and shared again it is compared
-afresh, so two copies that differ wait for a choice. Settings sync stands down
+afresh, so two copies that differ wait for a choice, unless one is the other
+with lines added: without a common version that is the one change taken
+unasked, the longer copy, the replaced one going to the backups. Settings sync stands down
 when another dotfile manager owns those files. Omacloud's own entries
 (shell dotfiles, AI agents' settings and skills) add a `dir/**` form for
 whole folders: text files only, at most 2 MiB, never through a symlink,

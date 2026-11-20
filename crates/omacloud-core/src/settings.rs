@@ -670,9 +670,32 @@ pub fn merge(base: &[u8], ours: &[u8], theirs: &[u8]) -> Option<Vec<u8>> {
     diffy::merge(base, ours, theirs).ok().map(String::into_bytes)
 }
 
+/// Whether `big` holds every line of `small`, in the same order, perhaps
+/// with more lines among them: `big` is `small` with lines added. Never for
+/// a side that isn't UTF-8 text.
+#[must_use]
+pub fn holds_lines(big: &[u8], small: &[u8]) -> bool {
+    let (Ok(big), Ok(small)) = (std::str::from_utf8(big), std::str::from_utf8(small)) else {
+        return false;
+    };
+    let mut lines = big.lines();
+    small.lines().all(|want| lines.any(|l| l == want))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_added_lines_make_one_version_hold_the_other() {
+        assert!(holds_lines(b"a\nx\nb\ny\n", b"a\nb\n"));
+        assert!(holds_lines(b"a\n", b""));
+        // a changed line, lines out of order, a repeated line, bytes that aren't text
+        assert!(!holds_lines(b"a\nB\n", b"a\nb\n"));
+        assert!(!holds_lines(b"b\na\n", b"a\nb\n"));
+        assert!(!holds_lines(b"a\n", b"a\na\n"));
+        assert!(!holds_lines(b"a\n\xff\n", b"a\n"));
+    }
 
     #[test]
     fn a_path_through_dot_dot_matches_nothing() {

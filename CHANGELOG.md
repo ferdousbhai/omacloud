@@ -5,6 +5,10 @@
 - The app has the look of the other Omarchy apps and follows your theme as you switch it. It
   no longer needs libadwaita. In a narrow window its pages are icons in the header, in place
   of the bar at the bottom.
+- Computers meeting for the first time ask about fewer settings: where one computer's file is
+  the other's with lines added, the longer one is taken and the replaced one kept in the
+  settings backups. Anything else that differs still waits for you.
+- Claude Code's output styles and pi's keybindings sync with the other agent settings.
 - In the app, Enter after the recovery code goes on to restoring a computer's secrets.
 - The keyboard stays on the button or switch you used when the app's page updates after it.
 

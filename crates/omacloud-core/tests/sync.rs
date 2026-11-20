@@ -1411,6 +1411,37 @@ fn settings_that_already_differ_lose_nothing_when_computers_first_meet() -> Resu
     Ok(())
 }
 
+/// Meeting for the first time with a setting that is the other computer's
+/// plus some lines: the longer one is taken either way, nobody is asked, and
+/// the replaced one is kept in the backups.
+#[test]
+fn a_setting_with_only_added_lines_is_taken_when_computers_first_meet() -> Result<()> {
+    let w = World::new(&["a", "b"])?;
+    let (ha, hb) = (w.home("a"), w.home("b"));
+    let (a_longer, b_longer) = (".config/tmux/tmux.conf", ".config/btop/btop.conf");
+    write(&ha, a_longer, "one\nadded on a\ntwo\n");
+    write(&hb, a_longer, "one\ntwo\n");
+    write(&ha, b_longer, "one\ntwo\n");
+    write(&hb, b_longer, "one\ntwo\nadded on b\n");
+    let (mut a, mut b) = (w.engine_with_settings("a")?, w.engine_with_settings("b")?);
+    a.sync()?;
+    b.sync()?;
+    a.sync()?;
+
+    for h in [&ha, &hb] {
+        assert_eq!(fs::read_to_string(h.join(a_longer))?, "one\nadded on a\ntwo\n");
+        assert_eq!(fs::read_to_string(h.join(b_longer))?, "one\ntwo\nadded on b\n");
+    }
+    assert!(a.settings_status().held.is_empty());
+    assert!(b.settings_status().held.is_empty());
+    // b's shorter version of the first went to its backups
+    let kept: Vec<String> = fs::read_dir(w.tmp.path().join("b-backups/history"))?
+        .filter_map(|e| fs::read_to_string(e.ok()?.path().join(a_longer)).ok())
+        .collect();
+    assert_eq!(kept, ["one\ntwo\n"]);
+    Ok(())
+}
+
 #[test]
 fn settings_stand_down_next_to_a_dotfile_manager() -> Result<()> {
     let w = World::new(&["a", "b"])?;

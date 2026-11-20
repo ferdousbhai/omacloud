@@ -233,7 +233,9 @@ follows you; what's about the machine stays on it. Joining an account gives both
 computers the union of their files: one held by only one of them reaches the
 other, identical files stay one file, and two different files of the same name
 are both kept, the older as `name.sync-conflict-<date>-<time>-<device>.ext`.
-Settings that already differ stay as each computer has them until you choose
+A setting that is the other computer's with lines added is taken as the longer
+one, and the replaced one kept in the settings backups. Other settings that
+already differ stay as each computer has them until you choose
 (`omacloud settings`): this one's, the other's, or each keeping its own.
 
 **Choosing what syncs.** Each computer chooses for itself, one of three for

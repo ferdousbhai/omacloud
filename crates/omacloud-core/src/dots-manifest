@@ -80,6 +80,7 @@ shared .claude/CLAUDE.md
 shared .claude/keybindings.json
 shared .claude/agents/**
 shared .claude/commands/**
+shared .claude/output-styles/**
 shared .claude/skills/**
 local .claude/skills/synced/**
 shared .claude/hooks/**
@@ -106,6 +107,7 @@ shared .config/opencode/commands/**
 shared .config/opencode/skills/**
 shared .config/opencode/plugins/**
 shared .pi/agent/AGENTS.md
+shared .pi/agent/keybindings.json
 shared .pi/agent/models.json
 shared .pi/agent/prompts/**
 shared .pi/agent/skills/**
