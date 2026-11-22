@@ -17,7 +17,11 @@ app=$(realpath -- "$1")
 script=$(realpath -- "$2")
 here=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 
-omui=$(PATH="$HOME/.cargo/bin:$PATH" cargo metadata --locked --offline --format-version 1 \
+# Offline, cargo has only the crates a build here downloaded, so the metadata is of this computer's platform alone: a
+# fresh cargo home has none of another's (Android's, Windows').
+cargo_path=$HOME/.cargo/bin:$PATH
+host=$(PATH=$cargo_path rustc -vV | sed -n 's/^host: //p')
+omui=$(PATH=$cargo_path cargo metadata --locked --offline --format-version 1 --filter-platform "$host" \
   --manifest-path "$here/../Cargo.toml" | jq -r '.packages[] | select(.name == "omui") | .manifest_path')
 omui_qa=$(dirname -- "$omui")/dev/qa.sh
 [[ -x $omui_qa ]] || { echo "qa: no dev/qa.sh beside $omui" >&2; exit 1; }
