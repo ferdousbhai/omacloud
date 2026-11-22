@@ -25,10 +25,13 @@ jobs:
           pacman -Syu --noconfirm --needed base-devel git rust gtk4 ttf-dejavu jq restic quickshell qt6-declarative
           python nodejs npm curl util-linux libarchive fuse3
       - uses: actions/checkout@v4
-      # The checkout is another user's than the container's root, and the packaging tests run git in it.
-      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: Swatinem/rust-cache@v2
-      - run: bin/check
+      # The checks run as an ordinary user, as the app does: the container's root ignores file permissions, which the
+      # tests of files that can't be deleted rely on. The checkout, and the target the cache restored, become its own.
+      - run: |
+          useradd -m tester
+          chown -R tester .
+      - run: su tester -c bin/check
         env:
           CF_SEND_TELEMETRY: "false"
 
