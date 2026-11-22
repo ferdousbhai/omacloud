@@ -1,0 +1,21 @@
+# A switch of language partway through setup: the page is drawn again in the new language where it was, and keeps
+# what was typed and chosen on it, and the keyboard.
+# dev/qa.sh target/debug/omacloud-app dev/qa/setup-language.jsonl [directory for the shots]
+# state: new
+
+{"do":"wait","role":"button","name":"Use My Own Storage","visible":true}
+{"do":"click","role":"button","name":"Use My Own Storage"}
+{"do":"wait","role":"button","name":"Create Account","visible":true}
+{"do":"type","text":"harbour-files","role":"text-box","name":"Bucket name"}
+{"do":"set","role":"switch","name":"Music","checked":true}
+{"do":"click","role":"list-item","name":"Lost every computer?"}
+{"do":"type","text":"K7QM","role":"text-box","name":"Recovery code"}
+{"do":"focus","role":"text-box","name":"Bucket name"}
+{"do":"language","code":"da","catalog":"dev/qa/da.json"}
+{"do":"wait","role":"button","name":"Opret konto","visible":true}
+{"do":"wait","role":"group","name":"Din bucket","visible":true}
+{"do":"wait","role":"text-box","name":"Bucket name","text":"harbour-files","focused":true}
+{"do":"wait","role":"switch","name":"Music","checked":true}
+{"do":"wait","role":"text-box","name":"Recovery code","visible":true}
+{"do":"shot","path":"own-storage-da.png"}
+{"do":"quit"}

@@ -190,4 +190,39 @@ mod tests {
         drop(bar);
         assert!(read().contains(r#""state":"stopped""#));
     }
+
+    /// Every line the daemon writes is in the widget's catalog
+    /// (contrib/omarchy-plugin/i18n/en.json), so that it is shown in the
+    /// user's language once a translation has it.
+    #[test]
+    fn the_widget_has_words_for_every_line() {
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../../../contrib/omarchy-plugin/i18n/en.json")).unwrap();
+        let sources = [include_str!("main.rs"), include_str!("bar.rs")];
+        let mut said = Vec::new();
+        for source in sources {
+            // the app's own code, not its tests
+            let code = source.split("#[cfg(test)]").next().unwrap();
+            for call in code.split("say(").skip(1) {
+                let call = call.trim_start();
+                let Some(standing) = call
+                    .strip_prefix("bar::Standing::")
+                    .or_else(|| call.strip_prefix("Standing::"))
+                else {
+                    continue;
+                };
+                let text = standing
+                    .split_once('"')
+                    .map(|(_, rest)| rest.split('"').next().unwrap());
+                said.extend(text.map(str::to_string));
+            }
+        }
+        assert!(said.len() >= 9, "{said:?}");
+        for text in said {
+            assert!(
+                catalog.get(format!("daemon.{text}")).is_some(),
+                "the widget has no words for {text:?}"
+            );
+        }
+    }
 }

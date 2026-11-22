@@ -41,7 +41,8 @@
 {"do":"wait","role":"switch","name":"Omarchy settings","checked":true}
 {"do":"shot","path":"overview-changed.png"}
 
-# Recently Deleted: the keyboard starts on the first Put Back, Enter puts it back, and Escape closes the dialog.
+# Recently Deleted: the keyboard starts on the first Put Back, Enter puts it back and moves on to the next one (never to
+# nothing, where an Escape would miss the dialog), and Escape closes the dialog.
 {"do":"click","role":"button","name":"Show…"}
 {"do":"wait","dialog":"Recently Deleted"}
 {"do":"wait","role":"list-item","name":"Documents/Taxes/2025.pdf","visible":true}
@@ -50,6 +51,7 @@
 {"do":"key","keys":"Return"}
 {"do":"wait","role":"list-item","name":"Documents/Taxes/2025.pdf","visible":false}
 {"do":"wait","toasts":["Put back"]}
+{"do":"wait","focus":{"role":"button","name":"Put Back"}}
 {"do":"key","keys":"Escape"}
 {"do":"wait","dialog":null}
 

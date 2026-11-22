@@ -173,7 +173,7 @@ impl Alerts {
         _ = Command::new("notify-send")
             .args([
                 "--app-name=Omacloud",
-                "--icon=folder-remote",
+                "--icon=omacloud",
                 "--urgency=critical",
                 "This device was removed",
                 "Another device removed it from the account, so it has stopped syncing. Your files here stay.",
@@ -231,7 +231,7 @@ impl Alerts {
             let Ok(out) = Command::new("notify-send")
                 .args([
                     "--app-name=Omacloud",
-                    "--icon=folder-remote",
+                    "--icon=omacloud",
                     // as long as Omarchy's shell shows one
                     "--expire-time=30000",
                     &format!("--action=default=Sync {name}"),
@@ -257,7 +257,7 @@ impl Alerts {
                 Err(e) => (format!("{name} couldn't be added"), e.to_string()),
             };
             _ = Command::new("notify-send")
-                .args(["--app-name=Omacloud", "--icon=folder-remote", &summary, &body])
+                .args(["--app-name=Omacloud", "--icon=omacloud", &summary, &body])
                 .stderr(Stdio::null())
                 .status();
         });
@@ -298,7 +298,7 @@ impl Alerts {
             let Ok(out) = Command::new("notify-send")
                 .args([
                     "--app-name=Omacloud",
-                    "--icon=folder-remote",
+                    "--icon=omacloud",
                     "--action=default=Open",
                     &summary,
                     &body,
@@ -309,8 +309,10 @@ impl Alerts {
                 return;
             };
             if String::from_utf8_lossy(&out.stdout).trim() == "default" {
-                let mut app = Command::new("omacloud-app");
-                app.arg(&page);
+                // `omacloud open`, through this very program, so the window runs the CLI that sent this
+                let me = std::env::current_exe().unwrap_or_else(|_| "omacloud".into());
+                let mut app = Command::new(me);
+                app.args(["open", &page]);
                 if let Some(config) = config {
                     app.env("OMACLOUD_CONFIG", config);
                 }

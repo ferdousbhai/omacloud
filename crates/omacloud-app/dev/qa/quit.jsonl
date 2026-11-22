@@ -1,0 +1,8 @@
+# Ctrl+Q closes every window, and with nothing running the app ends with it, well: the run passes only if it ends
+# before the last line, which waits for a button no page has and so fails in a window that stayed open.
+# dev/qa.sh target/debug/omacloud-app dev/qa/quit.jsonl
+# state: account
+
+{"do":"wait","role":"list-item","name":"Documents","visible":true}
+{"do":"key","keys":"<Control>q"}
+{"do":"wait","role":"button","name":"The window stayed open","visible":true}

@@ -1,0 +1,22 @@
+# The keyboard's shortcuts through setup: Ctrl+Enter is the page's way on, from a field too, and the keys of the
+# pages and of Sync now, hidden until there is an account, do nothing.
+# dev/qa.sh target/debug/omacloud-app dev/qa/keys-setup.jsonl [directory for the shots]
+# state: new
+
+{"do":"wait","role":"button","name":"Set Up With Dropbox","visible":true}
+{"do":"click","role":"button","name":"I Already Use Omacloud"}
+{"do":"wait","role":"button","name":"Add This Computer","visible":true}
+{"do":"wait","focus":{"role":"text-box","name":"Join code"}}
+{"do":"key","keys":"<Control>2"}
+{"do":"key","keys":"<Control>r"}
+{"do":"key","keys":"<Control>Return"}
+{"do":"wait","toasts":["Paste the join code or invite"]}
+{"do":"wait","role":"button","name":"Add This Computer","visible":true}
+# In a field `?` is typed, and F1 still lists the keys.
+{"do":"type","text":"?","role":"text-box","name":"Join code"}
+{"do":"wait","dialog":null}
+{"do":"key","keys":"F1"}
+{"do":"wait","dialog":"Keyboard shortcuts"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"quit"}

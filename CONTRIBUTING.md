@@ -57,7 +57,13 @@ coordinator on OpenDAL's filesystem service.
   python3; with restic on PATH it also restores from the bucket with plain
   restic, using what `export` prints.
 - `scripts/restic-compat.sh` needs restic on PATH; a wrapper around the
-  `restic/restic` image with paths mounted 1:1 works.
+  `restic/restic` image with paths mounted 1:1 works (name it in `RESTIC`).
+  `bin/check` fails without restic, so that a run that passes has restored;
+  `NO_RESTIC=1 bin/check` leaves the restore out on a machine that has none.
+- `scripts/bar-widget.sh` lints the bar widget (`contrib/omarchy-plugin`) and
+  runs it in a Quickshell of its own with no display, on stand-ins for the
+  Omarchy shell's types (`scripts/bar-widget/`), handing it lines as the daemon
+  writes them. It needs quickshell and Qt 6's qmllint.
 - Where `/tmp` is small, put `CARGO_TARGET_DIR` under `~/.cache`.
 
 ## The app without touching your desktop
@@ -73,9 +79,12 @@ with `--features qa` through one of `dev/qa/*.jsonl` (omui's scripted QA: widget
 found by role and name, clicks, keys, waits and shots) on the same made-up
 account, on a broadway display of its own: no window opens. `bin/check` runs
 every script; any GLib warning fails one. Release builds leave the feature off.
+The README's picture is `overview.png` as `dev/qa/account.jsonl` shoots it, of
+the made-up account, copied to `docs/overview.png`.
 Pictures of themes and of the real compositor stay `preview.sh`'s. To run the app
 by hand instead, `OMACLOUD_CONFIG` and `OMACLOUD_BIN` point it at a test account
-and a local build, and `omacloud-app devices` opens a page directly. The setup
+and a local build, and `target/debug/omacloud open devices` opens a page directly
+(it runs `target/debug/omacloud-app`, beside it; `OMACLOUD_APP` names another). The setup
 wizard's settings switch starts on, and even with a scratch `HOME` it would
 upload this computer's Wi-Fi passwords: turn it off before Continue when testing
 on real storage.
@@ -123,9 +132,9 @@ commands, including wrong runtime/package architectures and embedded builder
 paths. `python3 scripts/tests/omarchy-recipe.py` checks that the Omarchy
 recipe builds the same package as `pkgbuild/PKGBUILD`, and
 `python3 scripts/tests/omarchy-pkgs.py` how a release reaches omarchy-pkgs
-(below). `bin/check` runs these checks locally before every push. GitHub CI runs
-only when a release starts it: it repeats them, tests on a native ARM runner, and
-builds the packages.
+(below). `bin/check` runs these checks locally before every push, and GitHub CI
+runs `bin/check` on every push, in an Arch container. When a release starts CI,
+it also tests on a native ARM runner and builds the packages.
 
 ## Releases
 

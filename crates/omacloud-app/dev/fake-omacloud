@@ -115,7 +115,12 @@ def change(a, call):
             a['devices'] = [d for d in a['devices'] if d['fingerprint'] != print_]
             a['removed'] += [{'name': d['name'], 'fingerprint': print_} for d in gone]
         case ['choose', name, word]:
-            for item in a['choices']['items']:
+            items = a['choices']['items']
+            if not any(item['name'] == name for item in items):
+                # a file chosen in the file chooser: new, and off on the other computer
+                name = name.removeprefix(HOME + '/') if HOME else name
+                items.append({'name': name, 'kind': 'files', 'choices': {ME: word, OTHER: 'off'}})
+            for item in items:
                 if item['name'] == name:
                     item['choices'][ME] = word
         case ['secrets', 'save'] if ME not in a['secrets']:
@@ -136,8 +141,11 @@ def status():
 
 
 def fail(code, message, hint):
+    # As the real one: every failure exits 1, and goes to stderr, as the error object on one line with --json.
     if JSON:
-        print(json.dumps({'ok': False, 'error': {'code': code, 'message': message, 'hint': hint}}))
+        kind = {'unavailable': 'unavailable', 'usage': 'usage', 'recovery_code_rejected': 'setup'}.get(code, 'error')
+        error = {'code': code, 'kind': kind, 'message': message, 'hint': hint}
+        print(json.dumps({'ok': False, 'error': error}, separators=(',', ':')), file=sys.stderr)
     else:
         print(f'error: {message}\nhint: {hint}', file=sys.stderr)
     sys.exit(1)
@@ -190,6 +198,8 @@ match args:
             {'relative': 'Pictures/harbour.jpg', 'path': f'{HOME}/Pictures/harbour.jpg', 'device': ME,
              'size': 3204551, 'version': 411},
         ]
+    case ['secrets', 'restore', *rest] if os.environ.get('OMACLOUD_RECOVERY_CODE', '').startswith('WRONG'):
+        fail('recovery_code_rejected', 'the recovery code did not open the bundle', 'check the recovery code and try again')
     case ['secrets', 'restore', *rest]:
         data = {'written': 2} if '--yes' in rest else {
             'changes': [{'action': 'replace', 'path': '~/.ssh/id_ed25519'}, {'action': 'write', 'path': '~/.ssh/config'}]}

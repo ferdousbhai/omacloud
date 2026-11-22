@@ -1,0 +1,22 @@
+{
+  "Overview": "Oversigt",
+  "Devices": "Enheder",
+  "Keys": "Nøgler",
+  "Recovery": "Gendannelse",
+  "Sync now": "Synkroniser nu",
+  "Up to date": "Opdateret",
+  "{} · in {}": "{} · i {}",
+  "{} at {}": "{} på {}",
+  "Synced {n} minutes ago": {"one": "Synkroniseret for {n} minut siden", "other": "Synkroniseret for {n} minutter siden"},
+  "Recently Deleted": "Senest slettet",
+  "Create Account": "Opret konto",
+  "Your bucket": "Din bucket",
+  "Pages": "Sider",
+  "Quit": "Afslut",
+  "Keyboard shortcuts": "Tastaturgenveje",
+  "Cancel": "Annuller",
+  "Continue": "Fortsæt",
+  "Restore {}'s secrets?": "Gendan {}s hemmeligheder?",
+  "Enter your recovery code.": "Indtast din gendannelseskode.",
+  "That recovery code doesn't open this account. Check it and try again.": "Den gendannelseskode åbner ikke kontoen. Tjek den, og prøv igen."
+}

@@ -6,6 +6,8 @@ home) sync in place, as iCloud does; Omarchy settings, AI agent settings,
 Chromium's bookmarks and extensions, Wi-Fi networks, package lists and ssh
 and gpg keys follow; earlier versions and deleted files come back.
 
+![The Omacloud app's overview: sync is up to date, and each folder of home has a switch](docs/overview.png)
+
 Everything is encrypted on your computer before it leaves it: the storage
 only ever holds what it can't read. Underneath it's plain restic, so you can
 always restore without Omacloud. [docs/design.md](docs/design.md) explains
@@ -60,7 +62,8 @@ new versions until you install the signed repository.
 ## Set up
 
 The simplest way is your own Dropbox: on the first computer, click Set Up
-With Dropbox in the Omacloud app, or run this and allow Omacloud in your browser:
+With Dropbox in the Omacloud app (Omacloud in the app launcher, or `omacloud
+open`), or run this and allow Omacloud in your browser:
 
 ```sh
 omacloud init --provider dropbox
@@ -105,6 +108,33 @@ history.
 Without a bucket, `omacloud init --repo <path> --coordinator <directory>`
 keeps the repository and the records that keep computers in step in two
 directories you share yourself, for development.
+
+## Keyboard
+
+Everything in the Omacloud app is reached with Tab and pressed with Enter or
+Space, and Escape closes a dialog or goes back a page of setup. Its shortcuts
+are Ctrl and a key, since setup and the dialogs are typed into, but for `?`,
+which does nothing while you type in a field; while a dialog is open they wait
+for it to close.
+
+| Key | Does |
+|---|---|
+| `?` | Shows every shortcut (not while you type in a field) |
+| `F1` | Shows every shortcut |
+| `Ctrl+Q` | Quits. A command still running finishes first |
+| `Ctrl+W` | Closes the window |
+| `Ctrl+1` | Overview |
+| `Ctrl+2` | Devices |
+| `Ctrl+3` | Omarchy (settings sync) |
+| `Ctrl+4` | Keys |
+| `Ctrl+5` | Recovery |
+| `Ctrl+R` | Syncs now |
+| `Ctrl+D` | Overview: shows Recently Deleted |
+| `Ctrl+P` | Overview: opens your files on a phone |
+| `Ctrl+B` | Overview: starts background sync, when it isn't running |
+| `Ctrl+J` | Devices: shows a join code |
+| `Ctrl+S` | Keys: saves this device's secrets (it asks first) |
+| `Ctrl+Enter` | Setup: goes on, as the page's highlighted button does |
 
 ## Family and friends
 
@@ -343,9 +373,11 @@ wrote (marked `.managed-by-omacloud`) is ever changed.
 ## Scripting
 
 Every command prints text on a terminal and a JSON envelope when piped:
-`{"ok":true,"data":...,"summary":"..."}`, or
-`{"ok":false,"error":{"code":"...","message":"...","hint":"..."}}` on stdout
-when it fails (text mode: `error:` and `hint:` lines on stderr). `--json`
+`{"ok":true,"data":...,"summary":"..."}`. Only a result goes to stdout. A
+failure exits 1 and goes to stderr: as
+`{"ok":false,"error":{"code":"...","kind":"...","message":"...","hint":"..."}}`
+on one line when piped or with `--json`, as `error:` and `hint:` lines in text
+mode. `--json`
 forces the envelope, `--styled` text, `--quiet` prints only `data`,
 `--ids-only` one id per line (device fingerprints, version numbers, deleted
 paths, folder, package and secrets device names) and `--count` the number of results; given
@@ -355,16 +387,21 @@ over styled.
 ```sh
 omacloud status --quiet | jq .synced_head
 omacloud devices --ids-only
+omacloud sync 2>&1 >/dev/null | tail -n 1 | jq -r .error.code   # what failed, if anything
 ```
 
-| exit | meaning |
+The exit code is 0 when the command did what was asked and 1 when anything
+failed. The error's `code` names the failure (`not_set_up`,
+`recovery_code_rejected`, `not_found`, …) and its `kind` the class a script
+usually branches on:
+
+| kind | meaning |
 |---|---|
-| 0 | done |
-| 1 | anything else failed |
-| 2 | invalid usage or request: a bucket that can't hold an account, a destructive command (`devices revoke`, `rotate`, `restore` over a file) without `--yes` where nobody can be asked, a secret asked for where no terminal shows it, an ambiguous fingerprint, already set up |
-| 3 | not set up (or set up on storage Omacloud no longer uses), not approved, settings sync off, or a bucket key, recovery code, join code or shares refused |
-| 4 | not found: a device, a version, a package list, a secrets bundle |
-| 5 | out of reach: the storage, the network, or (for `restore-machine`, alongside its result) systemd |
+| `usage` | invalid usage or request: a bucket that can't hold an account, a destructive command (`devices revoke`, `rotate`, `restore` over a file) without `--yes` where nobody can be asked, a secret asked for where no terminal shows it, an ambiguous fingerprint, already set up |
+| `setup` | not set up (or set up on storage Omacloud no longer uses), not approved, settings sync off, or a bucket key, recovery code, join code or shares refused |
+| `not_found` | not found: a device, a version, a package list, a secrets bundle |
+| `unavailable` | out of reach: the storage, the network, or (for `restore-machine`, after its result on stdout) systemd |
+| `error` | anything else |
 
 Commands only ask (a secret, a confirmation) in text mode with stdin and
 stdout on a terminal; elsewhere secrets come from the `OMACLOUD_*`
@@ -372,7 +409,7 @@ environment variables and confirmations
 from `--yes`.
 
 What prints a secret prints it only to your terminal, in text mode with
-stdin and stdout on it, and refuses (exit 2) as JSON or into a pipe: `init`
+stdin and stdout on it, and refuses (`terminal_required`) as JSON or into a pipe: `init`
 when it creates an account (the recovery code), `join-code`, `invite`, `drive-code`, `drive-link`, `export`,
 and `recovery split` and `combine`
 (`combine` reads its shares from stdin, so only its stdout must be a
@@ -430,7 +467,7 @@ everyday edits.
 | `vendor/rustic_core` | rustic_core 0.13 plus pack padding and `splice_tree` (upstream PRs in `vendor/upstream-patches`) |
 | `scripts/` | end to end checks (an account in a bucket, upstream restic; see CONTRIBUTING.md) and the release scripts |
 | `server/` | the Cloudflare Worker behind omacloud.computer: the public pages (see its README) |
-| `contrib/` | the systemd user unit and the desktop entry |
+| `contrib/` | the systemd user unit, the desktop entry and its icon (`omacloud.desktop`, `omacloud.svg`), and the bar widget |
 | `pkgbuild/PKGBUILD` | Arch package, built from the committed checkout |
 | `install.sh` | the installer each release ships |
 

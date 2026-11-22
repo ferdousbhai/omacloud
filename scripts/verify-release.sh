@@ -47,7 +47,7 @@ for attempt in 1 2 3; do
     omacloud --version >/dev/null || defect
     [[ $(pacman -Qi omacloud | sed -n "s/^Architecture *: //p") == "$EXPECTED_ARCH" ]] || defect
     [[ $(pacman -Q omacloud) == "omacloud $EXPECTED_VERSION-"* ]] || defect
-    if grep -aq "/home/" /usr/bin/omacloud /usr/bin/omacloud-app; then defect; fi
+    if grep -aq "/home/" /usr/bin/omacloud /usr/lib/omacloud/omacloud-app; then defect; fi
   ' 2>&1) || result=$?
   printf '%s\n' "$output"
   if (( result == 0 )); then
