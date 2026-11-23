@@ -1,4 +1,4 @@
-//! The Omacloud app: account, devices, settings sync, secrets and
+//! The Omacloud window: account, devices, settings sync, secrets and
 //! recovery. It works through the `omacloud` CLI (`status` to read, the
 //! usual subcommands to act, all with `--json`: it reads the envelope's
 //! `data`, or its `error`), so it holds no keys or state of its own and never
@@ -6,12 +6,20 @@
 //! `join-code`) print it only to a terminal: the app runs those on a
 //! pseudo-terminal of its own.
 //!
-//! `omacloud-app [overview|devices|settings|secrets|recovery]` opens on
-//! that page. `OMACLOUD_BIN` picks the CLI (default: `omacloud` on PATH) and
-//! `OMACLOUD_CONFIG` a config other than the default.
+//! `omacloud open [overview|devices|settings|secrets|recovery]` starts it on
+//! that page: the CLI execs this program, installed as
+//! /usr/lib/omacloud/omacloud-app. `OMACLOUD_BIN` picks the CLI (default:
+//! `omacloud` on PATH; `omacloud open` hands on itself) and `OMACLOUD_CONFIG`
+//! a config other than the default.
+//!
+//! Every word the window shows is in Omarchy's language and follows a switch
+//! live. The CLI speaks English: its failures are shown in the language by
+//! their `code` where the set is fixed ([`Failure::known`]), and as the CLI
+//! wrote them otherwise.
 
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
+    collections::HashMap,
     fs::File,
     io::{Read, Write},
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
@@ -20,53 +28,129 @@ use std::{
 };
 
 use omui::gtk::{self, gio, glib, prelude::*};
-use omui::{Appearance, Dialog, EmptyState, ExpanderRow, Group, Nav, Row, icons::name};
+use omui::i18n::{self, bind_tooltip};
+use omui::{Appearance, Dialog, EmptyState, ExpanderRow, Group, Nav, Row, icons::name, tr, trn};
 use serde_json::Value;
 
+/// The GApplication id, for D-Bus: one that was already this, so a running
+/// window is found and brought forward by every version.
 const APP_ID: &str = "com.ferdousbhai.Omacloud";
+/// Omarchy's one name: the command, the package, the `.desktop` file, the
+/// icon and the Wayland app id of every window (omui sets it).
+const NAME: &str = "omacloud";
 
 fn main() -> glib::ExitCode {
+    i18n::register_all(&[("en", include_str!("i18n/en.json"))]);
     let mut args = std::env::args();
     let argv0 = args.next().unwrap_or_default();
     let page = args.next();
     // one window: launching again brings it forward instead of opening another
-    let app = omui::application(APP_ID, "omacloud-app", "Omacloud", "", move |app| {
+    let app = omui::application(APP_ID, NAME, "Omacloud", "", move |app| {
         build(app, page.as_deref());
     });
     // the page is ours to read; GTK sees no arguments
     app.run_with_args(&[argv0])
 }
 
-/// A command that failed: the CLI's error code (empty for other programs and
-/// text-mode runs), what went wrong, and the CLI's advice on fixing it.
+/// A command that failed. What the CLI said is kept in its English, and put
+/// in the user's language only as it is shown ([`Failure::shown`]), so text
+/// that stays on screen is shown anew after a switch.
+#[derive(Clone, Debug)]
 struct Failure {
+    /// The CLI's error code; one of the app's own (`app-…`) for a failure of
+    /// running it at all; empty for a text-mode run or another program.
     code: String,
+    /// The error's kind (`setup`, `unavailable`, …), from the CLI.
+    kind: String,
+    /// Whether `omacloud` said it, whose codes [`Failure::known`] knows.
+    omacloud: bool,
+    /// What went wrong, as the program said it, or the app's detail.
     message: String,
+    /// The program's advice on fixing it.
     hint: String,
 }
 
 impl Failure {
-    fn new(message: impl Into<String>) -> Self {
+    /// What another program, or a text-mode run, said, as it said it.
+    fn said(message: impl Into<String>, hint: impl Into<String>) -> Self {
         Self {
             code: String::new(),
+            kind: String::new(),
+            omacloud: false,
             message: message.into(),
-            hint: String::new(),
+            hint: hint.into(),
         }
     }
 
-    /// What to show: the message, and the fix when the CLI gave one.
-    fn shown(&self) -> String {
+    /// A failure of the app's own: `code` names it, `detail` is filled in.
+    fn local(code: &str, detail: impl Into<String>) -> Self {
+        Self {
+            code: code.to_string(),
+            ..Self::said(detail, "")
+        }
+    }
+
+    /// The failures whose meaning is fixed, said in the user's language
+    /// whatever detail the CLI gave; None for the rest.
+    fn known(&self) -> Option<String> {
+        let text = match self.code.as_str() {
+            "app-run" => return Some(tr!("Couldn't run {}", self.message)),
+            "app-terminal" => return Some(tr!("Couldn't give the command a terminal: {}", self.message)),
+            "app-crashed" => tr("The command stopped before it was done."),
+            "app-silent" => return Some(tr!("{} failed without saying why.", self.message)),
+            _ if !self.omacloud => return None,
+            "not_set_up" => tr("This computer isn't set up with Omacloud yet."),
+            "storage_gone" => tr(
+                "This computer was set up on storage Omacloud no longer uses. Set it up again: your files here stay \
+                 as they are.",
+            ),
+            "dropbox_not_allowed" => {
+                tr("Omacloud wasn't allowed in Dropbox. Try again, and click Allow in the browser.")
+            }
+            "dropbox_code_rejected" => tr("Dropbox didn't let Omacloud in. Allow it again in the browser."),
+            "not_approved" => tr(
+                "This computer isn't approved yet. On a computer that syncs, approve it under Devices by its \
+                 fingerprint.",
+            ),
+            "removed" => tr("This computer was removed from the account. Its files here stay as they are."),
+            "recovery_code_rejected" => tr("That recovery code doesn't open this account. Check it and try again."),
+            "join_code_rejected" => {
+                tr("That join code doesn't work. Copy the whole code again from Show Join Code on your other computer.")
+            }
+            "no_account" => tr(
+                "There is no Omacloud account in this storage. Check that it's the Dropbox or bucket the code is for.",
+            ),
+            "key_refused" => tr(
+                "Your storage refused the key. Check the key's ID and secret, and that it may read and write the \
+                 bucket; on Dropbox, allow Omacloud again.",
+            ),
+            "settings_off" => tr("This travels with settings sync, which is off here. Turn it on under Omarchy."),
+            "already_set_up" => tr("This computer is already set up."),
+            "cancelled" => tr("Cancelled"),
+            _ => return None,
+        };
+        Some(text)
+    }
+
+    /// What the program said: its message, and its fix when it gave one.
+    fn english(&self) -> String {
         let mut hint = self.hint.chars();
         match hint.next() {
             Some(first) => format!("{}. {}{}", self.message, first.to_uppercase(), hint.as_str()),
             None => self.message.clone(),
         }
     }
+
+    /// What to show, in the language of the moment where the failure is one
+    /// [`Failure::known`] knows, and as the program said it otherwise.
+    fn shown(&self) -> String {
+        self.known().unwrap_or_else(|| self.english())
+    }
 }
 
 /// `argv` as a command: `omacloud ...` means the CLI with this app's config.
-fn command(argv: &[String], env: &[(String, String)]) -> Result<Command, Failure> {
-    let (program, args) = argv.split_first().ok_or_else(|| Failure::new("nothing to run"))?;
+fn command(argv: &[String], env: &[(String, String)]) -> Command {
+    let (program, args) = argv.split_first().expect("a program to run");
     let mut cmd = if program == "omacloud" {
         let mut c = Command::new(std::env::var("OMACLOUD_BIN").unwrap_or_else(|_| program.clone()));
         if let Ok(config) = std::env::var("OMACLOUD_CONFIG") {
@@ -80,64 +164,77 @@ fn command(argv: &[String], env: &[(String, String)]) -> Result<Command, Failure
         .env("RUST_LOG", "warn")
         .envs(env.iter().map(|(k, v)| (k, v)))
         .stdin(Stdio::null());
-    Ok(cmd)
-}
-
-/// The last line of `stderr` that says something, without an `error: `.
-fn last_line(stderr: &[u8], fallback: &str) -> String {
-    text_failure(stderr, fallback).message
+    cmd
 }
 
 /// A failure from what a text-mode run left on stderr: its `error: ` line
-/// (or the last line that says something) and the `hint: ` after it.
-fn text_failure(stderr: &[u8], fallback: &str) -> Failure {
+/// (or the last line that says something) and the `hint: ` after it. A
+/// program that said nothing is named.
+fn text_failure(stderr: &[u8], program: &str) -> Failure {
     let err = String::from_utf8_lossy(stderr);
     let lines: Vec<&str> = err.lines().filter(|l| !l.trim().is_empty()).collect();
     let error = lines.iter().rposition(|l| l.starts_with("error: "));
-    let message = error
+    let Some(message) = error
         .map(|i| &lines[i]["error: ".len()..])
         .or_else(|| lines.last().copied())
-        .unwrap_or(fallback);
+    else {
+        return Failure::local("app-silent", program);
+    };
     let hint = error
         .and_then(|i| lines[i + 1..].iter().find_map(|l| l.strip_prefix("hint: ")))
         .unwrap_or_default();
-    Failure {
-        hint: hint.to_string(),
-        ..Failure::new(message)
-    }
+    Failure::said(message, hint)
 }
 
 /// Run another program to completion: its stdout, or the last line of
 /// stderr on failure.
 fn run(argv: &[String]) -> Result<String, Failure> {
-    let out = command(argv, &[])?
+    let out = command(argv, &[])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .map_err(|e| Failure::new(format!("running {}: {e}", argv[0])))?;
+        .map_err(|e| Failure::local("app-run", format!("{}: {e}", argv[0])))?;
     if out.status.success() {
         return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
     }
-    Err(Failure::new(last_line(&out.stderr, "it failed")))
+    Err(text_failure(&out.stderr, &argv[0]))
 }
 
-/// Run `omacloud ...` with `--json`: the result's `data`, or its error.
+/// Run `omacloud ...` (or another program with the same contract) with
+/// `--json`: the result's `data`, or its error.
 fn cli(argv: &[String], env: &[(String, String)]) -> Result<Value, Failure> {
-    let out = command(argv, env)?
+    let out = command(argv, env)
         .arg("--json")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .map_err(|e| Failure::new(format!("running omacloud: {e}")))?;
-    match serde_json::from_slice::<Value>(&out.stdout) {
-        Ok(v) if v["ok"] == Value::Bool(true) => Ok(v["data"].clone()),
-        Ok(v) if v["ok"] == Value::Bool(false) => Err(Failure {
+        .map_err(|e| Failure::local("app-run", format!("{}: {e}", argv[0])))?;
+    let mut result = envelope(&out.stdout, &out.stderr, &argv[0]);
+    if let Err(e) = &mut result {
+        e.omacloud = argv[0] == "omacloud";
+    }
+    result
+}
+
+/// What a `--json` run printed: the result's `data`, or its error. A result
+/// is on stdout, and stands even when the command then fell short of
+/// something (the app has always taken the result then). A failure is the
+/// error object, the last line on stderr after any warning logged before
+/// it; an older omacloud printed it on stdout instead, and is still read.
+fn envelope(stdout: &[u8], stderr: &[u8], program: &str) -> Result<Value, Failure> {
+    let parse = |bytes: &[u8]| serde_json::from_slice::<Value>(bytes).ok();
+    let error = String::from_utf8_lossy(stderr);
+    let last = error.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or_default();
+    let found = parse(stdout).or_else(|| parse(last.as_bytes()));
+    match found {
+        Some(v) if v["ok"] == Value::Bool(true) => Ok(v["data"].clone()),
+        Some(v) if v["ok"] == Value::Bool(false) => Err(Failure {
             code: text(&v["error"]["code"]),
-            message: text(&v["error"]["message"]),
-            hint: text(&v["error"]["hint"]),
+            kind: text(&v["error"]["kind"]),
+            ..Failure::said(text(&v["error"]["message"]), text(&v["error"]["hint"]))
         }),
         // no envelope: it crashed, or is an omacloud from before the contract
-        _ => Err(Failure::new(last_line(&out.stderr, "omacloud failed"))),
+        _ => Err(text_failure(stderr, program)),
     }
 }
 
@@ -178,17 +275,16 @@ fn pty() -> std::io::Result<(File, OwnedFd)> {
 /// person's terminal (both of them one), and this window is the owner's.
 /// What it printed there, or its error.
 fn cli_tty(argv: &[String], env: &[(String, String)]) -> Result<String, Failure> {
-    let (mut master, slave) = pty().map_err(|e| Failure::new(format!("no terminal: {e}")))?;
-    let mut cmd = command(argv, env)?;
-    let stdin = slave
-        .try_clone()
-        .map_err(|e| Failure::new(format!("no terminal: {e}")))?;
+    let no_terminal = |e: std::io::Error| Failure::local("app-terminal", e.to_string());
+    let (mut master, slave) = pty().map_err(no_terminal)?;
+    let mut cmd = command(argv, env);
+    let stdin = slave.try_clone().map_err(no_terminal)?;
     cmd.stdin(Stdio::from(stdin))
         .stdout(Stdio::from(slave))
         .stderr(Stdio::piped());
     let mut child = cmd
         .spawn()
-        .map_err(|e| Failure::new(format!("running omacloud: {e}")))?;
+        .map_err(|e| Failure::local("app-run", format!("{}: {e}", argv[0])))?;
     // the terminal side closes with the child: reading then ends
     drop(cmd);
     // nobody answers on this terminal: an end of input (^D) waits there,
@@ -208,25 +304,31 @@ fn cli_tty(argv: &[String], env: &[(String, String)]) -> Result<String, Failure>
     while let Ok(n @ 1..) = master.read(&mut buf) {
         out.extend_from_slice(&buf[..n]);
     }
-    let status = child.wait().map_err(|e| Failure::new(e.to_string()))?;
+    let status = child
+        .wait()
+        .map_err(|e| Failure::local("app-run", format!("{}: {e}", argv[0])))?;
     let errors = errors.join().unwrap_or_default();
     if status.success() {
         return Ok(String::from_utf8_lossy(&out).replace('\r', ""));
     }
-    Err(text_failure(&errors, "it failed"))
+    let mut failure = text_failure(&errors, &argv[0]);
+    failure.omacloud = argv[0] == "omacloud";
+    Err(failure)
 }
 
 /// Run `job` in the background, then hand its result to `then` on the main
-/// loop.
+/// loop: [`omui::background`], which holds the application until `then` has
+/// run. Closing the last window would otherwise end the application under a
+/// command that is still running, and what `then` does with its answer
+/// (starting the daemon once setup is done, writing the files a restore
+/// listed) would never happen; the app stays, with no window, until its work
+/// is done.
 fn in_background<T: Send + 'static>(
     job: impl FnOnce() -> Result<T, Failure> + Send + 'static,
     then: impl FnOnce(Result<T, Failure>) + 'static,
 ) {
-    glib::spawn_future_local(async move {
-        let result = gio::spawn_blocking(job)
-            .await
-            .unwrap_or_else(|_| Err(Failure::new("it crashed")));
-        then(result);
+    omui::background(job, move |result| {
+        then(result.unwrap_or_else(|_| Err(Failure::local("app-crashed", ""))));
     });
 }
 
@@ -265,6 +367,16 @@ struct Ui {
     recovery: gtk::Box,
     /// Whether the overview page holds setup, which may be partway through.
     setting_up: Cell<bool>,
+    /// Setup's pages while they are shown, for drawing them again in another language.
+    setup_nav: RefCell<Option<omui::WeakNav>>,
+    /// The last `omacloud status`: the pages are drawn from it, after each
+    /// change and again after a switch of language.
+    status: RefCell<Option<Result<Value, Failure>>>,
+    /// Each folder's size as `du` last measured it, so that a page drawn
+    /// again shows it at once.
+    sizes: RefCell<HashMap<String, u64>>,
+    /// The desktop's file chooser, through its portal (the scripted QA answers in the portal's place).
+    picker: Rc<dyn omui::FilePicker>,
 }
 
 /// Makes `child` all that a page of the window holds.
@@ -302,72 +414,155 @@ impl Ui {
         self.header.set_visible(show);
     }
 
+    /// Asks for the status again, and draws the pages from it.
     fn refresh(self: &Rc<Self>) {
+        // A command that outlived the window (`in_background`) has no page
+        // to draw again, and asking for the status would only keep the app
+        // from ending. A closed window has left its application.
+        if self.window.application().is_none() {
+            return;
+        }
         let ui = self.clone();
         cli_then(&["omacloud", "status"], Vec::new(), move |status| {
-            match status {
-                // no config yet: this computer needs setting up
-                Ok(s) if s["set_up"] == Value::Bool(false) => {
-                    if let Some(kind) = s["storage_gone"].as_str() {
-                        ui.toast(&format!(
-                            "This computer was set up on {kind}, which Omacloud no longer uses. Set it up again: \
-                             your files here stay as they are."
-                        ));
-                    }
-                    ui.show_tabs(false);
-                    // not while someone is partway through it
-                    if !ui.setting_up.replace(true) {
-                        put(&ui.overview, &setup(&ui));
-                    }
-                    ui.stack.set_visible_child_name("overview");
-                }
-                Ok(s) => {
-                    ui.show_tabs(true);
-                    // setup's pages are another thing: the keyboard has no place to keep there
-                    let focus = (!ui.setting_up.replace(false))
-                        .then(|| focus_path(ui.stack.upcast_ref()))
-                        .flatten();
-                    put(&ui.overview, &overview(&ui, &s));
-                    put(&ui.devices, &devices(&ui, &s));
-                    put(&ui.settings, &settings(&ui, &s));
-                    put(&ui.secrets, &secrets(&ui, &s));
-                    put(&ui.recovery, &recovery());
-                    if let Some(path) = focus {
-                        focus_at(ui.stack.upcast_ref(), &path);
-                    }
-                }
-                Err(e) => {
-                    ui.show_tabs(true);
-                    ui.setting_up.set(false);
-                    let why = match e.code.as_str() {
-                        "unavailable" => format!("Can't reach your storage: {}", e.shown()),
-                        _ => e.shown(),
-                    };
-                    for page in [&ui.overview, &ui.devices, &ui.settings, &ui.secrets, &ui.recovery] {
-                        put(page, &not_set_up(&why).widget);
-                    }
-                }
+            if let Ok(s) = &status
+                && s["set_up"] == Value::Bool(false)
+                && let Some(kind) = s["storage_gone"].as_str()
+            {
+                ui.toast(&tr!(
+                    "This computer was set up on {}, which Omacloud no longer uses. Set it up again: your files \
+                     here stay as they are.",
+                    kind
+                ));
             }
+            ui.status.replace(Some(status));
+            ui.render(false);
         });
     }
 
+    /// Draws the pages from the last status. `again` is a switch of
+    /// language: the same pages are drawn in it, with what was typed and
+    /// where the keyboard was kept, since nothing else changed.
+    fn render(self: &Rc<Self>, again: bool) {
+        let Some(status) = self.status.borrow().clone() else {
+            return;
+        };
+        match status {
+            // no config yet: this computer needs setting up
+            Ok(s) if s["set_up"] == Value::Bool(false) => {
+                self.show_tabs(false);
+                if again && self.setting_up.get() {
+                    self.setup_again();
+                } else if !self.setting_up.replace(true) {
+                    // not while someone is partway through it
+                    put(&self.overview, &setup(self, None));
+                }
+                self.stack.set_visible_child_name("overview");
+            }
+            Ok(s) => {
+                self.show_tabs(true);
+                // setup's pages are another thing: the keyboard has no place to keep there
+                let was_setting_up = self.setting_up.replace(false);
+                self.setup_nav.replace(None);
+                let root = self.stack.upcast_ref::<gtk::Widget>();
+                let (focus, places) = if was_setting_up {
+                    (None, None)
+                } else if again {
+                    (None, focus_places(root))
+                } else {
+                    (focus_path(root), None)
+                };
+                put(&self.overview, &overview(self, &s));
+                put(&self.devices, &devices(self, &s));
+                put(&self.settings, &settings(self, &s));
+                put(&self.secrets, &secrets(self, &s));
+                put(&self.recovery, &recovery());
+                if let Some(path) = focus {
+                    focus_at(root, &path);
+                }
+                if let Some(places) = places {
+                    focus_places_at(root, &places);
+                }
+            }
+            Err(e) => {
+                self.show_tabs(true);
+                self.setting_up.set(false);
+                self.setup_nav.replace(None);
+                let why = match e.kind.as_str() {
+                    "unavailable" if e.omacloud => tr!("Can't reach your storage: {}", e.shown()),
+                    _ => e.shown(),
+                };
+                for page in [
+                    &self.overview,
+                    &self.devices,
+                    &self.settings,
+                    &self.secrets,
+                    &self.recovery,
+                ] {
+                    put(page, &not_set_up(&why).widget);
+                }
+            }
+        }
+    }
+
+    /// Setup drawn again in the language of the moment, on the page it was
+    /// on, with what had been typed and chosen there and the keyboard where
+    /// it was: the pages are built by the same code from the same status,
+    /// so each control stands where it stood.
+    fn setup_again(self: &Rc<Self>) {
+        let nav = self.setup_nav.borrow().as_ref().and_then(omui::WeakNav::upgrade);
+        let Some(nav) = nav else {
+            put(&self.overview, &setup(self, None));
+            return;
+        };
+        let tag = nav.visible_tag();
+        let shown = nav.widget.visible_child();
+        let values = shown.as_ref().map(form_values).unwrap_or_default();
+        let places = focus_places(self.overview.upcast_ref());
+        put(&self.overview, &setup(self, tag.as_deref()));
+        let nav = self.setup_nav.borrow().as_ref().and_then(omui::WeakNav::upgrade);
+        if let Some(shown) = nav.and_then(|nav| nav.widget.visible_child()) {
+            set_form_values(&shown, &values);
+        }
+        if let Some(places) = places {
+            focus_places_at(self.overview.upcast_ref(), &places);
+        }
+    }
+
+    /// A question with Cancel and `responses`: `then` runs with the id of the
+    /// response chosen. Escape, and any other way of putting it away, is
+    /// Cancel, which loses nothing. The heading, the body and each response's
+    /// label are asked for again after a switch of language, so an open
+    /// question follows it.
     fn confirm(
         self: &Rc<Self>,
-        heading: &str,
-        body: &str,
-        responses: &[(&str, &str, Appearance)],
+        heading: impl Fn() -> String + 'static,
+        body: impl Fn() -> String + 'static,
+        responses: &[Response],
         then: impl Fn(&str) + 'static,
     ) {
-        let dialog = Dialog::new(Some(heading), Some(body));
-        dialog.add_response("cancel", "Cancel");
+        let dialog = Dialog::new(Some(""), Some(""));
+        dialog.add_response("cancel", "");
+        dialog.set_response_translated("cancel", "Cancel");
+        let mut ids = Vec::new();
+        let mut labels = Vec::new();
         for (id, label, look) in responses {
-            dialog.add_response(id, label);
+            dialog.add_response(id, "");
             dialog.set_response_appearance(id, *look);
+            ids.push((*id).to_string());
+            labels.push(((*id).to_string(), *label));
         }
+        dialog.bind(move |dialog| {
+            dialog.set_heading(&heading());
+            dialog.set_body(&body());
+            for (id, label) in &labels {
+                dialog.set_response_label(id, &label());
+            }
+        });
         dialog.set_close_response("cancel");
         dialog.set_default_response("cancel");
         dialog.connect_response(move |_, id| {
-            if id != "cancel" {
+            // a response this didn't add is the dialog put away
+            if ids.iter().any(|known| known == id) {
                 then(id);
             }
         });
@@ -375,43 +570,225 @@ impl Ui {
     }
 }
 
+/// A response of [`Ui::confirm`]: its id, its label in the language of the
+/// moment, and how it looks.
+type Response = (&'static str, fn() -> String, Appearance);
+
+/// The keyboard's shortcuts: an action, its keys as GTK writes them, and the
+/// key as README.md's table lists it (a test holds the two together). All
+/// are Ctrl with a key, never a key alone, since setup and the dialogs are
+/// typed into. A dialog holds them back while it is open (omui's `Dialog`).
+/// Ctrl+Q and Ctrl+W are omui's [`omui::quit_keys`]; `?` and F1 open the
+/// list of them all ([`shortcut_sections`]).
+const SHORTCUTS: [(&str, &[&str], &str); 12] = [
+    ("win.page('overview')", &["<Control>1"], "Ctrl+1"),
+    ("win.page('devices')", &["<Control>2"], "Ctrl+2"),
+    ("win.page('settings')", &["<Control>3"], "Ctrl+3"),
+    ("win.page('secrets')", &["<Control>4"], "Ctrl+4"),
+    ("win.page('recovery')", &["<Control>5"], "Ctrl+5"),
+    ("win.sync", &["<Control>r"], "Ctrl+R"),
+    // a page's own: each presses the button of that name on the page in view
+    ("win.press('Show…')", &["<Control>d"], "Ctrl+D"),
+    ("win.press('Open on a Phone…')", &["<Control>p"], "Ctrl+P"),
+    ("win.press('Show Join Code')", &["<Control>j"], "Ctrl+J"),
+    ("win.press('Save…')", &["<Control>s"], "Ctrl+S"),
+    ("win.press('Start')", &["<Control>b"], "Ctrl+B"),
+    ("win.continue", &["<Control>Return", "<Control>KP_Enter"], "Ctrl+Enter"),
+];
+
+/// The keys omui gives the window, as README.md lists them.
+#[cfg(test)]
+const OMUI_KEYS: [&str; 4] = ["Ctrl+Q", "Ctrl+W", "?", "F1"];
+
+/// What the overlay on `?` lists: every key in [`SHORTCUTS`] and
+/// [`OMUI_KEYS`], in the language of the moment.
+fn shortcut_sections() -> Vec<omui::ShortcutSection> {
+    vec![
+        omui::ShortcutSection::new(
+            &tr("Pages"),
+            &[
+                ("Ctrl+1", &tr("Overview")),
+                ("Ctrl+2", &tr("Devices")),
+                ("Ctrl+3", &tr("Omarchy settings")),
+                ("Ctrl+4", &tr("Keys")),
+                ("Ctrl+5", &tr("Recovery")),
+            ],
+        ),
+        omui::ShortcutSection::new(
+            &tr("On the page in view"),
+            &[
+                ("Ctrl+R", &tr("Sync now")),
+                ("Ctrl+D", &tr("Show Recently Deleted")),
+                ("Ctrl+P", &tr("Open your files on a phone")),
+                ("Ctrl+J", &tr("Show the join code")),
+                ("Ctrl+S", &tr("Save this device's secrets")),
+                ("Ctrl+B", &tr("Start background sync")),
+            ],
+        ),
+        omui::ShortcutSection::new(&tr("Setup"), &[("Ctrl+Enter", &tr("Go on to the next step"))]),
+        omui::ShortcutSection::new(
+            &tr("General"),
+            &[
+                ("? / F1", &tr("Show the keyboard shortcuts")),
+                ("Ctrl+W", &tr("Close the window")),
+                ("Ctrl+Q", &tr("Quit")),
+            ],
+        ),
+    ]
+}
+
+/// The first button under `under` that is on screen, can be pressed and
+/// that `wanted` picks. A page of the stack that isn't the one in view is
+/// not on screen, nor is a row of a list that is folded away.
+fn button_in_view(under: &gtk::Widget, wanted: &dyn Fn(&gtk::Button) -> bool) -> Option<gtk::Button> {
+    children(under).find_map(|child| match child.downcast_ref::<gtk::Button>() {
+        Some(button) if button.is_mapped() && button.is_sensitive() && wanted(button) => Some(button.clone()),
+        _ => button_in_view(&child, wanted),
+    })
+}
+
+/// Presses `button` as a click would, and leaves the keyboard on it, so
+/// that a dialog it opens gives the keyboard back there when it closes.
+fn press(button: &gtk::Button) {
+    button.grab_focus();
+    button.emit_clicked();
+}
+
+/// The actions [`SHORTCUTS`] names, and their keys; the quit keys and the
+/// overlay that lists them all.
+fn shortcuts(app: &gtk::Application, ui: &Rc<Ui>) {
+    // Ctrl+Q closes every window and Ctrl+W this one, as their close buttons
+    // would, never `Application::quit`, which ends the main loop under a
+    // command still running: with its windows closed the app ends by itself,
+    // once what `in_background` holds it for is done.
+    omui::quit_keys(&ui.window);
+    omui::ShortcutOverlay::new(shortcut_sections).install(&ui.window, false);
+
+    /// A window action that runs `act` with the window's [`Ui`] and its
+    /// string parameter, if any.
+    fn add(ui: &Rc<Ui>, name: &str, parameter: Option<&glib::VariantTy>, act: impl Fn(&Rc<Ui>, &str) + 'static) {
+        let action = gio::SimpleAction::new(name, parameter);
+        // weak: the window owns the action
+        let weak = Rc::downgrade(ui);
+        action.connect_activate(move |_, parameter| {
+            if let Some(ui) = weak.upgrade() {
+                act(&ui, parameter.and_then(glib::Variant::str).unwrap_or_default());
+            }
+        });
+        ui.window.add_action(&action);
+    }
+    // The tabs and Sync now are hidden through setup, and so are their keys.
+    add(ui, "sync", None, |ui, _| {
+        if ui.header.is_visible() {
+            ui.act(&["omacloud", "sync"], &tr("Synced"));
+        }
+    });
+    add(ui, "page", Some(glib::VariantTy::STRING), |ui, page| {
+        if ui.header.is_visible() {
+            ui.stack.set_visible_child_name(page);
+            // the keyboard goes along, to the first control of the page
+            if let Some(page) = ui.stack.visible_child() {
+                page.child_focus(gtk::DirectionType::TabForward);
+            }
+        }
+    });
+    add(ui, "press", Some(glib::VariantTy::STRING), |ui, label| {
+        // the button's label is in the language of the moment
+        let label = i18n::translate(label);
+        let page = ui.stack.visible_child();
+        if let Some(button) = page.and_then(|page| button_in_view(&page, &|b| title(b.upcast_ref()) == label)) {
+            press(&button);
+        }
+    });
+    // Setup's pages each have one way on, the button that stands out.
+    add(ui, "continue", None, |ui, _| {
+        let on = |b: &gtk::Button| b.has_css_class("suggested-action");
+        if ui.setting_up.get()
+            && let Some(button) = button_in_view(ui.overview.upcast_ref(), &on)
+        {
+            press(&button);
+        }
+    });
+    for (action, keys, _) in SHORTCUTS {
+        app.set_accels_for_action(action, keys);
+    }
+}
+
+/// A page's title in its tab, in the language of the moment.
+fn page_title(tag: &str) -> String {
+    match tag {
+        "overview" => tr("Overview"),
+        "devices" => tr("Devices"),
+        // Omarchy is a name: the page of its settings
+        "settings" => tr("Omarchy"),
+        "secrets" => tr("Keys"),
+        _ => tr("Recovery"),
+    }
+}
+
+/// The main menu's items, in the language of the moment.
+fn fill_menu(menu: &gio::Menu) {
+    menu.remove_all();
+    menu.append(Some(&tr("Move from iCloud…")), Some("win.move-from-icloud"));
+}
+
 fn build(app: &gtk::Application, page: Option<&str>) {
     let stack = gtk::Stack::new();
-    // the tabs follow the pages as they are added
+    // the tabs follow the pages as they are added, and their titles
     let header = omui::header(Some(omui::tabs(&stack).upcast_ref()));
-    let page_of = |tag: &str, title: &str, icon: &str| {
-        let holder = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        let spinner = omui::spinner();
-        spinner.set_halign(gtk::Align::Center);
-        spinner.set_valign(gtk::Align::Center);
-        spinner.set_size_request(32, 32);
-        spinner.set_vexpand(true);
-        put(&holder, &spinner);
-        stack.add_titled(&holder, Some(tag), title).set_icon_name(icon);
-        holder
-    };
-    let overview = page_of("overview", "Overview", name::CLOUD);
-    let devices = page_of("devices", "Devices", name::COMPUTER);
-    let settings = page_of("settings", "Omarchy", name::SETTINGS);
-    let secrets = page_of("secrets", "Keys", name::KEY);
-    let recovery = page_of("recovery", "Recovery", name::USERS);
+    const PAGES: [(&str, &str); 5] = [
+        ("overview", name::CLOUD),
+        ("devices", name::COMPUTER),
+        ("settings", name::SETTINGS),
+        ("secrets", name::KEY),
+        ("recovery", name::USERS),
+    ];
+    let holders: Vec<gtk::Box> = PAGES
+        .iter()
+        .map(|&(tag, icon)| {
+            let holder = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            let spinner = omui::spinner();
+            spinner.set_halign(gtk::Align::Center);
+            spinner.set_valign(gtk::Align::Center);
+            spinner.set_size_request(32, 32);
+            spinner.set_vexpand(true);
+            put(&holder, &spinner);
+            stack
+                .add_titled(&holder, Some(tag), &page_title(tag))
+                .set_icon_name(icon);
+            holder
+        })
+        .collect();
+    {
+        let stack = stack.downgrade();
+        i18n::on_change(&header, move || {
+            if let Some(stack) = stack.upgrade() {
+                for (tag, _) in PAGES {
+                    if let Some(child) = stack.child_by_name(tag) {
+                        stack.page(&child).set_title(&page_title(tag));
+                    }
+                }
+            }
+        });
+    }
 
-    let sync = omui::icon_button(name::REFRESH, "Sync now");
+    let sync = omui::icon_button(name::REFRESH, "");
+    bind_tooltip(&sync, "Sync now");
     header.pack_end(&sync);
     // leaving iCloud is optional and rare: in this menu only, and only with
     // the iCloud apps installed
     let has_menu = on_path("icloud-session");
     if has_menu {
         let menu = gio::Menu::new();
-        menu.append(Some("Move from iCloud…"), Some("win.move-from-icloud"));
-        header.pack_end(
-            &gtk::MenuButton::builder()
-                .icon_name(name::MENU)
-                .tooltip_text("Main menu")
-                .has_frame(false)
-                .menu_model(&menu)
-                .build(),
-        );
+        fill_menu(&menu);
+        let button = gtk::MenuButton::builder()
+            .icon_name(name::MENU)
+            .has_frame(false)
+            .menu_model(&menu)
+            .build();
+        bind_tooltip(&button, "Main menu");
+        i18n::on_change(&button, move || fill_menu(&menu));
+        header.pack_end(&button);
     }
 
     let window = gtk::ApplicationWindow::builder()
@@ -423,6 +800,8 @@ fn build(app: &gtk::Application, page: Option<&str>) {
         .height_request(400)
         .build();
     window.set_titlebar(Some(&header));
+    let [overview, devices, settings, secrets, recovery]: [gtk::Box; 5] =
+        holders.try_into().expect("a holder for each page");
     let ui = Rc::new(Ui {
         window: window.clone(),
         stack: stack.clone(),
@@ -434,16 +813,33 @@ fn build(app: &gtk::Application, page: Option<&str>) {
         secrets,
         recovery,
         setting_up: Cell::new(false),
+        setup_nav: RefCell::new(None),
+        status: RefCell::new(None),
+        sizes: RefCell::default(),
+        picker: Rc::new(omui::PortalFilePicker::new()),
     });
-    {
-        let ui = ui.clone();
-        sync.connect_clicked(move |_| ui.act(&["omacloud", "sync"], "Synced"));
-    }
+    shortcuts(app, &ui);
+    // the same action as Ctrl+R
+    sync.set_action_name(Some("win.sync"));
     if has_menu {
         let action = gio::SimpleAction::new("move-from-icloud", None);
-        let ui = ui.clone();
-        action.connect_activate(move |_, _| move_from_icloud(&ui));
+        let weak = Rc::downgrade(&ui);
+        action.connect_activate(move |_, _| {
+            if let Some(ui) = weak.upgrade() {
+                move_from_icloud(&ui);
+            }
+        });
         window.add_action(&action);
+    }
+    {
+        // Everything the pages say is drawn again in the new language, from
+        // the status they were drawn from: weak, as the window outlives this.
+        let weak = Rc::downgrade(&ui);
+        i18n::on_change(&window, move || {
+            if let Some(ui) = weak.upgrade() {
+                ui.render(true);
+            }
+        });
     }
     if let Some(page) = page {
         stack.set_visible_child_name(page);
@@ -554,7 +950,13 @@ fn focus_at(root: &gtk::Widget, path: &[Step]) {
             at = nearest;
         }
     }
-    // as Tab arrives: at a control itself, and in a list at a row, never at the list, where nothing shows it
+    tab_into(root, at);
+}
+
+/// Gives the keyboard to `at` as Tab arrives: at a control itself, and in a list at a row, never at the list, where
+/// nothing shows it.
+fn tab_into(root: &gtk::Widget, mut at: gtk::Widget) {
+    let row = gtk::ListBoxRow::static_type();
     while !at.child_focus(gtk::DirectionType::TabForward) && at != *root {
         // from inside a row to the row, not to the text in it that Tab stops at first
         let Some(around) = at.ancestor(row).filter(|row| *row != at).or_else(|| at.parent()) else {
@@ -562,6 +964,136 @@ fn focus_at(root: &gtk::Widget, path: &[Step]) {
         };
         at = around;
     }
+}
+
+/// Where the keyboard is under `root`, by place alone: the index of each widget among its siblings, from `root`
+/// down. For drawing the same pages again in another language, where every title changed and nothing else did.
+fn focus_places(root: &gtk::Widget) -> Option<Vec<usize>> {
+    let mut at = root.root()?.focus()?;
+    let mut places = Vec::new();
+    while at != *root {
+        places.push(std::iter::successors(at.prev_sibling(), gtk::Widget::prev_sibling).count());
+        at = at.parent()?;
+    }
+    places.reverse();
+    Some(places)
+}
+
+/// Gives the keyboard back at `places` ([`focus_places`]) under `root`, or as near it as the new pages go.
+fn focus_places_at(root: &gtk::Widget, places: &[usize]) {
+    let mut at = root.clone();
+    for place in places {
+        let Some(child) = children(&at).nth(*place) else {
+            break;
+        };
+        at = child;
+    }
+    // in a field, the cursor comes back as it was left, not with the whole text selected
+    let back = match at.downcast_ref::<gtk::Text>() {
+        Some(text) => text.grab_focus_without_selecting(),
+        None => at.is_focusable() && at.grab_focus(),
+    };
+    if !back {
+        tab_into(root, at);
+    }
+}
+
+/// One thing typed or chosen on a page of setup, in the order the page holds them.
+#[derive(Clone, Debug, PartialEq)]
+enum FormValue {
+    Text(String),
+    On(bool),
+    Choice(u32),
+    Expanded(bool),
+}
+
+/// The text of an entry or a password entry; None for any other widget.
+fn entry_text(widget: &gtk::Widget) -> Option<String> {
+    if let Some(entry) = widget.downcast_ref::<gtk::Entry>() {
+        Some(entry.text().into())
+    } else {
+        widget
+            .downcast_ref::<gtk::PasswordEntry>()
+            .map(|entry| entry.text().into())
+    }
+}
+
+/// What was typed and chosen under `under`, in the order its controls stand.
+fn form_values(under: &gtk::Widget) -> Vec<FormValue> {
+    let mut values = Vec::new();
+    for child in children(under) {
+        if let Some(text) = entry_text(&child) {
+            values.push(FormValue::Text(text));
+            continue;
+        }
+        if let Some(switch) = child.downcast_ref::<gtk::Switch>() {
+            values.push(FormValue::On(switch.is_active()));
+        } else if let Some(pick) = child.downcast_ref::<gtk::DropDown>() {
+            values.push(FormValue::Choice(pick.selected()));
+        } else if child.has_css_class("expander-row") {
+            values.push(FormValue::Expanded(child.has_css_class("expanded")));
+        }
+        values.extend(form_values(&child));
+    }
+    values
+}
+
+/// Puts `values` ([`form_values`]) back under `under`, a page built by the same code: control by control, in order,
+/// stopping where the two part.
+fn set_form_values(under: &gtk::Widget, values: &[FormValue]) {
+    fn walk(under: &gtk::Widget, values: &mut std::slice::Iter<FormValue>) -> bool {
+        for child in children(under) {
+            let is_entry = entry_text(&child).is_some();
+            let is_control = is_entry
+                || child.is::<gtk::Switch>()
+                || child.is::<gtk::DropDown>()
+                || child.has_css_class("expander-row");
+            if is_control {
+                let Some(value) = values.next() else {
+                    return false;
+                };
+                match value {
+                    FormValue::Text(text) if is_entry => {
+                        if let Some(entry) = child.downcast_ref::<gtk::Entry>() {
+                            entry.set_text(text);
+                        } else if let Some(entry) = child.downcast_ref::<gtk::PasswordEntry>() {
+                            entry.set_text(text);
+                        }
+                        continue;
+                    }
+                    FormValue::On(on) if child.is::<gtk::Switch>() => {
+                        if let Some(switch) = child.downcast_ref::<gtk::Switch>() {
+                            switch.set_active(*on);
+                        }
+                    }
+                    FormValue::Choice(i) if child.is::<gtk::DropDown>() => {
+                        if let Some(pick) = child.downcast_ref::<gtk::DropDown>() {
+                            pick.set_selected(*i);
+                        }
+                    }
+                    FormValue::Expanded(open) if child.has_css_class("expander-row") => {
+                        // opened as a click on its header opens it: the row holds a list of one, the header
+                        let header = children(&child)
+                            .find_map(|content| children(&content).next())
+                            .and_then(|list| list.first_child())
+                            .and_downcast::<gtk::ListBoxRow>();
+                        if *open
+                            && !child.has_css_class("expanded")
+                            && let Some(header) = header
+                        {
+                            header.emit_activate();
+                        }
+                    }
+                    _ => return false,
+                }
+            }
+            if !walk(&child, values) {
+                return false;
+            }
+        }
+        true
+    }
+    walk(under, &mut values.iter());
 }
 
 fn text(v: &Value) -> String {
@@ -596,7 +1128,7 @@ fn button(label: &str, class: Option<&str>) -> gtk::Button {
 }
 
 fn not_set_up(why: &str) -> EmptyState {
-    EmptyState::new(Some(name::CLOUD), "Nothing to show yet", Some(why))
+    EmptyState::new(Some(name::CLOUD), &tr("Nothing to show yet"), Some(why))
 }
 
 /// Makes `child` the dialog's own widget, for one that only shows something:
@@ -613,22 +1145,23 @@ fn show_only(dialog: &Dialog, child: &impl IsA<gtk::Widget>) {
 }
 
 /// A dialog that stays up through a long command, so the wait doesn't look like
-/// nothing happening. Closed by the caller when it's done.
-fn waiting(ui: &Rc<Ui>, text: &str) -> Dialog {
+/// nothing happening. Closed by the caller when it's done. `text` says what
+/// it waits for, and is asked for again after a switch of language.
+fn waiting(ui: &Rc<Ui>, text: impl Fn() -> String + 'static) -> Dialog {
     let body = gtk::Box::new(gtk::Orientation::Vertical, 18);
     let spinner = omui::spinner();
     spinner.set_size_request(32, 32);
     spinner.set_halign(gtk::Align::Center);
     body.append(&spinner);
-    body.append(
-        &gtk::Label::builder()
-            .label(text)
-            .wrap(true)
-            .justify(gtk::Justification::Center)
-            .max_width_chars(40)
-            .build(),
-    );
-    let dialog = Dialog::new(Some("One Moment"), None);
+    let label = gtk::Label::builder()
+        .wrap(true)
+        .justify(gtk::Justification::Center)
+        .max_width_chars(40)
+        .build();
+    i18n::bind(&label, move |label| label.set_label(&text()));
+    body.append(&label);
+    let dialog = Dialog::new(Some(""), None);
+    dialog.set_heading_translated("One Moment");
     show_only(&dialog, &body);
     dialog.set_can_close(false);
     dialog.present(&ui.window);
@@ -637,7 +1170,7 @@ fn waiting(ui: &Rc<Ui>, text: &str) -> Dialog {
 
 /// Run `omacloud init` with `args` (and secrets in `env`, never on the
 /// command line), then show what came of it.
-fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>, wait: &str) {
+fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>, wait: impl Fn() -> String + 'static) {
     let mut argv = vec!["omacloud".to_string(), "init".to_string()];
     argv.extend(args);
     let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
@@ -662,139 +1195,170 @@ fn run_init(ui: &Rc<Ui>, args: Vec<String>, env: Vec<(String, String)>, wait: &s
                 .find_map(|l| l.strip_prefix("this device's fingerprint: "))
                 .map(str::to_string);
             if let Some(code) = code {
-                // shown once: nobody can show it again
-                let dialog = Dialog::new(
-                    Some("Your recovery code"),
-                    Some(
-                        "Write it down and keep it offline. With it you can add a computer when \
-                         no other is at hand and recover the account. It is shown only now: \
-                         without it and without a computer, your files can't be recovered.",
-                    ),
-                );
-                // selected with the pointer, and no stop for the keyboard: the
-                // dialog opens with the cursor where the code is typed back
-                let label = gtk::Label::builder()
-                    .label(&code)
-                    .selectable(true)
-                    .can_focus(false)
-                    .css_classes(["title-2", "monospace"])
-                    .build();
-                // typed back, so nobody clicks past the one chance to keep it
-                let (check_row, check) = omui::entry_row("Type its last four characters", "");
-                let typed_back = group("", "");
-                typed_back.add(&check_row.widget);
-                let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
-                body.append(&label);
-                body.append(&typed_back.widget);
-                dialog.set_extra_child(Some(body.upcast_ref()));
-                dialog.add_response("copy", "Copy");
-                dialog.add_response("done", "I Wrote It Down");
-                dialog.set_response_appearance("done", Appearance::Suggested);
-                dialog.set_response_enabled("done", false);
-                // Enter after the four characters is the button, once it is on
-                dialog.set_default_response("done");
-                check.set_activates_default(true);
-                // copying leaves it open, the code still to be written down, and
-                // Escape does nothing: only the code typed back closes it
-                dialog.set_response_closes("copy", false);
-                dialog.set_can_close(false);
-                let tail: String = {
-                    let chars: Vec<char> = code.chars().filter(char::is_ascii_alphanumeric).collect();
-                    chars[chars.len().saturating_sub(4)..]
-                        .iter()
-                        .collect::<String>()
-                        .to_ascii_lowercase()
-                };
-                {
-                    // weak: the dialog owns the entry
-                    let dialog = dialog.downgrade();
-                    check.connect_changed(move |e| {
-                        let typed: String = e
-                            .text()
-                            .chars()
-                            .filter(char::is_ascii_alphanumeric)
-                            .collect::<String>()
-                            .to_ascii_lowercase();
-                        if let Some(dialog) = dialog.upgrade() {
-                            dialog.set_response_enabled("done", typed == tail);
-                        }
-                    });
-                }
-                let (window, ui3) = (ui2.window.clone(), ui2.clone());
-                dialog.connect_response(move |_, id| {
-                    if id == "copy" {
-                        window.clipboard().set_text(&code);
-                    } else {
-                        ui3.refresh();
-                    }
-                });
-                dialog.present(&ui2.window);
+                show_recovery_code(&ui2, code);
             } else if let Some(fp) = fp {
                 show_text(
                     &ui2,
-                    "Approve this computer",
-                    "On a computer that already syncs, open omacloud's Devices and approve the one \
-                     showing this fingerprint.",
+                    || tr("Approve this computer"),
+                    || {
+                        tr(
+                            "On a computer that already syncs, open Omacloud's Devices and approve the one showing \
+                             this fingerprint.",
+                        )
+                    },
                     &fp,
                 );
                 ui2.refresh();
             } else {
-                ui2.toast("This computer is set up");
+                ui2.toast(&tr("This computer is set up"));
                 ui2.refresh();
             }
         }
     });
 }
 
-/// The storage a new account can be on: its name here, what the field that
-/// says where is called, and its `init` flags.
-const PROVIDERS: [(&str, &str, &str, &str); 3] = [
-    ("Cloudflare R2", "Cloudflare account ID", "r2", "--account"),
-    ("Hetzner", "Location (fsn1, nbg1 or hel1)", "hetzner", "--location"),
-    ("Other S3", "Endpoint (https://...)", "s3", "--endpoint"),
-];
-
-fn provider_at(i: u32) -> (&'static str, &'static str, &'static str, &'static str) {
-    PROVIDERS[usize::try_from(i).unwrap_or(0).min(PROVIDERS.len() - 1)]
+/// A new account's recovery code, shown once: nobody can show it again.
+fn show_recovery_code(ui: &Rc<Ui>, code: String) {
+    let dialog = Dialog::new(Some(""), Some(""));
+    dialog.set_heading_translated("Your recovery code");
+    dialog.set_body_translated(
+        "Write it down and keep it offline. With it you can add a computer when no other is at hand and recover the \
+         account. It is shown only now: without it and without a computer, your files can't be recovered.",
+    );
+    // selected with the pointer, and no stop for the keyboard: the
+    // dialog opens with the cursor where the code is typed back
+    let label = gtk::Label::builder()
+        .label(&code)
+        .selectable(true)
+        .can_focus(false)
+        .css_classes(["title-2", "monospace"])
+        .build();
+    // typed back, so nobody clicks past the one chance to keep it
+    let (check_row, check) = omui::entry_row("", "");
+    check_row.set_title_translated("Type its last four characters");
+    let typed_back = group("", "");
+    typed_back.add(&check_row.widget);
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    body.append(&label);
+    body.append(&typed_back.widget);
+    dialog.set_extra_child(Some(body.upcast_ref()));
+    dialog.add_response("copy", "");
+    dialog.set_response_translated("copy", "Copy");
+    dialog.add_response("done", "");
+    dialog.set_response_translated("done", "I Wrote It Down");
+    dialog.set_response_appearance("done", Appearance::Suggested);
+    dialog.set_response_enabled("done", false);
+    // Enter after the four characters is the button, once it is on
+    dialog.set_default_response("done");
+    check.set_activates_default(true);
+    // copying leaves it open, the code still to be written down, and
+    // Escape does nothing: only the code typed back closes it
+    dialog.set_response_closes("copy", false);
+    dialog.set_can_close(false);
+    // were it put away all the same (its window closing), Done loses nothing more than any other answer would
+    dialog.set_close_response("done");
+    let tail: String = {
+        let chars: Vec<char> = code.chars().filter(char::is_ascii_alphanumeric).collect();
+        chars[chars.len().saturating_sub(4)..]
+            .iter()
+            .collect::<String>()
+            .to_ascii_lowercase()
+    };
+    {
+        // weak: the dialog owns the entry
+        let dialog = dialog.downgrade();
+        check.connect_changed(move |e| {
+            let typed: String = e
+                .text()
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .collect::<String>()
+                .to_ascii_lowercase();
+            if let Some(dialog) = dialog.upgrade() {
+                dialog.set_response_enabled("done", typed == tail);
+            }
+        });
+    }
+    let (window, ui2) = (ui.window.clone(), ui.clone());
+    dialog.connect_response(move |_, id| match id {
+        "copy" => window.clipboard().set_text(&code),
+        _ => ui2.refresh(),
+    });
+    dialog.present(&ui.window);
 }
 
-const SETTING_UP: &str = "Omacloud is setting up this computer, which can take a minute.";
+/// The storage a new account can be on, with its `init` flags.
+const PROVIDERS: [(&str, &str); 3] = [("r2", "--account"), ("hetzner", "--location"), ("s3", "--endpoint")];
+
+/// What a provider is called here, and the field that says where its bucket is, in the language of the moment.
+fn provider_words(i: usize) -> (String, String) {
+    match i {
+        // names, as they are
+        0 => ("Cloudflare R2".to_string(), tr("Cloudflare account ID")),
+        1 => ("Hetzner".to_string(), tr("Location (fsn1, nbg1 or hel1)")),
+        _ => (tr("Other S3"), tr("Endpoint (https://...)")),
+    }
+}
+
+fn provider_at(i: u32) -> usize {
+    usize::try_from(i).unwrap_or(0).min(PROVIDERS.len() - 1)
+}
+
+fn setting_up_text() -> String {
+    tr("Omacloud is setting up this computer, which can take a minute.")
+}
+
+/// A page of setup after the first, built on the pages under it.
+type SetupPage = fn(&Rc<Ui>, &Nav) -> gtk::Box;
 
 /// First run, one question at a time: what most people need comes first, and
-/// the details of buckets and codes only for those who choose them.
-fn setup(ui: &Rc<Ui>) -> gtk::Stack {
+/// the details of buckets and codes only for those who choose them. `at` is
+/// the page to open on: a switch of language draws setup again where it was.
+fn setup(ui: &Rc<Ui>, at: Option<&str>) -> gtk::Stack {
     let first = gtk::Box::new(gtk::Orientation::Vertical, 12);
     first.set_halign(gtk::Align::Center);
     let welcome = EmptyState::new(
         Some(name::CLOUD),
-        "Your files on all your computers",
-        Some(
-            "Omacloud keeps your files and Omarchy settings the same on every computer. They're \
-             encrypted here before they leave, so only your computers can read them.",
-        ),
+        &tr("Your files on all your computers"),
+        Some(&tr(
+            "Omacloud keeps your files and Omarchy settings the same on every computer. They're encrypted here \
+                  before they leave, so only your computers can read them.",
+        )),
     );
     welcome.set_child(Some(first.upcast_ref()));
     let nav = Nav::new(&step(None, "Omacloud", &welcome.widget, None));
-    let choice = |label: &str, class: Option<&str>, tag: &'static str, page: fn(&Rc<Ui>, &Nav) -> gtk::Box| {
-        let b = button(label, class);
-        b.add_css_class("pill");
-        // weak: the pages hold the button
-        let (ui, nav) = (ui.clone(), nav.downgrade());
-        b.connect_clicked(move |_| {
-            if let Some(nav) = nav.upgrade() {
+    let pages: [(&str, SetupPage); 3] = [("dropbox", dropbox_step), ("join", join_step), ("bucket", bucket_step)];
+    let open = {
+        // weak: the pages hold the buttons that open them
+        let (ui, weak) = (ui.clone(), nav.downgrade());
+        move |tag: &str| {
+            let Some(nav) = weak.upgrade() else { return };
+            if let Some((_, page)) = pages.iter().find(|(t, _)| *t == tag) {
                 let page = page(&ui, &nav);
                 nav.push(tag, &page);
-                // the keyboard starts in the form (the page's last child), not on Back
-                if let Some(form) = page.last_child() {
+                // The keyboard starts in the form (the page's last child), not on Back; setup drawn again for a
+                // switch of language is not in the window yet, and puts the keyboard back where it was itself.
+                if let Some(form) = page.last_child().filter(|form| form.root().is_some()) {
                     form.child_focus(gtk::DirectionType::TabForward);
                 }
             }
-        });
+        }
+    };
+    let open = Rc::new(open);
+    let choice = |label: &str, class: Option<&str>, tag: &'static str| {
+        let b = button(label, class);
+        b.add_css_class("pill");
+        let open = open.clone();
+        b.connect_clicked(move |_| open(tag));
         first.append(&b);
     };
-    choice("Set Up With Dropbox", Some("suggested-action"), "dropbox", dropbox_step);
-    choice("I Already Use Omacloud", None, "join", join_step);
-    choice("Use My Own Storage", Some("flat"), "bucket", bucket_step);
+    choice(&tr("Set Up With Dropbox"), Some("suggested-action"), "dropbox");
+    choice(&tr("I Already Use Omacloud"), None, "join");
+    choice(&tr("Use My Own Storage"), Some("flat"), "bucket");
+    if let Some(tag) = at {
+        open(tag);
+    }
+    ui.setup_nav.replace(Some(nav.downgrade()));
     nav.widget
 }
 
@@ -803,7 +1367,7 @@ fn setup(ui: &Rc<Ui>) -> gtk::Stack {
 fn step(nav: Option<&Nav>, title: &str, content: &impl IsA<gtk::Widget>, action: Option<&gtk::Button>) -> gtk::Box {
     let header = omui::header(Some(&omui::Title::new(title, "").widget.upcast()));
     if let Some(nav) = nav {
-        let back = omui::icon_button(name::BACK, "Back");
+        let back = omui::icon_button(name::BACK, &tr("Back"));
         let nav = nav.downgrade();
         back.connect_clicked(move |_| {
             if let Some(nav) = nav.upgrade() {
@@ -825,8 +1389,8 @@ fn step(nav: Option<&Nav>, title: &str, content: &impl IsA<gtk::Widget>, action:
 /// For someone who lost every computer: out of the way of everyone else.
 fn recovery_group() -> (Group, gtk::PasswordEntry) {
     let g = group("", "");
-    let more = ExpanderRow::new("Lost every computer?", "");
-    let (row, code) = omui::password_row("Recovery code");
+    let more = ExpanderRow::new(&tr("Lost every computer?"), "");
+    let (row, code) = omui::password_row(&tr("Recovery code"));
     more.add_row(&row.widget);
     g.add(&more.widget);
     (g, code)
@@ -839,7 +1403,7 @@ fn recovery_env(ui: &Rc<Ui>, entry: &gtk::PasswordEntry) -> Option<Vec<(String, 
         0 => Some(Vec::new()),
         28 => Some(vec![("OMACLOUD_RECOVERY_CODE".to_string(), typed)]),
         _ => {
-            ui.toast("That's not a recovery code (28 characters)");
+            ui.toast(&tr("That's not a recovery code (28 characters)"));
             None
         }
     }
@@ -847,11 +1411,11 @@ fn recovery_env(ui: &Rc<Ui>, entry: &gtk::PasswordEntry) -> Option<Vec<(String, 
 
 fn dropbox_step(ui: &Rc<Ui>, nav: &Nav) -> gtk::Box {
     let (page, column) = page();
-    let (what, sync_args) = choose_what_syncs();
+    let (what, sync_args) = choose_what_syncs(ui);
     column.append(&what.widget);
     let (rescue_group, rescue) = recovery_group();
     column.append(&rescue_group.widget);
-    let connect = button("Continue", Some("suggested-action"));
+    let connect = button(&tr("Continue"), Some("suggested-action"));
     let ui = ui.clone();
     connect.connect_clicked(move |_| {
         let Some(env) = recovery_env(&ui, &rescue) else {
@@ -859,42 +1423,41 @@ fn dropbox_step(ui: &Rc<Ui>, nav: &Nav) -> gtk::Box {
         };
         let mut args = vec!["--provider".to_string(), "dropbox".to_string()];
         args.extend(sync_args());
-        run_init(
-            &ui,
-            args,
-            env,
-            "Allow Omacloud in Dropbox in your browser. Setting up can then take a minute.",
-        );
+        run_init(&ui, args, env, || {
+            tr("Allow Omacloud in Dropbox in your browser. Setting up can then take a minute.")
+        });
     });
-    step(Some(nav), "What to Sync", &page, Some(&connect))
+    step(Some(nav), &tr("What to Sync"), &page, Some(&connect))
 }
 
 fn bucket_step(ui: &Rc<Ui>, nav: &Nav) -> gtk::Box {
     let (page, column) = page();
-    let (what, sync_args) = choose_what_syncs();
+    let (what, sync_args) = choose_what_syncs(ui);
     let create = group(
-        "Your bucket",
-        "Make a private bucket and a key that reaches it at your provider, then give them here.",
+        &tr("Your bucket"),
+        &tr("Make a private bucket and a key that reaches it at your provider, then give them here."),
     );
     let (rescue_group, rescue) = recovery_group();
-    let (provider_row, provider) = omui::combo_row("Provider", "", &gtk::StringList::new(&PROVIDERS.map(|p| p.0)), 0);
+    let names: Vec<String> = (0..PROVIDERS.len()).map(|i| provider_words(i).0).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let (provider_row, provider) = omui::combo_row(&tr("Provider"), "", &gtk::StringList::new(&names), 0);
     create.add(&provider_row.widget);
-    let (place_row, place) = omui::entry_row(PROVIDERS[0].1, "");
+    let (place_row, place) = omui::entry_row(&provider_words(0).1, "");
     {
         let (place_row, place) = (place_row.clone(), place.clone());
         provider.connect_selected_notify(move |p| {
-            place_row.set_title(provider_at(p.selected()).1);
+            place_row.set_title(&provider_words(provider_at(p.selected())).1);
             place.set_text("");
         });
     }
     create.add(&place_row.widget);
-    let (bucket_row, bucket) = omui::entry_row("Bucket name", "");
+    let (bucket_row, bucket) = omui::entry_row(&tr("Bucket name"), "");
     create.add(&bucket_row.widget);
-    let (key_id_row, key_id) = omui::entry_row("Access key ID", "");
+    let (key_id_row, key_id) = omui::entry_row(&tr("Access key ID"), "");
     create.add(&key_id_row.widget);
-    let (secret_row, secret) = omui::password_row("Secret access key");
+    let (secret_row, secret) = omui::password_row(&tr("Secret access key"));
     create.add(&secret_row.widget);
-    let create_button = button("Create Account", Some("suggested-action"));
+    let create_button = button(&tr("Create Account"), Some("suggested-action"));
     {
         let ui = ui.clone();
         create_button.connect_clicked(move |_| {
@@ -904,10 +1467,10 @@ fn bucket_step(ui: &Rc<Ui>, nav: &Nav) -> gtk::Box {
                 key_id.text().trim().to_string(),
             );
             if place.is_empty() || bucket.is_empty() || key_id.is_empty() || secret.text().is_empty() {
-                ui.toast("Fill in where your bucket is, and its key");
+                ui.toast(&tr("Fill in where your bucket is, and its key"));
                 return;
             }
-            let (_, _, name, flag) = provider_at(provider.selected());
+            let (name, flag) = PROVIDERS[provider_at(provider.selected())];
             let mut args: Vec<String> = [
                 "--provider",
                 name,
@@ -926,52 +1489,54 @@ fn bucket_step(ui: &Rc<Ui>, nav: &Nav) -> gtk::Box {
                 return;
             };
             env.extend(rescue);
-            run_init(&ui, args, env, SETTING_UP);
+            run_init(&ui, args, env, setting_up_text);
         });
     }
     column.append(&create.widget);
     column.append(&what.widget);
     column.append(&rescue_group.widget);
-    step(Some(nav), "Your Own Storage", &page, Some(&create_button))
+    step(Some(nav), &tr("Your Own Storage"), &page, Some(&create_button))
 }
 
 fn join_step(ui: &Rc<Ui>, nav: &Nav) -> gtk::Box {
     let (page, column) = page();
-    let (what, sync_args) = choose_what_syncs();
+    let (what, sync_args) = choose_what_syncs(ui);
     let join = group(
-        "Your code",
-        "On your other computer, open Omacloud, go to Devices and click Show Join Code, then \
-         paste it here. That computer then approves this one. If someone gave you an invite, \
-         paste that instead, and you get an account of your own.",
+        &tr("Your code"),
+        &tr(
+            "On your other computer, open Omacloud, go to Devices and click Show Join Code, then paste it here. \
+             That computer then approves this one. If someone gave you an invite, paste that instead, and you get \
+             an account of your own.",
+        ),
     );
-    let (jcode_row, jcode) = omui::password_row("Join code");
+    let (jcode_row, jcode) = omui::password_row(&tr("Join code"));
     let (rescue_group, code) = recovery_group();
     join.add(&jcode_row.widget);
-    let join_button = button("Add This Computer", Some("suggested-action"));
+    let join_button = button(&tr("Add This Computer"), Some("suggested-action"));
     {
         let ui = ui.clone();
         join_button.connect_clicked(move |_| {
             let j = jcode.text().trim().to_string();
             if j.is_empty() {
-                ui.toast("Paste the join code or invite");
+                ui.toast(&tr("Paste the join code or invite"));
                 return;
             }
             let Some(mut env) = recovery_env(&ui, &code) else {
                 return;
             };
             env.push(("OMACLOUD_JOIN_CODE".to_string(), j));
-            run_init(&ui, sync_args(), env, SETTING_UP);
+            run_init(&ui, sync_args(), env, setting_up_text);
         });
     }
     column.append(&join.widget);
     column.append(&what.widget);
     column.append(&rescue_group.widget);
-    step(Some(nav), "Add This Computer", &page, Some(&join_button))
+    step(Some(nav), &tr("Add This Computer"), &page, Some(&join_button))
 }
 
 /// A button that opens `path` in the file manager.
 fn open_button(window: &gtk::ApplicationWindow, path: String) -> gtk::Button {
-    let open = omui::icon_button(name::FOLDER_OPEN, "Open");
+    let open = omui::icon_button(name::FOLDER_OPEN, &tr("Open"));
     open.set_valign(gtk::Align::Center);
     let window = window.clone();
     open.connect_clicked(move |_| {
@@ -984,24 +1549,43 @@ fn open_button(window: &gtk::ApplicationWindow, path: String) -> gtk::Button {
     open
 }
 
+/// When this computer last synced, `t` in seconds since the epoch: a while
+/// ago in minutes, hours or days as the language counts them, and as a date
+/// once it was more than a week ago.
+fn synced_when(t: u64) -> String {
+    let s = secs_since(t);
+    match s {
+        0..60 => tr("Synced just now"),
+        60..3600 => trn!("Synced {n} minutes ago", s / 60),
+        3600..86400 => trn!("Synced {n} hours ago", s / 3600),
+        86400..604800 => trn!("Synced {n} days ago", s / 86400),
+        _ => glib::DateTime::from_unix_local(i64::try_from(t).unwrap_or(0)).map_or_else(
+            |_| tr("Synced long ago"),
+            |when| tr!("Synced on {}", i18n::format_date(&when)),
+        ),
+    }
+}
+
 fn overview(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
     let (page, column) = page();
 
     let sync = group("", "");
     let search = row(
-        "Find files by meaning",
-        "Optional Recall · searches folders selected in Recall settings",
+        &tr("Find files by meaning"),
+        &tr("Optional Recall · searches folders selected in Recall settings"),
     );
-    let launch = button("Open Recall", None);
+    let launch = button(&tr("Open Recall"), None);
     let ui2 = ui.clone();
     launch.connect_clicked(move |_| {
         let ui = ui2.clone();
-        glib::spawn_future_local(async move {
-            let result = gio::spawn_blocking(|| std::process::Command::new("recall").arg("toggle").status()).await;
-            if !matches!(result, Ok(Ok(status)) if status.success()) {
-                ui.toast("Recall is unavailable. Use Open on a sync folder to browse files.");
-            }
-        });
+        omui::background(
+            || Command::new("recall").arg("toggle").status(),
+            move |result| {
+                if !matches!(result, Ok(Ok(status)) if status.success()) {
+                    ui.toast(&tr("Recall is unavailable. Use Open on a sync folder to browse files."));
+                }
+            },
+        );
     });
     search.add_suffix(&launch);
     let folders = &s["folders"];
@@ -1011,47 +1595,47 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
         folder_groups = what_syncs(ui, s);
     } else {
         let folder = text(&s["folder"]);
-        let folder_row = row("Folder", &folder);
+        let folder_row = row(&tr("Folder"), &folder);
         folder_row.add_suffix(&open_button(&ui.window, folder));
         folder_group_row = Some(folder_row);
     }
     let daemon = s["daemon"].as_bool().unwrap_or(false);
     let synced_at = s["synced_at"].as_u64();
-    let synced = synced_at.map_or_else(|| "Not synced yet".to_string(), |t| format!("Synced {}", ago(t)));
+    let synced = synced_at.map_or_else(|| tr("Not synced yet"), synced_when);
     let repo = &s["repo"];
     let place = match repo["kind"].as_str() {
-        Some("bucket") => format!("{} at {}", text(&repo["bucket"]), text(&repo["endpoint"])),
-        Some("dropbox") => "your Dropbox".to_string(),
+        Some("bucket") => tr!("{} at {}", text(&repo["bucket"]), text(&repo["endpoint"])),
+        Some("dropbox") => tr("your Dropbox"),
         Some("path") => short_path(&text(&repo["repository"])),
         _ => text(&repo["repository"]),
     };
     // a daemon syncs at least every ten minutes: much longer, and something's wrong
     let fresh = synced_at.is_some_and(|t| secs_since(t) < 3600);
     let (state, icon) = if !daemon {
-        ("Not syncing", Some(name::WARNING))
+        (tr("Not syncing"), Some(name::WARNING))
     } else if fresh {
-        ("Up to date", Some(name::CHECK))
+        (tr("Up to date"), Some(name::CHECK))
     } else if synced_at.is_some() {
-        ("Not synced lately", Some(name::WARNING))
+        (tr("Not synced lately"), Some(name::WARNING))
     } else {
-        ("Syncing…", None)
+        (tr("Syncing…"), None)
     };
     let status = row(
-        state,
+        &state,
         &if daemon {
-            format!("{synced} · in {}", place.trim())
+            tr!("{} · in {}", synced, place.trim())
         } else {
-            "Nothing syncs until background sync starts".to_string()
+            tr("Nothing syncs until background sync starts")
         },
     );
     if let Some(icon) = icon {
         status.add_prefix(&omui::icon(icon));
     }
     if !daemon {
-        let start = button("Start", Some("suggested-action"));
+        let start = button(&tr("Start"), Some("suggested-action"));
         let ui2 = ui.clone();
         start.connect_clicked(move |_| {
-            ui2.act(&["systemctl", "--user", "start", "omacloud"], "Started");
+            ui2.act(&["systemctl", "--user", "start", "omacloud"], &tr("Started"));
         });
         status.add_suffix(&start);
     }
@@ -1059,8 +1643,11 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
     if let Some(r) = folder_group_row {
         sync.add(&r.widget);
     }
-    let deleted = row("Recently Deleted", "Files deleted in the last 30 days, to put back");
-    let show = button("Show…", None);
+    let deleted = row(
+        &tr("Recently Deleted"),
+        &tr("Files deleted in the last 30 days, to put back"),
+    );
+    let show = button(&tr("Show…"), None);
     let ui2 = ui.clone();
     show.connect_clicked(move |_| show_deleted(&ui2));
     deleted.add_suffix(&show);
@@ -1070,14 +1657,14 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
         column.append(&g.widget);
     }
     let files = group(
-        "Your files",
-        "Anything named like name.nosync stays on this computer only.",
+        &tr("Your files"),
+        &tr("Anything named like name.nosync stays on this computer only."),
     );
     // syncing one whole folder, there's no Folders group to open them from
     if whole_folder {
         let online = row(
-            "On another device",
-            "Your files in a browser, at omacloud.computer/drive",
+            &tr("On another device"),
+            &tr("Your files in a browser, at omacloud.computer/drive"),
         );
         online.add_suffix(&phone_button(ui));
         files.add(&online.widget);
@@ -1087,25 +1674,23 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
     column.append(&files.widget);
 
     // for support and the curious
-    let details = ExpanderRow::new("Details", "");
+    let details = ExpanderRow::new(&tr("Details"), "");
     for (title, value) in [
-        ("Stored in", place.trim().to_string()),
-        ("Account", text(&s["account_fingerprint"])),
-        ("Account id", text(&s["account"])),
+        (tr("Stored in"), place.trim().to_string()),
+        (tr("Account"), text(&s["account_fingerprint"])),
+        (tr("Account ID"), text(&s["account"])),
         (
-            "Version",
+            tr("Version"),
             s["synced_head"]
-                .as_u64()
-                .map_or_else(|| "None yet".to_string(), |h| h.to_string()),
+                .as_i64()
+                .map_or_else(|| tr("None yet"), i18n::format_int),
         ),
         (
-            "Key epoch",
-            s["epoch"]
-                .as_u64()
-                .map_or_else(|| "No key yet".to_string(), |e| e.to_string()),
+            tr("Key epoch"),
+            s["epoch"].as_i64().map_or_else(|| tr("No key yet"), i18n::format_int),
         ),
     ] {
-        details.add_row(&row(title, &value).widget);
+        details.add_row(&row(&title, &value).widget);
     }
     let more = group("", "");
     more.add(&details.widget);
@@ -1117,52 +1702,85 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
 /// last version back where it was.
 fn show_deleted(ui: &Rc<Ui>) {
     let (page, column) = page();
-    let list = Rc::new(group("", "Looking through your history…"));
+    let list = Rc::new(group("", ""));
     column.append(&list.widget);
-    let dialog = Dialog::new(Some("Recently Deleted"), None);
+    let dialog = Dialog::new(Some(""), None);
+    dialog.set_heading_translated("Recently Deleted");
     dialog.set_extra_child(Some(page.upcast_ref()));
     // The list's own height; the heading and Close add 126 px, for the 520 the dialog had with libadwaita.
     dialog.set_content_size(560, 394);
-    dialog.add_response("close", "Close");
+    dialog.add_response("close", "");
+    dialog.set_response_translated("close", "Close");
     dialog.set_close_response("close");
+    // What the list says above its rows changes as the history is read, and is said again after a switch of
+    // language: weak, as the list's own widget is what keeps this.
+    let note: Rc<RefCell<Box<dyn Fn() -> String>>> =
+        Rc::new(RefCell::new(Box::new(|| tr("Looking through your history…"))));
+    let say = {
+        let (weak, note) = (Rc::downgrade(&list), note.clone());
+        move || {
+            if let Some(list) = weak.upgrade() {
+                list.set_description(&note.borrow()());
+            }
+        }
+    };
+    {
+        let say = say.clone();
+        i18n::on_change(&list.widget, say);
+    }
+    say();
     dialog.present(&ui.window);
     let ui = ui.clone();
+    let weak_dialog = dialog.downgrade();
     cli_then(&["omacloud", "deleted"], Vec::new(), move |r| {
         let files = match r {
             Ok(Value::Array(files)) => files,
             Ok(_) => Vec::new(),
             Err(e) => {
-                list.set_description(&e.shown());
+                *note.borrow_mut() = Box::new(move || e.shown());
+                say();
                 return;
             }
         };
-        list.set_description(if files.is_empty() {
-            "Nothing was deleted in the last 30 days."
+        let words: fn() -> String = if files.is_empty() {
+            || tr("Nothing was deleted in the last 30 days.")
         } else {
-            "Put Back writes the last version where it was. Older versions stay under `omacloud versions`."
-        });
+            || tr("Put Back writes the last version where it was. Older versions stay under `omacloud versions`.")
+        };
+        *note.borrow_mut() = Box::new(words);
+        say();
+        let Some(dialog) = weak_dialog.upgrade() else { return };
         for f in files {
             let size = f["size"].as_u64().unwrap_or(0);
-            let rw = row(
-                &text(&f["relative"]),
-                &format!("Deleted on {} · {}", text(&f["device"]), human(size)),
-            );
-            let put = button("Put Back", Some("flat"));
+            let rw = row(&text(&f["relative"]), "");
+            {
+                let (rw, device) = (rw.clone(), text(&f["device"]));
+                dialog.bind(move |_| rw.set_subtitle(&tr!("Deleted on {} · {}", device, human(size))));
+            }
+            let put = button("", Some("flat"));
+            i18n::bind_label(&put, "Put Back");
             let (ui, group, rw2) = (ui.clone(), list.clone(), rw.clone());
             let (path, version) = (text(&f["path"]), f["version"].to_string());
-            put.connect_clicked(move |b| {
-                b.set_sensitive(false);
-                let (ui, list, rw, b) = (ui.clone(), group.clone(), rw2.clone(), b.clone());
+            // Not made insensitive while it runs: GTK takes the keyboard from a button that is, and from one that
+            // is removed, to nowhere. So a press while one runs does nothing, and the keyboard is moved on to the
+            // next row before this one goes, where someone at the keyboard goes on.
+            let busy = Rc::new(Cell::new(false));
+            put.connect_clicked(move |_| {
+                if busy.replace(true) {
+                    return;
+                }
+                let (ui, list, rw, busy) = (ui.clone(), group.clone(), rw2.clone(), busy.clone());
                 cli_then(
                     &["omacloud", "restore", &path, "--at", &version, "--to", &path],
                     Vec::new(),
                     move |r| match r {
                         Ok(_) => {
+                            hand_on_focus(&rw.widget);
                             list.remove(&rw.widget);
-                            ui.toast("Put back");
+                            ui.toast(&tr("Put back"));
                         }
                         Err(e) => {
-                            b.set_sensitive(true);
+                            busy.set(false);
                             ui.toast(&e.shown());
                         }
                     },
@@ -1178,23 +1796,42 @@ fn show_deleted(ui: &Rc<Ui>) {
     });
 }
 
+/// Before `row` goes, moves the keyboard from inside it to the button of the row after it (or before it), or else
+/// to the buttons of the dialog it is in, so that it is never left on nothing.
+fn hand_on_focus(row: &gtk::ListBoxRow) {
+    let Some(focus) = row.root().and_then(|root| root.focus()) else {
+        return;
+    };
+    if !focus.is_ancestor(row) && focus != *row.upcast_ref::<gtk::Widget>() {
+        return;
+    }
+    let any = |_: &gtk::Button| true;
+    let next = row
+        .next_sibling()
+        .or_else(|| row.prev_sibling())
+        .and_then(|other| button_in_view(&other, &any));
+    if let Some(next) = next {
+        next.grab_focus();
+        return;
+    }
+    // the last one: the dialog's own buttons, below the list
+    let mut at = row.parent();
+    while let Some(widget) = at {
+        if widget.has_css_class("dialog") {
+            if let Some(close) = button_in_view(&widget, &|b| !b.is_ancestor(row)) {
+                close.grab_focus();
+            }
+            return;
+        }
+        at = widget.parent();
+    }
+}
+
 fn secs_since(t: u64) -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
         .saturating_sub(t)
-}
-
-/// "2 minutes ago", for a time in seconds since the epoch.
-fn ago(t: u64) -> String {
-    let s = secs_since(t);
-    let n = |v: u64, unit: &str| format!("{v} {unit}{} ago", if v == 1 { "" } else { "s" });
-    match s {
-        0..60 => "just now".to_string(),
-        60..3600 => n(s / 60, "minute"),
-        3600..86400 => n(s / 3600, "hour"),
-        _ => n(s / 86400, "day"),
-    }
 }
 
 /// `~/Documents` for a path in home.
@@ -1205,9 +1842,10 @@ fn short_path(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-/// "2.4 GB", for a size in bytes.
+/// "2.4 GB", for a size in bytes, written as the language writes numbers.
 fn human(bytes: u64) -> String {
-    let units = ["bytes", "KB", "MB", "GB", "TB"];
+    // units are as they are in every language
+    let units = ["", "KB", "MB", "GB", "TB"];
     let mut size = bytes as f64;
     let mut unit = 0;
     while size >= 1000.0 && unit < units.len() - 1 {
@@ -1215,26 +1853,31 @@ fn human(bytes: u64) -> String {
         unit += 1;
     }
     if unit == 0 {
-        format!("{bytes} bytes")
+        trn!("{n} bytes", bytes)
     } else {
-        format!("{size:.1} {}", units[unit])
+        format!("{} {}", i18n::format_number(size, 1), units[unit])
     }
 }
 
 /// Show `path` and, once measured, its size as `row`'s subtitle.
-fn subtitle_with_size(row: &Row, path: &str) {
+fn subtitle_with_size(ui: &Rc<Ui>, row: &Row, path: &str) {
     let shown = short_path(path);
-    row.set_subtitle(&shown);
+    let with_size = move |bytes: u64| tr!("{} · {}", shown, human(bytes));
+    match ui.sizes.borrow().get(path) {
+        Some(bytes) => row.set_subtitle(&with_size(*bytes)),
+        None => row.set_subtitle(&short_path(path)),
+    }
     if !std::path::Path::new(path).is_dir() {
         return;
     }
-    let row = row.clone();
+    let (row, ui, key) = (row.clone(), ui.clone(), path.to_string());
     run_then(&["du", "-sb", path], move |r| {
         if let Some(bytes) = r
             .ok()
             .and_then(|out| out.split_whitespace().next()?.parse::<u64>().ok())
         {
-            row.set_subtitle(&format!("{shown} · {}", human(bytes)));
+            ui.sizes.borrow_mut().insert(key, bytes);
+            row.set_subtitle(&with_size(bytes));
         }
     });
 }
@@ -1253,10 +1896,10 @@ fn switch_row(title: &str, on: bool, flip: impl Fn(bool) + 'static) -> Row {
 
 /// Your files in a browser on another device.
 fn phone_button(ui: &Rc<Ui>) -> gtk::Button {
-    let phone = button("Open on a Phone…", Some("flat"));
-    phone.set_tooltip_text(Some(
+    let phone = button(&tr("Open on a Phone…"), Some("flat"));
+    phone.set_tooltip_text(Some(&tr(
         "Your files in a browser on another device, at omacloud.computer/drive",
-    ));
+    )));
     let ui2 = ui.clone();
     phone.connect_clicked(move |_| show_drive_link(&ui2));
     phone
@@ -1279,7 +1922,7 @@ fn show_drive_link(ui: &Rc<Ui>) {
                 .to_string(),
         };
         let Ok(code) = qrcode::QrCode::with_error_correction_level(&link, qrcode::EcLevel::L) else {
-            return ui2.toast("Couldn't draw the link");
+            return ui2.toast(&tr("Couldn't draw the link"));
         };
         let picture = gtk::DrawingArea::builder()
             .content_width(300)
@@ -1287,34 +1930,36 @@ fn show_drive_link(ui: &Rc<Ui>) {
             .halign(gtk::Align::Center)
             .build();
         picture.set_draw_func(move |_, cr, width, height| {
-            // black on white whatever the theme: that's what a camera reads
+            // Black on white whatever the theme, and square-cornered: that's what a camera reads. The only colours
+            // here that are not the theme's.
             const MARGIN: usize = 3;
             let side = code.width() + 2 * MARGIN;
             let cell = (f64::from(width.min(height)) / side as f64).floor().max(1.0);
-            let left = (f64::from(width) - cell * side as f64) / 2.0;
+            let start = (f64::from(width) - cell * side as f64) / 2.0;
             let top = (f64::from(height) - cell * side as f64) / 2.0;
             cr.set_source_rgb(1.0, 1.0, 1.0);
-            cr.rectangle(left, top, cell * side as f64, cell * side as f64);
+            cr.rectangle(start, top, cell * side as f64, cell * side as f64);
             _ = cr.fill();
             cr.set_source_rgb(0.0, 0.0, 0.0);
             for (i, color) in code.to_colors().into_iter().enumerate() {
                 if color == qrcode::Color::Dark {
                     let (x, y) = (i % code.width() + MARGIN, i / code.width() + MARGIN);
-                    cr.rectangle(left + cell * x as f64, top + cell * y as f64, cell, cell);
+                    cr.rectangle(start + cell * x as f64, top + cell * y as f64, cell, cell);
                 }
             }
             _ = cr.fill();
         });
-        let dialog = Dialog::new(
-            Some("Open on a phone"),
-            Some(
-                "Point your phone's camera at this. Your files open in its browser, read straight \
-                 from your storage. It works for five minutes, or until you close this.",
-            ),
+        let dialog = Dialog::new(Some(""), Some(""));
+        dialog.set_heading_translated("Open on a phone");
+        dialog.set_body_translated(
+            "Point your phone's camera at this. Your files open in its browser, read straight from your storage. It \
+             works for five minutes, or until you close this.",
         );
         show_only(&dialog, &picture);
-        dialog.add_response("copy", "Copy Link");
-        dialog.add_response("close", "Done");
+        dialog.add_response("copy", "");
+        dialog.set_response_translated("copy", "Copy Link");
+        dialog.add_response("close", "");
+        dialog.set_response_translated("close", "Done");
         dialog.set_response_appearance("close", Appearance::Suggested);
         dialog.set_close_response("close");
         let ui3 = ui2.clone();
@@ -1322,8 +1967,9 @@ fn show_drive_link(ui: &Rc<Ui>) {
             if id == "copy" {
                 // it stays good for its five minutes, to be pasted elsewhere
                 ui3.window.clipboard().set_text(&link);
-                ui3.toast("Link copied: it works for five minutes");
+                ui3.toast(&tr("Link copied: it works for five minutes"));
             } else {
+                // Done, or the dialog put away: the link closes with it, as it said
                 cli_then(&["omacloud", "drive-link", "--close"], Vec::new(), |_| {});
             }
         });
@@ -1331,7 +1977,8 @@ fn show_drive_link(ui: &Rc<Ui>) {
     });
 }
 
-/// The folders every Omarchy computer has, in their usual order.
+/// The folders every Omarchy computer has, in their usual order. They are
+/// the folders' names in home, so they are shown as they are.
 const OMARCHY_FOLDERS: [&str; 6] = ["Desktop", "Documents", "Pictures", "Music", "Videos", "Downloads"];
 
 /// What syncs on this computer, each with a switch, as iCloud lists what it
@@ -1359,21 +2006,26 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> Vec<Group> {
             let name = name2.clone();
             if want {
                 let verb = if state == "skipped" { "unskip" } else { "add" };
-                ui2.act(&["omacloud", "folders", verb, &name], "Syncing");
+                ui2.act(&["omacloud", "folders", verb, &name], &tr("Syncing"));
             } else {
                 let ui3 = ui2.clone();
                 let ui4 = ui2.clone();
-                let dialog = Dialog::new(
-                    Some(&format!("Stop syncing {name} here?")),
-                    Some("Its files stay on this computer, and your other computers keep syncing it."),
-                );
-                dialog.add_response("cancel", "Cancel");
-                dialog.add_response("skip", "Stop Syncing");
+                let dialog = Dialog::new(Some(""), Some(""));
+                {
+                    let name = name.clone();
+                    dialog.bind(move |dialog| dialog.set_heading(&tr!("Stop syncing {} here?", name)));
+                }
+                dialog
+                    .set_body_translated("Its files stay on this computer, and your other computers keep syncing it.");
+                dialog.add_response("cancel", "");
+                dialog.set_response_translated("cancel", "Cancel");
+                dialog.add_response("skip", "");
+                dialog.set_response_translated("skip", "Stop Syncing");
                 dialog.set_response_appearance("skip", Appearance::Destructive);
                 dialog.set_close_response("cancel");
                 dialog.connect_response(move |_, id| {
                     if id == "skip" {
-                        ui3.act(&["omacloud", "folders", "skip", &name], "Stopped syncing here");
+                        ui3.act(&["omacloud", "folders", "skip", &name], &tr("Stopped syncing here"));
                     } else {
                         ui4.refresh();
                     }
@@ -1381,10 +2033,13 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> Vec<Group> {
                 dialog.present(&ui2.window);
             }
         });
-        subtitle_with_size(&r, &path);
+        subtitle_with_size(ui, &r, &path);
         r
     };
-    let folders_group = group("Folders", "Each one is the same on all your computers that sync it.");
+    let folders_group = group(
+        &tr("Folders"),
+        &tr("Each one is the same on all your computers that sync it."),
+    );
     folders_group.set_header_suffix(Some(phone_button(ui).upcast_ref()));
     for r in rows {
         folders_group.add(&folder_row(r).widget);
@@ -1392,12 +2047,12 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> Vec<Group> {
     // every other folder of home, a switch each
     let more = folders["more"].as_array().unwrap_or(&empty);
     if !more.is_empty() {
-        let x = ExpanderRow::new("Add a folder from your home", "");
+        let x = ExpanderRow::new(&tr("Add a folder from your home"), "");
         for f in more {
             let (name, ui2) = (text(&f["name"]), ui.clone());
             let name2 = name.clone();
             let r = switch_row(&name, false, move |_| {
-                ui2.act(&["omacloud", "folders", "add", &name2], "Syncing");
+                ui2.act(&["omacloud", "folders", "add", &name2], &tr("Syncing"));
             });
             r.set_subtitle(&short_path(&text(&f["path"])));
             x.add_row(&r.widget);
@@ -1406,21 +2061,21 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> Vec<Group> {
     }
 
     // Omarchy settings, beside the folders, as iCloud lists more than files
-    let settings_group = group("Settings", "");
+    let settings_group = group(&tr("Settings"), "");
     let settings_on = s["settings"]["on"].as_bool().unwrap_or(false);
     let ui2 = ui.clone();
-    let settings = switch_row("Omarchy settings", settings_on, move |want| {
+    let settings = switch_row(&tr("Omarchy settings"), settings_on, move |want| {
         let verb = if want { "on" } else { "off" };
         ui2.act(
             &["omacloud", "settings", verb],
-            if want {
-                "Omarchy settings sync"
+            &if want {
+                tr("Omarchy settings sync")
             } else {
-                "Omarchy settings stay here"
+                tr("Omarchy settings stay here")
             },
         );
     });
-    settings.set_subtitle(SETTINGS_SYNCED);
+    settings.set_subtitle(&settings_synced());
     settings_group.add(&settings.widget);
 
     vec![folders_group, settings_group]
@@ -1429,8 +2084,8 @@ fn what_syncs(ui: &Rc<Ui>, s: &Value) -> Vec<Group> {
 /// The setup page's choice of what syncs, as iCloud asks on a new Mac:
 /// switches for the usual folders and Omarchy settings, with their sizes.
 /// Returns the group and what to add to `omacloud init`.
-fn choose_what_syncs() -> (Group, impl Fn() -> Vec<String>) {
-    let g = group("What to sync", "You can change these any time.");
+fn choose_what_syncs(ui: &Rc<Ui>) -> (Group, impl Fn() -> Vec<String> + use<>) {
+    let g = group(&tr("What to sync"), &tr("You can change these any time."));
     let home = std::env::var("HOME").unwrap_or_default();
     // where this computer keeps each (a German one's Documents is Dokumente)
     // None when this computer points the folder at home itself, as Omarchy
@@ -1464,11 +2119,11 @@ fn choose_what_syncs() -> (Group, impl Fn() -> Vec<String>) {
             continue;
         };
         let (row, switch) = omui::switch_row(name, "", on);
-        subtitle_with_size(&row, &path);
+        subtitle_with_size(ui, &row, &path);
         g.add(&row.widget);
         switches.push((name, switch));
     }
-    let (settings_row, settings) = omui::switch_row("Omarchy settings", SETTINGS_SYNCED, true);
+    let (settings_row, settings) = omui::switch_row(&tr("Omarchy settings"), &settings_synced(), true);
     g.add(&settings_row.widget);
     let args = move || {
         let chosen: Vec<&str> = switches
@@ -1493,24 +2148,30 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
     let requests = list("requests");
     if !requests.is_empty() {
         let g = group(
-            "Asking to join",
-            "Approve a device only if it shows the same fingerprint.",
+            &tr("Asking to join"),
+            &tr("Approve a device only if it shows the same fingerprint."),
         );
         for r in requests {
             let (name, fp) = (text(&r["name"]), text(&r["fingerprint"]));
             let rw = row(&name, &fp);
-            let approve = button("Approve…", Some("suggested-action"));
+            let approve = button(&tr("Approve…"), Some("suggested-action"));
             let ui2 = ui.clone();
             approve.connect_clicked(move |_| {
                 let ui3 = ui2.clone();
                 let fp2 = fp.clone();
+                let (name, name2, fp) = (name.clone(), name.clone(), fp.clone());
                 ui2.confirm(
-                    &format!("Approve {name}?"),
-                    &format!(
-                        "Only if {name} shows this fingerprint:\n\n{fp}\n\nIt will get the key to everything in this account."
-                    ),
-                    &[("approve", "Approve", Appearance::Suggested)],
-                    move |_| ui3.act(&["omacloud", "devices", "approve", &fp2], "Approved"),
+                    move || tr!("Approve {}?", name),
+                    move || {
+                        tr!(
+                            "Only if {0} shows this fingerprint:\n\n{1}\n\nIt will get the key to everything in this \
+                             account.",
+                            name2,
+                            fp
+                        )
+                    },
+                    &[("approve", || tr("Approve"), Appearance::Suggested)],
+                    move |_| ui3.act(&["omacloud", "devices", "approve", &fp2], &tr("Approved")),
                 );
             });
             rw.add_suffix(&approve);
@@ -1521,15 +2182,15 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
 
     let me = &s["this_device"];
     let g = group(
-        "Devices",
-        if me["role"] == "waiting" {
-            "This device is waiting for approval."
+        &tr("Devices"),
+        &if me["role"] == "waiting" {
+            tr("This device is waiting for approval.")
         } else {
-            ""
+            String::new()
         },
     );
     if me["role"] == "member" {
-        let add = button("Show Join Code", Some("flat"));
+        let add = button(&tr("Show Join Code"), Some("flat"));
         let ui2 = ui.clone();
         add.connect_clicked(move |_| show_join_code(&ui2));
         g.set_header_suffix(Some(add.upcast_ref()));
@@ -1539,29 +2200,37 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
         let (name, fp) = (text(&d["name"]), text(&d["fingerprint"]));
         let rw = row(&name, &fp);
         if d["this"].as_bool() == Some(true) {
-            let tag = gtk::Label::new(Some("This device"));
+            let tag = gtk::Label::new(Some(&tr("This device")));
             tag.add_css_class("dim-label");
             rw.add_suffix(&tag);
         } else {
-            let remove = button("Remove…", Some("flat"));
+            let remove = button(&tr("Remove…"), Some("flat"));
             let ui2 = ui.clone();
             remove.connect_clicked(move |_| {
                 let ui3 = ui2.clone();
                 let fp2 = fp.clone();
+                let name = name.clone();
                 ui2.confirm(
-                    &format!("Remove {name}?"),
-                    "It stops syncing, and its files stay on it. If it's lost or stolen, or someone \
-                     else has it, Omacloud also changes your keys so it can't reach anything new. \
-                     That uploads everything again, so it can take a while.",
+                    move || tr!("Remove {}?", name),
+                    || {
+                        tr(
+                            "It stops syncing, and its files stay on it. If it's lost or stolen, or someone else has \
+                             it, Omacloud also changes your keys so it can't reach anything new. That uploads \
+                             everything again, so it can take a while.",
+                        )
+                    },
                     &[
-                        ("remove", "Remove", Appearance::Default),
-                        ("lost", "It's Lost or Stolen", Appearance::Destructive),
+                        ("remove", || tr("Remove"), Appearance::Default),
+                        ("lost", || tr("It's Lost or Stolen"), Appearance::Destructive),
                     ],
                     move |id| {
                         if id == "lost" {
                             cut_off(&ui3, &fp2, on_dropbox);
                         } else {
-                            ui3.act(&["omacloud", "devices", "revoke", fp2.as_str(), "--yes"], "Removed");
+                            ui3.act(
+                                &["omacloud", "devices", "revoke", fp2.as_str(), "--yes"],
+                                &tr("Removed"),
+                            );
                         }
                     },
                 );
@@ -1576,7 +2245,7 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
 
     let removed = list("removed");
     if !removed.is_empty() {
-        let g = group("Removed", "");
+        let g = group(&tr("Removed"), "");
         for d in removed {
             g.add(&row(&text(&d["name"]), &text(&d["fingerprint"])).widget);
         }
@@ -1585,18 +2254,22 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
     page
 }
 
+/// What a computer's choice for something is called.
+fn choice_label(word: &str) -> String {
+    match word {
+        "sync" => tr("Synced"),
+        "backup" => tr("Backed up only"),
+        "off" => tr("Off"),
+        _ => tr("Not known"),
+    }
+}
+
 /// What each computer keeps, one expandable row per computer: its folders,
 /// settings and settings files, each marked synced, backed up only or off.
 /// This computer's settings files are chosen here; folders and settings by
 /// their switches.
 fn each_computer(ui: &Rc<Ui>, choices: &Value) -> Group {
     const WORDS: [&str; 3] = ["sync", "backup", "off"];
-    let label = |w: &str| match w {
-        "sync" => "Synced",
-        "backup" => "Backed up only",
-        "off" => "Off",
-        _ => "Not known",
-    };
     let marker = |w: &str| match w {
         "sync" => name::REFRESH,
         "backup" => name::DRIVE,
@@ -1604,9 +2277,8 @@ fn each_computer(ui: &Rc<Ui>, choices: &Value) -> Group {
         _ => name::QUESTION,
     };
     let g = group(
-        "What each computer keeps",
-        "Synced: the same on every computer. Backed up only: kept from that computer, not synced. \
-         Off: neither.",
+        &tr("What each computer keeps"),
+        &tr("Synced: the same on every computer. Backed up only: kept from that computer, not synced. Off: neither."),
     );
     let me = text(&choices["this_device"]);
     let empty = Vec::new();
@@ -1614,7 +2286,7 @@ fn each_computer(ui: &Rc<Ui>, choices: &Value) -> Group {
     for device in choices["devices"].as_array().unwrap_or(&empty) {
         let device = text(device);
         let here = device == me;
-        let x = ExpanderRow::new(&device, if here { "This computer" } else { "" });
+        let x = ExpanderRow::new(&device, &if here { tr("This computer") } else { String::new() });
         x.set_expanded(here);
         x.add_prefix(&omui::icon(name::COMPUTER));
         let all_settings = items
@@ -1627,18 +2299,22 @@ fn each_computer(ui: &Rc<Ui>, choices: &Value) -> Group {
             let word = item["choices"][&device].as_str().unwrap_or("-");
             let name = text(&item["name"]);
             let section = if item["kind"] == "folders" {
-                "Folders"
+                "folders"
             } else {
-                "Settings"
+                "settings"
             };
             // with settings off, its groups and files say nothing more
-            if section == "Settings" && all_settings != "sync" && name != "settings" {
+            if section == "settings" && all_settings != "sync" && name != "settings" {
                 continue;
             }
             if section != heading {
                 heading = section;
                 let h = gtk::Label::builder()
-                    .label(section)
+                    .label(if section == "folders" {
+                        tr("Folders")
+                    } else {
+                        tr("Settings")
+                    })
                     .xalign(0.0)
                     .margin_top(12)
                     .margin_bottom(6)
@@ -1648,25 +2324,26 @@ fn each_computer(ui: &Rc<Ui>, choices: &Value) -> Group {
                 x.add_row(&h);
             }
             let kind = match item["kind"].as_str().unwrap_or_default() {
-                "folders" => "",
-                "settings" if name == "settings" => "All of them",
-                "settings" => "A group",
-                _ => "A file",
+                "folders" => String::new(),
+                "settings" if name == "settings" => tr("All of them"),
+                "settings" => tr("A group"),
+                _ => tr("A file"),
             };
             let title = if name == "settings" {
-                "Omarchy settings".to_string()
+                tr("Omarchy settings")
             } else {
                 name.clone()
             };
-            let r = Row::new(&title, kind);
+            let r = Row::new(&title, &kind);
             let icon = omui::icon(marker(word));
-            icon.set_tooltip_text(Some(label(word)));
+            icon.set_tooltip_text(Some(&choice_label(word)));
             if word != "sync" {
                 icon.add_css_class("dim-label");
             }
             r.add_prefix(&icon);
             if here && item["kind"] == "files" {
-                let labels: Vec<&str> = WORDS.iter().map(|w| label(w)).collect();
+                let labels: Vec<String> = WORDS.iter().map(|w| choice_label(w)).collect();
+                let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
                 let pick = gtk::DropDown::from_strings(&labels);
                 pick.set_valign(gtk::Align::Center);
                 if let Some(i) = WORDS.iter().position(|w| *w == word) {
@@ -1675,12 +2352,12 @@ fn each_computer(ui: &Rc<Ui>, choices: &Value) -> Group {
                 let ui = ui.clone();
                 pick.connect_selected_notify(move |p| {
                     if let Some(w) = WORDS.get(p.selected() as usize) {
-                        ui.act(&["omacloud", "choose", &name, w], "Changed here");
+                        ui.act(&["omacloud", "choose", &name, w], &tr("Changed here"));
                     }
                 });
                 r.add_suffix(&pick);
             } else {
-                let l = gtk::Label::new(Some(label(word)));
+                let l = gtk::Label::new(Some(&choice_label(word)));
                 l.add_css_class("dim-label");
                 r.add_suffix(&l);
             }
@@ -1688,25 +2365,13 @@ fn each_computer(ui: &Rc<Ui>, choices: &Value) -> Group {
         }
         if here && all_settings == "sync" {
             // a settings file not listed yet: backed up only, to start
-            let add = row("Back up a settings file only", "like ~/.claude/CLAUDE.md, not synced");
-            let b = button("Choose…", Some("flat"));
+            let add = row(
+                &tr("Back up a settings file only"),
+                &tr("like ~/.claude/CLAUDE.md, not synced"),
+            );
+            let b = button(&tr("Choose…"), Some("flat"));
             let ui = ui.clone();
-            b.connect_clicked(move |_| {
-                let home = std::env::var("HOME").unwrap_or_default();
-                let dialog = gtk::FileDialog::builder()
-                    .title("Back up only")
-                    .initial_folder(&gtk::gio::File::for_path(&home))
-                    .build();
-                let ui = ui.clone();
-                dialog.open(Some(&ui.window.clone()), gtk::gio::Cancellable::NONE, move |file| {
-                    if let Some(path) = file.ok().and_then(|f| f.path()) {
-                        ui.act(
-                            &["omacloud", "choose", &path.to_string_lossy(), "backup"],
-                            "Backed up only",
-                        );
-                    }
-                });
-            });
+            b.connect_clicked(move |_| back_up_only(&ui));
             add.add_suffix(&b);
             x.add_row(&add.widget);
         }
@@ -1715,19 +2380,48 @@ fn each_computer(ui: &Rc<Ui>, choices: &Value) -> Group {
     g
 }
 
+/// Asks the desktop's file chooser for a settings file to back up only. A
+/// chooser that can't be shown says why, in the window.
+fn back_up_only(ui: &Rc<Ui>) {
+    let options = omui::PickOptions {
+        folder: std::env::var_os("HOME").map(Into::into),
+        accept_label: Some(tr("Back Up")),
+        ..omui::PickOptions::new(&tr("Back up only"))
+    };
+    let ui2 = ui.clone();
+    ui.picker.open(
+        options,
+        Box::new(move |picked| match picked {
+            Ok(files) => {
+                if let Some(path) = files.first() {
+                    ui2.act(
+                        &["omacloud", "choose", &path.to_string_lossy(), "backup"],
+                        &tr("Backed up only"),
+                    );
+                }
+            }
+            Err(omui::PickError::Cancelled) => {}
+            Err(failed) => ui2.toast(&failed.to_string()),
+        }),
+    );
+}
+
 /// A computer lost or stolen: removed, and cut off as far as the storage allows.
 fn cut_off(ui: &Rc<Ui>, fingerprint: &str, on_dropbox: bool) {
-    let (wait, done) = if on_dropbox {
-        (
-            "Changing your keys, which uploads everything again. Dropbox then asks you in your browser to \
-             allow Omacloud once more.",
-            "Removed. It's cut off once your other computers have switched",
-        )
+    let wait = move || {
+        if on_dropbox {
+            tr(
+                "Changing your keys, which uploads everything again. Dropbox then asks you in your browser to allow \
+                Omacloud once more.",
+            )
+        } else {
+            tr("Changing your keys, which uploads everything again.")
+        }
+    };
+    let done = if on_dropbox {
+        tr("Removed. It's cut off once your other computers have switched")
     } else {
-        (
-            "Changing your keys, which uploads everything again.",
-            "Removed. Now make a new key at your provider, and run omacloud bucket set-key",
-        )
+        tr("Removed. Now make a new key at your provider, and run omacloud bucket set-key")
     };
     let busy = waiting(ui, wait);
     let ui = ui.clone();
@@ -1736,7 +2430,7 @@ fn cut_off(ui: &Rc<Ui>, fingerprint: &str, on_dropbox: bool) {
         Vec::new(),
         move |removed| {
             busy.force_close();
-            ui.toast(&removed.map_or_else(|e| e.shown(), |_| done.to_string()));
+            ui.toast(&removed.map_or_else(|e| e.shown(), |_| done));
             ui.refresh();
         },
     );
@@ -1750,10 +2444,14 @@ fn show_join_code(ui: &Rc<Ui>) {
         Err(e) => ui2.toast(&e.shown()),
         Ok(out) => show_text(
             &ui2,
-            "Join code",
-            "On the new computer, install Omacloud, open it, and paste this under Add this \
-             computer to your account. Then approve it here. Pass the code only to your own computers, \
-             and not through chat or email.",
+            || tr("Join code"),
+            || {
+                tr(
+                    "On the new computer, install Omacloud, open it, and paste this under Add this computer to your \
+                     account. Then approve it here. Pass the code only to your own computers, and not through chat \
+                     or email.",
+                )
+            },
             out.lines()
                 .find(|l| l.starts_with("omacloud-join-"))
                 .unwrap_or_default()
@@ -1764,34 +2462,38 @@ fn show_join_code(ui: &Rc<Ui>) {
 
 /// What the settings switch sends: passwords and keys are named, so nobody
 /// turns it on thinking it's only themes.
-const SETTINGS_SYNCED: &str =
-    "Shell, desktop and apps, Chromium, AI agents with any API keys in their settings, and Wi-Fi passwords";
+fn settings_synced() -> String {
+    tr("Shell, desktop and apps, Chromium, AI agents with any API keys in their settings, and Wi-Fi passwords")
+}
 
 fn settings(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
     let (page, column) = page();
     let st = &s["settings"];
     let on = st["on"].as_bool().unwrap_or(false);
     let g = group(
-        "Omarchy settings",
-        "The shared files in Omarchy's dots manifest (bindings, look and feel, terminals, \
-         shell), AI agents' settings and skills, Chromium's bookmarks and settings, and \
-         saved Wi-Fi networks. Ones about the computer, like monitors, are backed up only; \
-         sign-in files are off. API keys written into settings files sync with them, encrypted.",
+        &tr("Omarchy settings"),
+        &tr(
+            "The shared files in Omarchy's dots manifest (bindings, look and feel, terminals, shell), AI agents' \
+             settings and skills, Chromium's bookmarks and settings, and saved Wi-Fi networks. Ones about the \
+             computer, like monitors, are backed up only; sign-in files are off. API keys written into settings \
+             files sync with them, encrypted.",
+        ),
     );
-    let (switch_row, switch) = omui::switch_row("Sync settings on this device", "", on);
+    let (switch_row, switch) = omui::switch_row(&tr("Sync settings on this device"), "", on);
     {
         let ui = ui.clone();
         switch.connect_active_notify(move |sw| {
             if sw.is_active() {
-                ui.act(&["omacloud", "settings", "on"], "Settings sync is on");
+                ui.act(&["omacloud", "settings", "on"], &tr("Settings sync is on"));
             } else {
-                ui.act(&["omacloud", "settings", "off"], "Settings sync is off");
+                ui.act(&["omacloud", "settings", "off"], &tr("Settings sync is off"));
             }
         });
     }
     g.add(&switch_row.widget);
+    // why it stands down is the CLI's, in its English
     if let Some(why) = st["dormant"].as_str().filter(|_| on) {
-        g.add(&row("Standing down", why).widget);
+        g.add(&row(&tr("Standing down"), why).widget);
     }
     column.append(&g.widget);
 
@@ -1799,9 +2501,11 @@ fn settings(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
     let groups = st["groups"].as_array().unwrap_or(&empty_groups);
     if on && !groups.is_empty() {
         let g = group(
-            "What syncs",
-            "Edits on two computers merge. Chromium's are written in while it's closed; \
-             history, passwords, cookies and open tabs stay on each computer.",
+            &tr("What syncs"),
+            &tr(
+                "Edits on two computers merge. Chromium's are written in while it's closed; history, passwords, \
+                 cookies and open tabs stay on each computer.",
+            ),
         );
         for item in groups {
             g.add(&setting_group(ui, item));
@@ -1814,20 +2518,29 @@ fn settings(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
     if !held.is_empty() {
         let home = std::env::var("HOME").unwrap_or_default();
         let g = group(
-            "Changed on two computers",
-            "These changed here and on another computer in ways that don't merge. \
-             This computer keeps its version until you choose. Keep Each backs up \
-             this computer's version only, and the others' stays synced.",
+            &tr("Changed on two computers"),
+            &tr(
+                "These changed here and on another computer in ways that don't merge. This computer keeps its \
+                 version until you choose. Keep Each backs up this computer's version only, and the others' stays \
+                 synced.",
+            ),
         );
         for p in held {
             let rel = text(p);
             let rw = row(&format!("~/{rel}"), "");
             let path = format!("{home}/{rel}");
-            for (label, keep) in [("Keep Mine", "local"), ("Keep Theirs", "remote"), ("Keep Each", "each")] {
-                let b = button(label, Some("flat"));
+            for (label, keep) in [
+                (tr("Keep Mine"), "local"),
+                (tr("Keep Theirs"), "remote"),
+                (tr("Keep Each"), "each"),
+            ] {
+                let b = button(&label, Some("flat"));
                 let (ui, path) = (ui.clone(), path.clone());
                 b.connect_clicked(move |_| {
-                    ui.act(&["omacloud", "settings", "resolve", &path, "--keep", keep], "Resolved");
+                    ui.act(
+                        &["omacloud", "settings", "resolve", &path, "--keep", keep],
+                        &tr("Resolved"),
+                    );
                 });
                 rw.add_suffix(&b);
             }
@@ -1839,26 +2552,27 @@ fn settings(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
 }
 
 /// What a settings group's state reads as; the same as `omacloud settings`
-/// says. Only Chromium waits for an app to close.
+/// says. Only Chromium waits for an app to close. A state this doesn't know
+/// is shown as the CLI says it.
 fn state_label(group: &str, state: &str) -> String {
     match (group, state) {
-        (_, "synced") => "In sync",
-        (_, "new") => "Not synced yet",
-        ("chromium", "waiting") => "Waiting for Chromium to close",
-        (_, "waiting") => "Waiting to apply",
-        (_, "install") => "Extensions to install",
-        (_, "settled") => "Edits settled",
-        (_, "refused") => "Not applied",
-        (_, "failed") => "Can't write",
-        (_, "conflict") => "Choose below",
-        (_, "unavailable") => "Not available",
-        (_, other) => other,
+        (_, "synced") => tr("In sync"),
+        (_, "new") => tr("Not synced yet"),
+        ("chromium", "waiting") => tr("Waiting for Chromium to close"),
+        (_, "waiting") => tr("Waiting to apply"),
+        (_, "install") => tr("Extensions to install"),
+        (_, "settled") => tr("Edits settled"),
+        (_, "refused") => tr("Not applied"),
+        (_, "failed") => tr("Can't write"),
+        (_, "conflict") => tr("Choose below"),
+        (_, "unavailable") => tr("Not available"),
+        (_, other) => other.to_string(),
     }
-    .to_string()
 }
 
 /// One settings group: its state, extensions to install, and what stays
-/// on this computer. The same as `omacloud settings` lists.
+/// on this computer. The same as `omacloud settings` lists; its title and
+/// detail are the CLI's, in English.
 fn setting_group(ui: &Rc<Ui>, item: &Value) -> gtk::ListBoxRow {
     let state = state_label(
         item["group"].as_str().unwrap_or_default(),
@@ -1878,7 +2592,7 @@ fn setting_group(ui: &Rc<Ui>, item: &Value) -> gtk::ListBoxRow {
     x.add_suffix(&tag);
     for i in install {
         let r = row(&text(&i["name"]), &text(&i["url"]));
-        let b = button("Install", Some("flat"));
+        let b = button(&tr("Install"), Some("flat"));
         let argv: Vec<String> = i["command"].as_array().unwrap_or(&empty).iter().map(text).collect();
         let ui = ui.clone();
         b.connect_clicked(move |_| {
@@ -1896,14 +2610,14 @@ fn setting_group(ui: &Rc<Ui>, item: &Value) -> gtk::ListBoxRow {
             match started {
                 // reaped when it exits, however long the browser stays open
                 Ok(mut child) => _ = std::thread::spawn(move || child.wait()),
-                Err(e) => ui.toast(&format!("running {program}: {e}")),
+                Err(e) => ui.toast(&Failure::local("app-run", format!("{program}: {e}")).shown()),
             }
         });
         r.add_suffix(&b);
         x.add_row(&r.widget);
     }
     for n in not_synced {
-        x.add_row(&row("Not synced", &text(n)).widget);
+        x.add_row(&row(&tr("Not synced"), &text(n)).widget);
     }
     x.widget
 }
@@ -1912,28 +2626,30 @@ fn secrets(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
     let (page, column) = page();
     if s["settings"]["on"].as_bool() != Some(true) {
         let g = group(
-            "Secrets",
-            "ssh and gpg keys and tokens travel with settings sync. Turn it on under Omarchy.",
+            &tr("Secrets"),
+            &tr("ssh and gpg keys and tokens travel with settings sync. Turn it on under Omarchy."),
         );
         column.append(&g.widget);
         return page;
     }
     let g = group(
-        "This device",
-        "Seal ~/.ssh, ~/.gnupg and token files (or what ~/.config/omacloud/secrets lists) \
-         so they travel with your files. No device can open them: only your recovery code.",
+        &tr("This device"),
+        &tr(
+            "Seal ~/.ssh, ~/.gnupg and token files (or what ~/.config/omacloud/secrets lists) so they travel with \
+             your files. No device can open them: only your recovery code.",
+        ),
     );
-    let rw = row("Save this device's secrets", "Replaces what was saved before");
-    let save = button("Save…", Some("suggested-action"));
+    let rw = row(&tr("Save this device's secrets"), &tr("Replaces what was saved before"));
+    let save = button(&tr("Save…"), Some("suggested-action"));
     {
         let ui = ui.clone();
         save.connect_clicked(move |_| {
             let ui2 = ui.clone();
             ui.confirm(
-                "Save secrets?",
-                "They are sealed so that only your recovery code opens them.",
-                &[("save", "Save", Appearance::Suggested)],
-                move |_| ui2.act(&["omacloud", "secrets", "save"], "Secrets saved"),
+                || tr("Save secrets?"),
+                || tr("They are sealed so that only your recovery code opens them."),
+                &[("save", || tr("Save"), Appearance::Suggested)],
+                move |_| ui2.act(&["omacloud", "secrets", "save"], &tr("Secrets saved")),
             );
         });
     }
@@ -1944,17 +2660,17 @@ fn secrets(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
     let empty = Vec::new();
     let saved = s["secrets"].as_array().unwrap_or(&empty);
     let g = group(
-        "Saved",
-        if saved.is_empty() {
-            "No device has saved its secrets yet."
+        &tr("Saved"),
+        &if saved.is_empty() {
+            tr("No device has saved its secrets yet.")
         } else {
-            ""
+            String::new()
         },
     );
     for d in saved {
         let device = text(d);
         let rw = row(&device, "");
-        let restore = button("Restore…", Some("flat"));
+        let restore = button(&tr("Restore…"), Some("flat"));
         let ui = ui.clone();
         restore.connect_clicked(move |_| restore_secrets(&ui, &device));
         rw.add_suffix(&restore);
@@ -1964,23 +2680,38 @@ fn secrets(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
     page
 }
 
-/// A recovery code entry in a boxed list, for a dialog's extra child.
+/// A recovery code entry in a boxed list, for a dialog's extra child: its
+/// title follows a switch of language while the dialog is open.
 fn code_entry() -> (Group, gtk::PasswordEntry) {
-    let (row, entry) = omui::password_row("Recovery code");
+    let (row, entry) = omui::password_row("");
+    row.set_title_translated("Recovery code");
     let list = group("", "");
     list.add(&row.widget);
     (list, entry)
 }
 
+/// What `secrets restore` would do to a file, as a word.
+fn change_word(action: &str) -> String {
+    match action {
+        "replace" => tr("Replace"),
+        "write" => tr("Write"),
+        other => other.to_string(),
+    }
+}
+
 fn restore_secrets(ui: &Rc<Ui>, device: &str) {
     let (list, entry) = code_entry();
-    let dialog = Dialog::new(
-        Some(&format!("Restore {device}'s secrets?")),
-        Some("Enter your recovery code."),
-    );
+    let dialog = Dialog::new(Some(""), Some(""));
+    {
+        let device = device.to_string();
+        dialog.bind(move |dialog| dialog.set_heading(&tr!("Restore {}'s secrets?", device)));
+    }
+    dialog.set_body_translated("Enter your recovery code.");
     dialog.set_extra_child(Some(list.widget.upcast_ref()));
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("next", "Continue");
+    dialog.add_response("cancel", "");
+    dialog.set_response_translated("cancel", "Cancel");
+    dialog.add_response("next", "");
+    dialog.set_response_translated("next", "Continue");
     dialog.set_response_appearance("next", Appearance::Suggested);
     dialog.set_close_response("cancel");
     // Enter after the code goes on, as Continue does
@@ -2001,21 +2732,28 @@ fn restore_secrets(ui: &Rc<Ui>, device: &str) {
                 Err(e) => ui3.toast(&e.shown()),
                 Ok(data) => {
                     let empty = Vec::new();
-                    let changes: Vec<String> = data["changes"]
+                    let changes: Vec<(String, String)> = data["changes"]
                         .as_array()
                         .unwrap_or(&empty)
                         .iter()
-                        .map(|c| format!("{:<8} {}", text(&c["action"]), text(&c["path"])))
+                        .map(|c| (text(&c["action"]), text(&c["path"])))
                         .collect();
                     if changes.is_empty() {
-                        ui3.toast("This computer already has those keys");
+                        ui3.toast(&tr("This computer already has those keys"));
                         return;
                     }
                     let ui4 = ui3.clone();
                     ui3.confirm(
-                        "Write these files?",
-                        &format!("{}\n\nFiles this replaces are backed up first.", changes.join("\n")),
-                        &[("write", "Write", Appearance::Destructive)],
+                        || tr("Write these files?"),
+                        // each change's word too is in the language of the moment
+                        move || {
+                            let lines: Vec<String> = changes
+                                .iter()
+                                .map(|(action, path)| format!("{:<8} {}", change_word(action), path))
+                                .collect();
+                            tr!("{}\n\nFiles this replaces are backed up first.", lines.join("\n"))
+                        },
+                        &[("write", || tr("Write"), Appearance::Destructive)],
                         move |_| {
                             let env = vec![("OMACLOUD_RECOVERY_CODE".to_string(), code.clone())];
                             let ui5 = ui4.clone();
@@ -2025,7 +2763,7 @@ fn restore_secrets(ui: &Rc<Ui>, device: &str) {
                                 move |r| {
                                     ui5.toast(&r.map_or_else(
                                         |e| e.shown(),
-                                        |data| format!("Wrote {} files", data["written"].as_u64().unwrap_or(0)),
+                                        |data| trn!("Wrote {n} files", data["written"].as_u64().unwrap_or(0)),
                                     ));
                                 },
                             );
@@ -2042,17 +2780,19 @@ fn recovery() -> gtk::ScrolledWindow {
     let (page, column) = page();
     column.append(
         &group(
-            "If you lose everything",
-            "If you lose your recovery code and every computer, your files can't be recovered. \
-             Keep a copy of the recovery code with someone you trust, or split it among several \
-             people with `omacloud recovery split`.",
+            &tr("If you lose everything"),
+            &tr(
+                "If you lose your recovery code and every computer, your files can't be recovered. Keep a copy of \
+                 the recovery code with someone you trust, or split it among several people with `omacloud \
+                 recovery split`.",
+            ),
         )
         .widget,
     );
     page
 }
 
-/// Show text to copy.
+/// Whether `bin` is a program on PATH.
 fn on_path(bin: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file()))
 }
@@ -2075,26 +2815,33 @@ fn move_from_icloud(ui: &Rc<Ui>) {
 fn leave_dialog(ui: &Rc<Ui>, data: &Value) {
     let home = std::env::var("HOME").unwrap_or_default();
     let (page, column) = page();
-    let intro = group(
-        "",
-        "Optional. Each app you choose syncs with iCloud a last time; then Omacloud syncs its folder \
-         and the app stops using iCloud on this computer, for good. iCloud keeps its copy as it is: \
-         nothing there is deleted. Do this on each of your computers.",
+    // Everything it says follows a switch of language while it is open.
+    let intro = group("", "");
+    intro.set_description_translated(
+        "Optional. Each app you choose syncs with iCloud a last time; then Omacloud syncs its folder and the app \
+         stops using iCloud on this computer, for good. iCloud keeps its copy as it is: nothing there is deleted. \
+         Do this on each of your computers.",
     );
     column.append(&intro.widget);
-    let apps = group("Apps", "");
-    let dialog = Dialog::new(Some("Move from iCloud"), None);
+    let apps = group("", "");
+    apps.set_title_translated("Apps");
+    let dialog = Dialog::new(Some(""), None);
+    dialog.set_heading_translated("Move from iCloud");
     dialog.set_extra_child(Some(page.upcast_ref()));
     // As tall as what it says, which is all known now; a lower window scrolls it.
     page.set_propagate_natural_height(true);
     dialog.set_content_size(520, -1);
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("leave", "Leave iCloud");
+    dialog.add_response("cancel", "");
+    dialog.set_response_translated("cancel", "Cancel");
+    dialog.add_response("leave", "");
+    dialog.set_response_translated("leave", "Leave iCloud");
     dialog.set_response_appearance("leave", Appearance::Destructive);
     dialog.set_response_enabled("leave", false);
     dialog.set_close_response("cancel");
-    let chosen: Rc<std::cell::RefCell<Vec<String>>> = Rc::default();
-    let (confirm_row, confirm) = omui::entry_row("Type leave to confirm", "");
+    let chosen: Rc<RefCell<Vec<String>>> = Rc::default();
+    // the word typed is `leave` in every language, as the label says
+    let (confirm_row, confirm) = omui::entry_row("", "");
+    confirm_row.set_title_translated("Type leave to confirm");
     let update = {
         // weak: the dialog owns what calls this
         let (chosen, dialog, confirm) = (chosen.clone(), dialog.downgrade(), confirm.clone());
@@ -2111,15 +2858,34 @@ fn leave_dialog(ui: &Rc<Ui>, data: &Value) {
         let shown = folder
             .strip_prefix(&home)
             .map_or_else(|| folder.clone(), |rest| format!("~{rest}"));
-        let subtitle = match state.as_str() {
-            "ready" => format!("{shown} goes to Omacloud"),
-            "left" => "Left iCloud: Omacloud syncs it".to_string(),
-            "not_used" => "Not used on this computer".to_string(),
-            "not_installed" => continue,
-            _ => text(&app["message"]),
+        let ready = state == "ready";
+        if state == "not_installed" {
+            continue;
+        }
+        let (message, word2) = (text(&app["message"]), word.clone());
+        let subtitle = move || match state.as_str() {
+            "ready" if word2 == "reminders" => tr!(
+                "{} goes to Omacloud. Alerts, priorities, flags, list colours, repeats, sections and shared lists \
+                 stay in iCloud only",
+                shown
+            ),
+            "ready" if word2 == "photos" => tr!(
+                "{} goes to Omacloud. Every original is downloaded, then uploaded to your storage; albums become \
+                 lists. An iPhone keeps sending new photos to iCloud",
+                shown
+            ),
+            "ready" => tr!("{} goes to Omacloud", shown),
+            "left" => tr("Left iCloud: Omacloud syncs it"),
+            "not_used" => tr("Not used on this computer"),
+            // what iCloud for Omarchy says, in its English
+            _ => message.clone(),
         };
-        let r = row(&name, &subtitle);
-        if state == "ready" {
+        let r = row(&name, "");
+        {
+            let r = r.clone();
+            dialog.bind(move |_| r.set_subtitle(&subtitle()));
+        }
+        if ready {
             let check = gtk::CheckButton::builder().valign(gtk::Align::Center).build();
             let (chosen, update) = (chosen.clone(), update.clone());
             check.connect_toggled(move |c| {
@@ -2141,7 +2907,11 @@ fn leave_dialog(ui: &Rc<Ui>, data: &Value) {
                 .and_then(|rest| rest.split('/').next())
                 .unwrap_or_default()
                 .to_string();
-            let b = button(&format!("Sync ~/{top}"), Some("flat"));
+            let b = button("", Some("flat"));
+            {
+                let top = top.clone();
+                i18n::bind(&b, move |b| b.set_label(&tr!("Sync ~/{}", top)));
+            }
             let (ui2, dialog2) = (ui.clone(), dialog.downgrade());
             b.connect_clicked(move |_| {
                 let (ui3, dialog3) = (ui2.clone(), dialog2.clone());
@@ -2161,17 +2931,6 @@ fn leave_dialog(ui: &Rc<Ui>, data: &Value) {
             r.widget.set_sensitive(true);
         } else {
             r.widget.set_sensitive(false);
-        }
-        if word_is(app, "reminders") && state == "ready" {
-            r.set_subtitle(&format!(
-                "{subtitle}. Alerts, priorities, flags, list colours, repeats, sections and shared lists stay in iCloud only"
-            ));
-        }
-        if word_is(app, "photos") && state == "ready" {
-            r.set_subtitle(&format!(
-                "{subtitle}. Every original is downloaded, then uploaded to your storage; albums become lists. \
-                 An iPhone keeps sending new photos to iCloud"
-            ));
         }
         apps.add(&r.widget);
     }
@@ -2193,10 +2952,9 @@ fn leave_dialog(ui: &Rc<Ui>, data: &Value) {
             let mut argv = vec!["icloud-session".to_string(), "leave".to_string()];
             argv.extend(chosen.borrow().iter().cloned());
             argv.push("--yes".to_string());
-            let busy = waiting(
-                &ui,
-                "Syncing with iCloud a last time, then handing the folders to Omacloud.",
-            );
+            let busy = waiting(&ui, || {
+                tr("Syncing with iCloud a last time, then handing the folders to Omacloud.")
+            });
             let ui = ui.clone();
             let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
             cli_then(&argv, Vec::new(), move |r| {
@@ -2212,11 +2970,8 @@ fn leave_dialog(ui: &Rc<Ui>, data: &Value) {
     dialog.present(&ui.window);
 }
 
-fn word_is(app: &Value, word: &str) -> bool {
-    app["app"].as_str() == Some(word)
-}
-
-/// What `icloud-session leave` did, in a sentence.
+/// What `icloud-session leave` did, in a sentence. The apps are Apple's
+/// names, as they are; why one didn't leave is iCloud for Omarchy's English.
 fn leave_outcome(d: &Value) -> String {
     let empty = Vec::new();
     let names = |app: &str| {
@@ -2235,23 +2990,27 @@ fn leave_outcome(d: &Value) -> String {
         .iter()
         .map(|l| names(&text(&l["app"])))
         .collect();
-    let mut out = if left.is_empty() {
-        "Nothing left iCloud".to_string()
-    } else {
-        let them = if left.len() == 1 { "it" } else { "them" };
-        format!("{} left iCloud; Omacloud syncs {them} now", left.join(", "))
-    };
-    if d["failed"].is_object() {
-        out.push_str(&format!(
-            ". {} didn't: {}",
-            names(&text(&d["failed"]["app"])),
-            text(&d["failed"]["message"])
-        ));
+    let failed = d["failed"]
+        .is_object()
+        .then(|| (names(&text(&d["failed"]["app"])), text(&d["failed"]["message"])));
+    let apps = left.join(", ");
+    match (left.len(), failed) {
+        (0, None) => tr("Nothing left iCloud"),
+        (0, Some((app, why))) => tr!("Nothing left iCloud. {} didn't: {}", app, why),
+        (n, None) => trn!("{} left iCloud; Omacloud syncs them now", n, apps),
+        (n, Some((app, why))) => trn!(
+            "{0} left iCloud; Omacloud syncs them now. {1} didn't: {2}",
+            n,
+            apps,
+            app,
+            why
+        ),
     }
-    out
 }
 
-fn show_text(ui: &Rc<Ui>, heading: &str, body: &str, content: &str) {
+/// `content` in a dialog that copies it. The heading and the body are asked
+/// for again after a switch of language.
+fn show_text(ui: &Rc<Ui>, heading: impl Fn() -> String + 'static, body: impl Fn() -> String + 'static, content: &str) {
     // selected with the pointer, and no stop for the keyboard: Copy is
     let text = gtk::Label::builder()
         .label(content)
@@ -2269,10 +3028,16 @@ fn show_text(ui: &Rc<Ui>, heading: &str, body: &str, content: &str) {
         .build();
     let frame = gtk::Frame::new(None);
     frame.set_child(Some(&text));
-    let dialog = Dialog::new(Some(heading), Some(body));
+    let dialog = Dialog::new(Some(""), Some(""));
+    dialog.bind(move |dialog| {
+        dialog.set_heading(&heading());
+        dialog.set_body(&body());
+    });
     show_only(&dialog, &frame);
-    dialog.add_response("close", "Close");
-    dialog.add_response("copy", "Copy");
+    dialog.add_response("close", "");
+    dialog.set_response_translated("close", "Close");
+    dialog.add_response("copy", "");
+    dialog.set_response_translated("copy", "Copy");
     dialog.set_response_appearance("copy", Appearance::Suggested);
     dialog.set_close_response("close");
     let (window, content) = (ui.window.clone(), content.to_string());
@@ -2288,6 +3053,111 @@ fn show_text(ui: &Rc<Ui>, heading: &str, body: &str, content: &str) {
 mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::time::{Duration, Instant};
+
+    /// The English catalog, which holds the counted strings' forms, as `main` registers it.
+    fn english() {
+        omui::i18n::register_all(&[("en", include_str!("i18n/en.json"))]);
+    }
+
+    /// The catalogs list every string the window shows, and only those.
+    #[test]
+    fn the_catalogs_match_the_sources() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        omui::i18n::CatalogCheck::new(root.join("src"), root.join("src/i18n")).assert_ok();
+    }
+
+    /// The CLI's failure is the error object on the last line of stderr,
+    /// after any warning, and stdout is empty; its code reaches the pages.
+    #[test]
+    fn a_failure_is_read_from_stderr() {
+        let stderr = b"[2026-11-21T10:00:00Z WARN omacloud] the bucket was slow\n\
+            {\"ok\":false,\"error\":{\"code\":\"not_set_up\",\"kind\":\"setup\",\"message\":\"not set up\",\"hint\":\"run init\"}}\n";
+        let failure = super::envelope(b"", stderr, "omacloud").unwrap_err();
+        assert_eq!(
+            (
+                failure.code.as_str(),
+                failure.kind.as_str(),
+                failure.message.as_str(),
+                failure.hint.as_str()
+            ),
+            ("not_set_up", "setup", "not set up", "run init")
+        );
+    }
+
+    /// A failure whose code has a fixed meaning is said in the window's own
+    /// words (and so in its language); any other is the CLI's English, with
+    /// its hint. Another program's codes are its own business.
+    #[test]
+    fn known_failures_are_said_in_the_windows_words() {
+        let failure = |code: &str| super::Failure {
+            code: code.into(),
+            kind: "setup".into(),
+            omacloud: true,
+            ..super::Failure::said("raw message", "raw hint")
+        };
+        assert_eq!(
+            failure("recovery_code_rejected").shown(),
+            "That recovery code doesn't open this account. Check it and try again."
+        );
+        assert_eq!(failure("something_new").shown(), "raw message. Raw hint");
+        let elsewhere = super::Failure {
+            omacloud: false,
+            ..failure("not_set_up")
+        };
+        assert_eq!(elsewhere.shown(), "raw message. Raw hint");
+        assert_eq!(
+            super::Failure::local("app-silent", "du").shown(),
+            "du failed without saying why."
+        );
+    }
+
+    /// A result on stdout stands, even beside a failure on stderr (a command
+    /// that did its work and fell short of one thing, exit 1).
+    #[test]
+    fn a_result_is_read_from_stdout() {
+        let stdout = b"{\n  \"ok\": true,\n  \"data\": {\"from\": \"pier\"},\n  \"summary\": \"set up\"\n}\n";
+        let stderr =
+            b"{\"ok\":false,\"error\":{\"code\":\"unavailable\",\"kind\":\"unavailable\",\"message\":\"no unit\"}}\n";
+        assert_eq!(
+            super::envelope(stdout, stderr, "omacloud").ok().unwrap()["from"],
+            "pier"
+        );
+        assert_eq!(super::envelope(stdout, b"", "omacloud").ok().unwrap()["from"], "pier");
+    }
+
+    /// An older CLI's error on stdout, and a CLI that crashed with no
+    /// envelope at all, still come back as a failure that says something.
+    #[test]
+    fn an_older_or_crashed_cli_still_fails_readably() {
+        let old = b"{\"ok\": false, \"error\": {\"code\": \"usage\", \"message\": \"bad\"}}";
+        assert_eq!(super::envelope(old, b"", "omacloud").unwrap_err().code, "usage");
+        let crashed = super::envelope(b"", b"thread 'main' panicked\n", "omacloud").unwrap_err();
+        assert_eq!(
+            (crashed.code.as_str(), crashed.message.as_str()),
+            ("", "thread 'main' panicked")
+        );
+        let silent = super::envelope(b"", b"", "omacloud").unwrap_err();
+        assert_eq!(silent.shown(), "omacloud failed without saying why.");
+    }
+
+    /// Sizes and counts are counted strings and the language's numbers.
+    #[test]
+    fn sizes_and_times_are_counted_and_written_as_the_language_writes_them() {
+        english();
+        assert_eq!(super::human(1), "1 byte");
+        assert_eq!(super::human(999), "999 bytes");
+        assert_eq!(super::human(482_133), "482.1 KB");
+        assert_eq!(super::human(3_204_551_000), "3.2 GB");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        assert_eq!(super::synced_when(now), "Synced just now");
+        assert_eq!(super::synced_when(now - 60), "Synced 1 minute ago");
+        assert_eq!(super::synced_when(now - 7200), "Synced 2 hours ago");
+        assert_eq!(super::synced_when(now - 86400), "Synced 1 day ago");
+        assert!(super::synced_when(now - 30 * 86400).starts_with("Synced on "));
+    }
 
     /// `cli_tty` against a stand-in CLI that starts a child holding none of
     /// its stdio (a process it leaves running), checks it has a
@@ -2328,8 +3198,118 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// A command still running when the last window closes: the application
+    /// has nothing else to stay for (here it never had a window), and must
+    /// stay until the command's answer has been handled. The hold is
+    /// omui's, through `in_background`.
+    #[test]
+    fn the_app_stays_until_a_running_command_is_handled() {
+        use omui::gtk::{gio, gio::prelude::*};
+        use std::{cell::Cell, rc::Rc};
+
+        // Its own id, on no bus: nothing of a running Omacloud is reached. The first application of a process is
+        // its default one, which is where omui's hold finds it.
+        let app = gio::Application::new(
+            Some("com.ferdousbhai.Omacloud.HoldTest"),
+            gio::ApplicationFlags::NON_UNIQUE,
+        );
+        let handled = Rc::new(Cell::new(None));
+        let seen = handled.clone();
+        app.connect_activate(move |_| {
+            let seen = seen.clone();
+            super::in_background(
+                || {
+                    std::thread::sleep(Duration::from_millis(300));
+                    Ok("done")
+                },
+                move |answer| seen.set(answer.ok()),
+            );
+        });
+        let start = Instant::now();
+        app.run_with_args(&["omacloud-app"]);
+        assert_eq!(handled.get(), Some("done"), "the application ended under its command");
+        assert!(start.elapsed() >= Duration::from_millis(300));
+    }
+
+    /// README.md's table of shortcuts lists every key the app takes, and so
+    /// does the overlay `?` opens, where keys that do the same share a row.
+    #[test]
+    fn the_readme_and_the_overlay_list_every_shortcut() {
+        let readme = include_str!("../../../README.md");
+        let listed: Vec<String> = super::shortcut_sections()
+            .into_iter()
+            .flat_map(|section| section.keys.into_iter().map(|(key, _)| key))
+            .flat_map(|keys| keys.split(" / ").map(str::to_string).collect::<Vec<_>>())
+            .collect();
+        let keys = super::SHORTCUTS.iter().map(|(_, _, key)| *key).chain(super::OMUI_KEYS);
+        for key in keys {
+            assert!(
+                readme.contains(&format!("| `{key}` |")),
+                "README.md has no row for {key}"
+            );
+            assert!(listed.iter().any(|k| k == key), "the overlay doesn't list {key}");
+        }
+    }
+
+    /// No key is given to two actions, and each is Ctrl with a key: a key alone would be taken from a text field.
+    #[test]
+    fn each_shortcut_is_ctrl_and_a_key_of_its_own() {
+        let keys: Vec<&str> = super::SHORTCUTS
+            .iter()
+            .flat_map(|(_, keys, _)| keys.iter().copied())
+            .chain(["<Control>q", "<Control>w"])
+            .collect();
+        for (i, key) in keys.iter().enumerate() {
+            assert!(key.starts_with("<Control>"), "{key}");
+            assert!(!keys[..i].contains(key), "{key} is given twice");
+        }
+    }
+
+    /// Omarchy's one name, `omacloud`, is the command, the `.desktop` file,
+    /// its icon, the class Hyprland matches the window by, and what both
+    /// packages install; the window's own program is out of `bin`, and the
+    /// old `omacloud-app` command still opens it.
+    #[test]
+    fn one_name_everywhere() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let desktop = std::fs::read_to_string(root.join(format!("contrib/{}.desktop", super::NAME))).unwrap();
+        for line in [
+            "Exec=omacloud open",
+            "Icon=omacloud",
+            "StartupWMClass=omacloud",
+            "TryExec=omacloud",
+        ] {
+            assert!(desktop.lines().any(|l| l == line), "the desktop entry has no {line}");
+        }
+        assert!(root.join("contrib/omacloud.svg").is_file());
+        for pkgbuild in ["pkgbuild/PKGBUILD", "packaging/omarchy-pkgs/omacloud/PKGBUILD"] {
+            let text = std::fs::read_to_string(root.join(pkgbuild)).unwrap();
+            for installed in [
+                "/usr/share/applications/omacloud.desktop",
+                "/usr/share/icons/hicolor/scalable/apps/omacloud.svg",
+                "/usr/lib/omacloud/omacloud-app",
+                "/usr/bin/omacloud-app",
+            ] {
+                assert!(text.contains(installed), "{pkgbuild} doesn't install {installed}");
+            }
+            // The old command is the window's own program, which opens the window as `omacloud open` does, so key
+            // bindings and notification actions that still run it keep working.
+            assert!(
+                text.contains(r#"ln -s ../lib/omacloud/omacloud-app "$pkgdir/usr/bin/omacloud-app""#),
+                "{pkgbuild} doesn't link the old omacloud-app command to the window"
+            );
+            assert!(
+                !text.contains("com.ferdousbhai.Omacloud"),
+                "{pkgbuild} still uses the old name"
+            );
+        }
+        let widget = std::fs::read_to_string(root.join("contrib/omarchy-plugin/Widget.qml")).unwrap();
+        assert!(widget.contains("run(\"omacloud open\")"));
+    }
+
     #[test]
     fn leave_outcome_names_what_left_and_what_failed() {
+        english();
         let d = serde_json::json!({"left": [{"app": "notes"}, {"app": "drive"}], "skipped": [], "failed": null});
         assert_eq!(
             super::leave_outcome(&d),

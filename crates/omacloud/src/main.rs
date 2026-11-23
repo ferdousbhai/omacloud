@@ -1,7 +1,8 @@
 //! `omacloud`: set up a synced folder, sync it once, or keep it synced.
 //!
 //! Output follows the shared product contract (`output.rs`): text on a
-//! terminal, a JSON envelope when piped; errors and exit codes in `fail.rs`.
+//! terminal, a JSON envelope when piped; errors, on stderr with exit 1, in
+//! `fail.rs`.
 //! Commands that print a secret print it only to a terminal. `watch`, which
 //! systemd runs, keeps its own exit codes (see [`UPGRADED`]).
 
@@ -41,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::fail::CliError;
-use crate::output::{Mode, OutputFlags, Response};
+use crate::output::{Kind, Mode, OutputFlags, Response};
 
 /// Appends a line to a command's text output.
 macro_rules! say {
@@ -69,19 +70,18 @@ Output: text on a terminal, a JSON envelope {\"ok\":true,\"data\",\"summary\"} w
 piped. --json forces the envelope, --styled text, --quiet prints only the data,
 --ids-only one id per line (devices, versions, deleted, folders, packages,
 secrets),
---count the number of results; ids-only > count > quiet > json > styled. A
-failure is {\"ok\":false,\"error\":{\"code\",\"message\",\"hint\"?}} on stdout, or
-error:/hint: lines on stderr in text mode.
+--count the number of results; ids-only > count > quiet > json > styled. Only
+a result goes to stdout; a failure goes to stderr (below).
 
 Commands that print a secret (init when it creates an account, join-code,
 invite, export, recovery split and combine) print only to a
 terminal, in text mode, with stdin a terminal too (combine excepted: its shares
 may come on stdin).
 
-Exit codes: 0 ok; 1 other failure; 2 invalid usage or request (a destructive
-command without --yes where nobody can be asked, a secret asked for where no
-terminal shows it, ambiguous, already set up); 3 not set up, not approved, or a
-key or code refused; 4 not found; 5 storage or network out of reach. `watch` (the daemon) exits 2 when this computer was
+Exit codes: 0 ok, 1 failed. A failure goes to stderr, as error:/hint: lines
+or, piped or with --json, as {\"ok\":false,\"error\":{\"code\",\"kind\",\"message\",\"hint\"}}
+on one line; its kind is usage, setup, not_found, unavailable or error.
+`watch` (the daemon) exits 2 when this computer was
 removed, the account can't be verified or its storage is gone (sync stops until
 someone looks), and 75 after an upgrade, a change to settings sync or a new bucket key (the unit
 restarts it into that).";
@@ -105,6 +105,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Open the Omacloud window, on one of its pages [default: overview].
+    /// The window is a program of its own (/usr/lib/omacloud/omacloud-app,
+    /// or OMACLOUD_APP), so this command line never needs a display
+    Open {
+        #[arg(value_enum)]
+        page: Option<Page>,
+    },
     /// Set up this device: create the account in your Dropbox or bucket
     /// (`--provider ...`), or join one with the code from `omacloud join-code` or `omacloud
     /// invite` in OMACLOUD_JOIN_CODE (joining is then approved on a computer
@@ -337,6 +344,60 @@ struct BucketArgs {
     /// the records change in place
     #[arg(long)]
     coordination_bucket: Option<String>,
+}
+
+/// The pages `omacloud open` can open the window on, as the window names them.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+enum Page {
+    Overview,
+    Devices,
+    Settings,
+    Secrets,
+    Recovery,
+}
+
+/// Where the window's program is: OMACLOUD_APP, else `lib/omacloud/omacloud-app` beside this program's
+/// `bin` (the package's /usr/lib/omacloud), else `omacloud-app` in this program's own directory (a
+/// development build's `target/debug`). The window is kept out of `bin` so that the one command is
+/// `omacloud`, and out of this program so that it never links GTK and runs where there is no display.
+fn window_program() -> Option<PathBuf> {
+    if let Some(app) = std::env::var_os("OMACLOUD_APP").filter(|a| !a.is_empty()) {
+        return Some(app.into());
+    }
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    [dir.join("../lib/omacloud/omacloud-app"), dir.join("omacloud-app")]
+        .into_iter()
+        .find(|p| p.is_file())
+}
+
+/// `omacloud open`: becomes the window's program, which is handed this
+/// program (to run as its CLI) and the config given here. Returns only when
+/// that fails.
+fn open_window(config: Option<PathBuf>, page: Option<Page>) -> Out {
+    use std::os::unix::process::CommandExt;
+    let Some(app) = window_program() else {
+        return Err(
+            fail::not_found("the Omacloud window isn't installed (no /usr/lib/omacloud/omacloud-app)")
+                .hint("reinstall the omacloud package")
+                .into(),
+        );
+    };
+    let mut cmd = std::process::Command::new(&app);
+    if let Some(page) = page.and_then(|p| clap::ValueEnum::to_possible_value(&p)) {
+        cmd.arg(page.get_name());
+    }
+    // the window runs this CLI, and so the same build of it, unless told otherwise
+    if std::env::var_os("OMACLOUD_BIN").is_none()
+        && let Ok(me) = std::env::current_exe()
+    {
+        cmd.env("OMACLOUD_BIN", me);
+    }
+    if let Some(config) = config {
+        cmd.env("OMACLOUD_CONFIG", absolute(&config)?);
+    }
+    let error = cmd.exec();
+    Err(fail::unavailable(format!("opening {}: {error}", app.display())).into())
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1313,7 +1374,7 @@ impl Config {
 fn already_set_up(paths: &Paths) -> CliError {
     CliError::new(
         "already_set_up",
-        output::EXIT_USAGE,
+        Kind::Usage,
         format!("{} exists; this device is already set up", paths.config.display()),
     )
     .hint("give another --config to set up a second account here")
@@ -2124,7 +2185,7 @@ fn confirm(yes: bool, what: &str, question: &str) -> Result<()> {
     if matches!(line.trim(), "y" | "Y" | "yes") {
         Ok(())
     } else {
-        Err(CliError::new("cancelled", output::EXIT_ERROR, "cancelled").into())
+        Err(CliError::new("cancelled", Kind::Error, "cancelled").into())
     }
 }
 
@@ -2160,6 +2221,9 @@ fn skill(action: Option<SkillCmd>) -> Out {
 fn run(cli: Cli) -> Out {
     if let Cmd::Skill { action } = cli.cmd {
         return skill(action);
+    }
+    if let Cmd::Open { page } = cli.cmd {
+        return open_window(cli.config, page);
     }
     let paths = Paths::new(cli.config)?;
     match cli.cmd {
@@ -2283,7 +2347,7 @@ fn run(cli: Cli) -> Out {
             Ok(Response::new(data, summary))
         }
         Cmd::Watch { .. } => unreachable!("handled before the other commands"),
-        Cmd::Skill { .. } => unreachable!("handled before loading the config"),
+        Cmd::Skill { .. } | Cmd::Open { .. } => unreachable!("handled before loading the config"),
         Cmd::Status => status(&paths),
         Cmd::DeviceKey => {
             let key = public_hex(&load_or_create_key(&paths.device_key())?);
@@ -2457,13 +2521,11 @@ fn run(cli: Cli) -> Out {
             });
             if dest.exists() && !yes {
                 if !output::interactive(mode()) {
-                    return Err(CliError::new(
-                        "exists",
-                        output::EXIT_USAGE,
-                        format!("{} already exists", dest.display()),
-                    )
-                    .hint("pass --yes to replace it, or --to another path")
-                    .into());
+                    return Err(
+                        CliError::new("exists", Kind::Usage, format!("{} already exists", dest.display()))
+                            .hint("pass --yes to replace it, or --to another path")
+                            .into(),
+                    );
                 }
                 confirm(false, "replacing it", &format!("replace {}?", dest.display()))?;
             }
@@ -2517,7 +2579,7 @@ fn run(cli: Cli) -> Out {
             if anchor_of(&coord)?.is_some() {
                 return Err(CliError::new(
                     "exists",
-                    output::EXIT_USAGE,
+                    Kind::Usage,
                     "this bucket already holds an account",
                 )
                 .hint("each person gets a bucket and key of their own; another computer of theirs uses `omacloud join-code`")
@@ -2627,11 +2689,19 @@ fn run(cli: Cli) -> Out {
                 "daemon_started": started,
             });
             let response = Response::new(data, format!("set up from {from}")).human(out.trim_end());
-            // everything but the daemon is done: say so, and exit 5
+            // everything but the daemon is done: the result, and that as a
+            // failure (exit 1, `unavailable` on stderr)
             Ok(if started {
                 response
             } else {
-                response.exit(output::EXIT_UNAVAILABLE)
+                response.fell_short(
+                    CliError::new(
+                        "unavailable",
+                        Kind::Unavailable,
+                        "the systemd user unit omacloud did not start",
+                    )
+                    .hint("run `omacloud watch` to keep in sync, or install the package for its unit"),
+                )
             })
         }
         Cmd::Rotate { yes } => {
@@ -2866,7 +2936,7 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
                 .hint("run `omacloud devices list`")
                 .into()),
             _ => Err(
-                CliError::new("ambiguous", output::EXIT_USAGE, format!("{fp} matches several devices"))
+                CliError::new("ambiguous", Kind::Usage, format!("{fp} matches several devices"))
                     .hint("give more of the fingerprint")
                     .into(),
             ),
@@ -3146,14 +3216,10 @@ fn packages(paths: &Paths, action: PackagesCmd) -> Out {
                     out.clear();
                 }
                 let status = pacman.args(missing.iter().map(|s| s.as_str())).status().map_err(|e| {
-                    CliError::new(
-                        "unavailable",
-                        output::EXIT_UNAVAILABLE,
-                        format!("running sudo pacman: {e}"),
-                    )
+                    CliError::new("unavailable", Kind::Unavailable, format!("running sudo pacman: {e}"))
                 })?;
                 if !status.success() {
-                    return Err(CliError::new("command_failed", output::EXIT_ERROR, "pacman did not finish").into());
+                    return Err(CliError::new("command_failed", Kind::Error, "pacman did not finish").into());
                 }
                 data["installed"] = json!(true);
                 say!(out, "installed {} packages from the repositories", missing.len());
@@ -4528,7 +4594,7 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Out {
                 if !here_only && config.repo.options.get("refresh_token") == Some(&refresh_token) {
                     return Err(CliError::new(
                         "same_key",
-                        output::EXIT_USAGE,
+                        Kind::Usage,
                         "Dropbox returned the token in use, which would cut nobody off",
                     )
                     .hint("allow Omacloud again for a new one")
@@ -4541,13 +4607,11 @@ fn bucket(paths: &Paths, action: BucketCmd) -> Out {
                 })?;
                 // the same key again would cut nobody off
                 if !here_only && config.repo.options.get("access_key_id") == Some(&access_key_id) {
-                    return Err(CliError::new(
-                        "same_key",
-                        output::EXIT_USAGE,
-                        format!("{access_key_id} is the key in use"),
-                    )
-                    .hint("make a new key at your provider first")
-                    .into());
+                    return Err(
+                        CliError::new("same_key", Kind::Usage, format!("{access_key_id} is the key in use"))
+                            .hint("make a new key at your provider first")
+                            .into(),
+                    );
                 }
                 Credentials::S3 {
                     access_key_id,

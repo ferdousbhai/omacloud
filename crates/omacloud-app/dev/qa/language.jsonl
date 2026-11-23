@@ -1,0 +1,54 @@
+# A switch of language while the window is open: every page is drawn again in the new language, from the status it
+# was drawn from, with the keyboard where it was; the tabs, the title bar's buttons, counted text and the overlay of
+# shortcuts follow; a failure the CLI reports in English is shown in the window's words; and back again, a dialog open
+# through the switch with the window. dev/qa/da.json is a few of the strings in Danish, which omui's `language` command
+# registers.
+# dev/qa.sh target/debug/omacloud-app dev/qa/language.jsonl [directory for the shots]
+# state: account
+
+{"do":"wait","role":"list-item","name":"Documents","visible":true}
+{"do":"focus","role":"switch","name":"Documents"}
+{"do":"language","code":"da","catalog":"dev/qa/da.json"}
+{"do":"wait","role":"toggle-button","name":"Oversigt","visible":true}
+{"do":"wait","role":"toggle-button","name":"Enheder","visible":true}
+{"do":"wait","role":"button","name":"Synkroniser nu","visible":true}
+{"do":"wait","role":"label","name":"Opdateret","visible":true}
+{"do":"wait","role":"label","name":"Synkroniseret for 2 minutter siden · i harbour-files på https://fsn1.your-objectstorage.com","visible":true}
+{"do":"wait","focus":{"role":"switch","name":"Documents"}}
+{"do":"shot","path":"overview-da.png"}
+
+# The overlay of shortcuts is asked for its sections as it opens, so it is in the language of the moment.
+{"do":"key","keys":"question"}
+{"do":"wait","dialog":"Tastaturgenveje"}
+{"do":"wait","role":"group","name":"Sider","visible":true}
+{"do":"shot","path":"shortcuts-da.png"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+
+# A recovery code the account refuses: the CLI says so in English, with its code, and the window in Danish.
+{"do":"click","role":"toggle-button","name":"Nøgler"}
+{"do":"click","role":"button","name":"Restore…","in":{"role":"list-item","name":"pier-desktop"}}
+{"do":"type","text":"WRONG-CODE","role":"text-box","name":"Recovery code"}
+{"do":"click","role":"button","name":"Fortsæt"}
+{"do":"wait","toasts":["Den gendannelseskode åbner ikke kontoen. Tjek den, og prøv igen."]}
+
+# And back to English, everything with it.
+{"do":"language","code":"en"}
+{"do":"wait","role":"toggle-button","name":"Overview","visible":true}
+{"do":"wait","role":"toggle-button","name":"Keys","checked":true}
+{"do":"wait","role":"button","name":"Sync now","visible":true}
+
+# A dialog open through a switch follows it too: its heading, body and buttons, a name in the heading among them.
+{"do":"click","role":"button","name":"Restore…","in":{"role":"list-item","name":"pier-desktop"}}
+{"do":"wait","dialog":"Restore pier-desktop's secrets?"}
+{"do":"language","code":"da"}
+{"do":"wait","dialog":"Gendan pier-desktops hemmeligheder?"}
+{"do":"wait","role":"label","name":"Indtast din gendannelseskode.","visible":true}
+{"do":"wait","role":"button","name":"Annuller","visible":true}
+{"do":"wait","role":"button","name":"Fortsæt","visible":true}
+{"do":"shot","path":"restore-dialog-da.png"}
+{"do":"language","code":"en"}
+{"do":"wait","role":"button","name":"Continue","visible":true}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"quit"}

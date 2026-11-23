@@ -170,20 +170,20 @@ fn json(out: &Output) -> Value {
     serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}{}", stdout(out), stderr(out)))
 }
 
-/// A machine-mode failure: one JSON document on stdout, nothing on stderr,
-/// with `code` and `exit`. Returns the error object.
-fn machine_error(out: &Output, want_code: &str, exit: i32) -> Value {
-    assert_eq!(code(out), exit, "{}{}", stdout(out), stderr(out));
-    assert_eq!(stderr(out), "", "stderr in a machine mode");
-    let v = json(out);
+/// A machine-mode failure: exit 1, nothing on stdout, and the error object
+/// as the one line on stderr, with `code` and `kind`. Returns the error
+/// object.
+fn machine_error(out: &Output, want_code: &str, want_kind: &str) -> Value {
+    assert_eq!(code(out), 1, "{}{}", stdout(out), stderr(out));
+    assert_eq!(stdout(out), "", "stdout holds only a result");
+    let err = stderr(out);
+    assert_eq!(err.lines().count(), 1, "one line on stderr: {err}");
+    let v: Value = serde_json::from_str(&err).unwrap_or_else(|e| panic!("{e}: {err}"));
     assert_eq!(v["ok"], false);
     assert_eq!(v["error"]["code"], want_code, "{v}");
+    assert_eq!(v["error"]["kind"], want_kind, "{v}");
     assert!(v["error"]["message"].as_str().is_some_and(|m| !m.is_empty()));
-    assert!(
-        stdout(out).trim_start().starts_with("{\n  \"ok\": false,"),
-        "ok first: {}",
-        stdout(out)
-    );
+    assert!(err.starts_with("{\"ok\":false,"), "ok first: {err}");
     v["error"].clone()
 }
 
@@ -280,14 +280,14 @@ fn sync_reports_what_it_did() {
 #[test]
 fn a_machine_error_is_one_json_document_and_text_goes_to_stderr() {
     let h = Home::new();
-    let e = machine_error(&h.run("a", &["sync"]), "not_set_up", 3);
+    let e = machine_error(&h.run("a", &["sync"]), "not_set_up", "setup");
     assert!(e["hint"].as_str().unwrap().contains("omacloud init"));
     // the same in every machine mode
-    machine_error(&h.run("a", &["devices", "--quiet"]), "not_set_up", 3);
-    machine_error(&h.run("a", &["devices", "--ids-only"]), "not_set_up", 3);
+    machine_error(&h.run("a", &["devices", "--quiet"]), "not_set_up", "setup");
+    machine_error(&h.run("a", &["devices", "--ids-only"]), "not_set_up", "setup");
 
     let text = h.run("a", &["sync", "--styled"]);
-    assert_eq!(code(&text), 3);
+    assert_eq!(code(&text), 1);
     assert_eq!(stdout(&text), "");
     let err = stderr(&text);
     assert!(err.starts_with("error: this computer isn't set up"), "{err}");
@@ -297,15 +297,15 @@ fn a_machine_error_is_one_json_document_and_text_goes_to_stderr() {
 #[test]
 fn usage_errors_follow_the_contract() {
     let h = Home::new();
-    let e = machine_error(&h.run("a", &["no-such-command"]), "usage", 2);
+    let e = machine_error(&h.run("a", &["no-such-command"]), "usage", "usage");
     assert_eq!(e["hint"], "run `omacloud --help`");
-    machine_error(&h.run("a", &["folders", "add", "--json"]), "usage", 2);
-    machine_error(&h.run("a", &["restore", "x", "--at", "many"]), "usage", 2);
+    machine_error(&h.run("a", &["folders", "add", "--json"]), "usage", "usage");
+    machine_error(&h.run("a", &["restore", "x", "--at", "many"]), "usage", "usage");
     // a folder of home is a name directly in it, as `folders add` takes
     let (repo, coord) = (h.path("repo"), h.path("coord"));
     let mut bad = h.cmd("a", &["init", "--folders", "Documents,.ssh"]);
     _ = bad.arg("--repo").arg(&repo).arg("--coordinator").arg(&coord);
-    machine_error(&bad.output().unwrap(), "usage", 2);
+    machine_error(&bad.output().unwrap(), "usage", "usage");
     // none at all (the app's setup with every folder off) is no error
     let mut none = h.cmd("a", &["init", "--folders", ""]);
     _ = none.arg("--repo").arg(&repo).arg("--coordinator").arg(&coord);
@@ -313,7 +313,7 @@ fn usage_errors_follow_the_contract() {
     assert_eq!(c, 0, "{out}");
     // text mode: clap's own words on stderr
     let text = h.run("a", &["no-such-command", "--styled"]);
-    assert_eq!(code(&text), 2);
+    assert_eq!(code(&text), 1);
     assert_eq!(stdout(&text), "");
     assert!(stderr(&text).starts_with("error: "), "{}", stderr(&text));
     // --help is no error
@@ -329,7 +329,7 @@ fn commands_that_print_a_secret_refuse_anywhere_but_a_terminal() {
     // is made, no config, folder, device key, repository or coordination
     let args = h.init_args("a");
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    machine_error(&h.run("a", &args), "terminal_required", 2);
+    machine_error(&h.run("a", &args), "terminal_required", "usage");
     for left in ["a.toml", "a.d", "A", "repo", "coord"] {
         assert!(!h.path(left).exists(), "{left} made by a refused init");
     }
@@ -348,7 +348,7 @@ fn commands_that_print_a_secret_refuse_anywhere_but_a_terminal() {
             .env("OMACLOUD_RECOVERY_CODE", &recovery)
             .output()
             .unwrap();
-        let e = machine_error(&out, "terminal_required", 2);
+        let e = machine_error(&out, "terminal_required", "usage");
         assert!(e["hint"].as_str().unwrap().contains("terminal"), "{args:?}");
         assert!(!stdout(&out).contains(&recovery), "{args:?}");
         // --styled into a pipe is no terminal either
@@ -359,13 +359,13 @@ fn commands_that_print_a_secret_refuse_anywhere_but_a_terminal() {
             .env("OMACLOUD_RECOVERY_CODE", &recovery)
             .output()
             .unwrap();
-        assert_eq!(code(&out), 2, "{args:?}");
+        assert_eq!(code(&out), 1, "{args:?}");
         assert_eq!(stdout(&out), "", "{args:?}");
         assert!(stderr(&out).starts_with("error: this prints "), "{}", stderr(&out));
     }
     // stdout on a terminal but stdin not: no person's terminal either
     let (out, err, exit) = tty(h.cmd("a", &["export"]), false, false);
-    assert_eq!(exit, 2, "{out}{err}");
+    assert_eq!(exit, 1, "{out}{err}");
     assert!(!out.contains("password:"), "{out}");
     assert!(err.starts_with("error: this prints "), "{err}");
     // on a terminal, export shows the password
@@ -373,28 +373,28 @@ fn commands_that_print_a_secret_refuse_anywhere_but_a_terminal() {
     assert_eq!(exit, 0, "{out}");
     assert!(out.contains("\npassword:   "), "{out}");
     let (out, exit) = on_tty(h.cmd("a", &["export", "--json"]));
-    assert_eq!(exit, 2, "{out}");
+    assert_eq!(exit, 1, "{out}");
     assert!(!out.contains("password:"), "{out}");
 }
 
 #[test]
-fn exit_codes_say_what_went_wrong() {
+fn failures_exit_1_and_their_kind_says_what_went_wrong() {
     let h = Home::new();
     let recovery = h.create();
-    // 2: already set up; a destructive command nobody confirmed
+    // usage: already set up; a destructive command nobody confirmed
     machine_error(
         &h.run("a", &h.init_args("a").iter().map(String::as_str).collect::<Vec<_>>()),
         "already_set_up",
-        2,
+        "usage",
     );
-    let e = machine_error(&h.run("a", &["rotate"]), "confirmation_required", 2);
+    let e = machine_error(&h.run("a", &["rotate"]), "confirmation_required", "usage");
     assert_eq!(e["hint"], "pass --yes");
-    // 3: a wrong recovery code
+    // setup: a wrong recovery code
     let args = h.init_args("b");
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let wrong = "aaaa-aaaa-aaaa-aaaa-aaaa-aaaa-aaaa";
     let out = h.cmd("b", &args).env("OMACLOUD_RECOVERY_CODE", wrong).output().unwrap();
-    machine_error(&out, "recovery_code_rejected", 3);
+    machine_error(&out, "recovery_code_rejected", "setup");
     // the right one joins, and says so as JSON (no secret in it)
     let out = h
         .cmd("b", &args)
@@ -406,15 +406,15 @@ fn exit_codes_say_what_went_wrong() {
     assert_eq!(v["data"]["result"], "joined_with_recovery_code");
     assert_eq!(v["data"]["approved"], true);
     assert!(!stdout(&out).contains(&recovery));
-    // 4: no such device, no such file
-    let e = machine_error(&h.run("a", &["devices", "approve", "ffff"]), "not_found", 4);
+    // not_found: no such device, no such file
+    let e = machine_error(&h.run("a", &["devices", "approve", "ffff"]), "not_found", "not_found");
     assert!(e["hint"].as_str().unwrap().contains("devices list"));
     machine_error(
         &h.run("a", &["versions", &h.path("A/nothing.txt").to_string_lossy()]),
         "not_found",
-        4,
+        "not_found",
     );
-    machine_error(&h.run("a", &["secrets"]), "settings_off", 3);
+    machine_error(&h.run("a", &["secrets"]), "settings_off", "setup");
 }
 
 #[test]
@@ -446,7 +446,11 @@ fn watch_exits_2_once_this_computer_is_removed() {
     let recovery = h.create();
     let fp = join_b(&h, &recovery);
     // nobody confirmed it: nothing revoked
-    let e = machine_error(&h.run("a", &["devices", "revoke", &fp]), "confirmation_required", 2);
+    let e = machine_error(
+        &h.run("a", &["devices", "revoke", &fp]),
+        "confirmation_required",
+        "usage",
+    );
     assert_eq!(e["hint"], "pass --yes");
     let out = h.run("a", &["devices", "revoke", &fp, "--yes"]);
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
@@ -586,8 +590,12 @@ fn versions_find_a_folder_another_computer_added() {
     // a subfolder, by the account's name for its folder, with sizes to choose by
     let list = json(&h.run("b", &["folders", "exclude", "Bilder/trip"]));
     assert_eq!(list["data"]["excluded"][0]["path"], "Pictures/trip", "{list}");
-    machine_error(&h.run("b", &["folders", "exclude", "Pictures"]), "usage", 2);
-    machine_error(&h.run("b", &["folders", "exclude", "Pictures/../secret"]), "usage", 2);
+    machine_error(&h.run("b", &["folders", "exclude", "Pictures"]), "usage", "usage");
+    machine_error(
+        &h.run("b", &["folders", "exclude", "Pictures/../secret"]),
+        "usage",
+        "usage",
+    );
     let list = json(&h.run("b", &["folders", "include", "Pictures/trip"]));
     assert_eq!(list["data"]["excluded"], serde_json::json!([]), "{list}");
     let list = json(&h.run("b", &["folders", "list"]));
@@ -606,7 +614,7 @@ fn versions_find_a_folder_another_computer_added() {
     // groups of settings
     let s = json(&h.run("b", &["settings", "skip", "agents"]));
     assert_eq!(s["data"]["skipped"], serde_json::json!(["agents"]), "{s}");
-    machine_error(&h.run("b", &["settings", "skip", "nonsense"]), "usage", 2);
+    machine_error(&h.run("b", &["settings", "skip", "nonsense"]), "usage", "usage");
     let s = json(&h.run("b", &["settings", "unskip", "agents"]));
     assert_eq!(s["data"]["skipped"], serde_json::json!([]), "{s}");
 
@@ -622,15 +630,15 @@ fn versions_find_a_folder_another_computer_added() {
     let monitors = h.path("home/.config/hypr/monitors.lua");
     let monitors = monitors.to_string_lossy();
     // about the computer: backed up or off, never synced
-    machine_error(&h.run("b", &["choose", &monitors, "sync"]), "usage", 2);
+    machine_error(&h.run("b", &["choose", &monitors, "sync"]), "usage", "usage");
     assert_eq!(
         json(&h.run("b", &["choose", &monitors, "off"]))["data"]["choice"],
         "off"
     );
-    machine_error(&h.run("b", &["choose", "/etc/hosts", "off"]), "usage", 2);
-    machine_error(&h.run("b", &["choose", "agents", "backup"]), "usage", 2);
-    machine_error(&h.run("b", &["choose", "Documents", "backup"]), "usage", 2);
-    machine_error(&h.run("b", &["choose", &claude]), "usage", 2);
+    machine_error(&h.run("b", &["choose", "/etc/hosts", "off"]), "usage", "usage");
+    machine_error(&h.run("b", &["choose", "agents", "backup"]), "usage", "usage");
+    machine_error(&h.run("b", &["choose", "Documents", "backup"]), "usage", "usage");
+    machine_error(&h.run("b", &["choose", &claude]), "usage", "usage");
     // a link would be neither synced nor backed up from here
     let real = h.path("home/dots-bashrc");
     std::fs::write(&real, "x\n").unwrap();
@@ -639,7 +647,7 @@ fn versions_find_a_folder_another_computer_added() {
     machine_error(
         &h.run("b", &["choose", &bashrc.to_string_lossy(), "backup"]),
         "usage",
-        2,
+        "usage",
     );
     std::fs::remove_file(&bashrc).unwrap();
     // a file in a folder, by this computer's ignore rules
@@ -744,7 +752,7 @@ fn a_computer_set_up_on_storage_thats_gone_is_told_and_set_up_again() {
     let v = json(&h.run("a", &["status"]));
     assert_eq!(v["data"]["set_up"], false, "{v}");
     assert_eq!(v["data"]["storage_gone"], "the earlier Dropbox app");
-    let e = machine_error(&h.run("a", &["sync"]), "storage_gone", 3);
+    let e = machine_error(&h.run("a", &["sync"]), "storage_gone", "setup");
     assert!(e["hint"].as_str().unwrap().contains("omacloud init"), "{e}");
     // the daemon stops for good rather than restarting into it
     assert_eq!(code(&h.run("a", &["watch"])), 2);
@@ -770,7 +778,7 @@ fn a_computer_on_the_old_network_is_told_too() {
     .unwrap();
     let v = json(&h.run("a", &["status"]));
     assert_eq!(v["data"]["storage_gone"], "the Omacloud network", "{v}");
-    machine_error(&h.run("a", &["sync"]), "storage_gone", 3);
+    machine_error(&h.run("a", &["sync"]), "storage_gone", "setup");
     assert_eq!(code(&h.run("a", &["watch"])), 2);
 
     // what the network left goes when it's set up again, and nothing else
@@ -788,10 +796,14 @@ fn a_computer_on_the_old_network_is_told_too() {
 #[test]
 fn init_says_where_the_files_should_live() {
     let h = Home::new();
-    let e = machine_error(&h.run("a", &["init"]), "usage", 2);
+    let e = machine_error(&h.run("a", &["init"]), "usage", "usage");
     assert!(e["hint"].as_str().unwrap().contains("--provider"), "{e}");
     // a provider's shorthand needs what it's made from
-    machine_error(&h.run("a", &["init", "--provider", "r2", "--bucket", "b"]), "usage", 2);
+    machine_error(
+        &h.run("a", &["init", "--provider", "r2", "--bucket", "b"]),
+        "usage",
+        "usage",
+    );
     assert!(!h.path("a.toml").exists());
 }
 
@@ -804,7 +816,7 @@ fn a_damaged_join_code_is_refused_and_an_invite_needs_a_terminal() {
             .output()
             .unwrap(),
         "join_code_rejected",
-        3,
+        "setup",
     );
     assert!(e["hint"].as_str().unwrap().contains("join-code"), "{e}");
     machine_error(
@@ -823,7 +835,7 @@ fn a_damaged_join_code_is_refused_and_an_invite_needs_a_terminal() {
             ],
         ),
         "terminal_required",
-        2,
+        "usage",
     );
 }
 
@@ -860,7 +872,7 @@ fn restore_over_an_existing_file_needs_yes() {
         "--to",
         to_arg.as_str(),
     ];
-    let e = machine_error(&h.run("a", &args), "exists", 2);
+    let e = machine_error(&h.run("a", &args), "exists", "usage");
     assert!(e["hint"].as_str().unwrap().contains("--yes"), "{e}");
     assert_eq!(std::fs::read_to_string(&to).unwrap(), "mine");
     let mut yes = args.to_vec();
@@ -868,4 +880,79 @@ fn restore_over_an_existing_file_needs_yes() {
     let v = json(&h.run("a", &yes));
     assert_eq!(v["ok"], true, "{v}");
     assert_eq!(std::fs::read_to_string(&to).unwrap(), "one");
+}
+
+/// `omacloud open` becomes the window's program (here a script that says
+/// what it was given), on the page asked for, with this CLI and the config
+/// handed on; the launcher entry and the bar run it.
+#[test]
+fn open_starts_the_window_with_this_cli_and_config() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = Home::new();
+    let app = h.path("omacloud-app");
+    let said = h.path("said");
+    std::fs::write(
+        &app,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" \"$OMACLOUD_BIN\" \"$OMACLOUD_CONFIG\" > '{}'\n",
+            said.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = h
+        .cmd("a", &["open", "devices"])
+        .env("OMACLOUD_APP", &app)
+        .env_remove("OMACLOUD_BIN")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let said = std::fs::read_to_string(&said).unwrap();
+    let lines: Vec<&str> = said.lines().collect();
+    assert_eq!(lines[0], "devices");
+    assert_eq!(
+        std::path::Path::new(lines[1]),
+        std::path::Path::new(env!("CARGO_BIN_EXE_omacloud"))
+    );
+    assert_eq!(std::path::Path::new(lines[2]), h.path("a.toml"));
+
+    // a page the window doesn't have is a usage error, and no window opens
+    let out = h
+        .cmd("a", &["open", "nowhere"])
+        .env("OMACLOUD_APP", &app)
+        .output()
+        .unwrap();
+    machine_error(&out, "usage", "usage");
+
+    // no window installed: said, not crashed
+    let out = h
+        .cmd("a", &["open"])
+        .env("OMACLOUD_APP", h.path("missing"))
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 1);
+}
+
+/// The command line never links GTK, so `--help`, `--version` and every
+/// command run where there is no display; the window is a program of its own.
+#[test]
+fn the_cli_links_no_gtk_and_needs_no_display() {
+    let binary = std::fs::read(env!("CARGO_BIN_EXE_omacloud")).unwrap();
+    for library in [&b"libgtk-4.so"[..], b"libgdk", b"libwayland-client.so"] {
+        assert!(
+            !binary.windows(library.len()).any(|w| w == library),
+            "{}",
+            String::from_utf8_lossy(library)
+        );
+    }
+    for args in [&["--help"][..], &["--version"], &["open", "--help"]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_omacloud"))
+            .args(args)
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("DISPLAY")
+            .output()
+            .unwrap();
+        assert_eq!(code(&out), 0, "{args:?}: {}", stderr(&out));
+        assert!(!stdout(&out).is_empty());
+    }
 }

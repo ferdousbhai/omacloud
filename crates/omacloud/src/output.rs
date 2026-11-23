@@ -5,10 +5,13 @@
 //! precedence: ids-only > count > quiet > json > styled > (terminal ? text :
 //! envelope).
 //!
-//! Envelope: `{"ok":true,"data":…,"summary":"…","meta":{…}}`; on failure
-//! `{"ok":false,"error":{"code","message","hint"?}}` on stdout (text mode:
-//! `error:`/`hint:` lines on stderr). `ok` is always the first key. The
-//! process exit code carries the number (the `EXIT_*` constants).
+//! Envelope: `{"ok":true,"data":…,"summary":"…","meta":{…}}` on stdout. A
+//! failure goes to stderr, so that stdout only ever holds a result: the
+//! object `{"ok":false,"error":{"code","kind","message","hint"?}}` on one line
+//! in the machine modes, `error:`/`hint:` lines in text mode. `ok` is always
+//! the first key. The exit code is Omarchy's: 0 done, 1 anything failed; what
+//! failed is the error's `code`, and its broad class its `kind` ([`Kind`]),
+//! both stable strings a script branches on.
 //!
 //! Vendored from icloud-for-omarchy's `session/src/output.rs` (the generic
 //! parts), which mirrors cloud-mail's; keep them alike.
@@ -20,18 +23,39 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 
 pub const EXIT_OK: u8 = 0;
-/// Any other failure.
+/// Any failure: the error's `code` and `kind` say which.
 pub const EXIT_ERROR: u8 = 1;
-/// Invalid usage or request: a bad argument, a destructive command without
-/// `--yes` when nobody can be asked, an ambiguous name, something already
-/// there.
-pub const EXIT_USAGE: u8 = 2;
-/// Not set up, not joined or approved, or a key, code or share refused.
-pub const EXIT_SETUP: u8 = 3;
-/// What was asked for doesn't exist: a device, a version, a bundle.
-pub const EXIT_NOT_FOUND: u8 = 4;
-/// A service or tool is out of reach: the storage, the network, systemd.
-pub const EXIT_UNAVAILABLE: u8 = 5;
+
+/// A failure's broad class, the error object's `kind`. These were once exit
+/// codes 1 to 5; Omarchy's commands exit 1 for every failure, so the class
+/// travels in the JSON instead, for a script that acts on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// Anything else.
+    Error,
+    /// Invalid usage or request: a bad argument, a destructive command
+    /// without `--yes` when nobody can be asked, an ambiguous name,
+    /// something already there.
+    Usage,
+    /// Not set up, not joined or approved, or a key, code or share refused.
+    Setup,
+    /// What was asked for doesn't exist: a device, a version, a bundle.
+    NotFound,
+    /// A service or tool is out of reach: the storage, the network, systemd.
+    Unavailable,
+}
+
+impl Kind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Kind::Error => "error",
+            Kind::Usage => "usage",
+            Kind::Setup => "setup",
+            Kind::NotFound => "not_found",
+            Kind::Unavailable => "unavailable",
+        }
+    }
+}
 
 /// How a result is rendered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,7 +229,7 @@ pub fn usage_hint(bin: &str) -> String {
 }
 
 /// Parses the process arguments. `--help`/`--version` print and give
-/// `Err(EXIT_OK)`; a usage error gives `Err(EXIT_USAGE)` after the contract
+/// `Err(EXIT_OK)`; a usage error gives `Err(EXIT_ERROR)` after the contract
 /// error object with a ``run `<bin> --help` `` hint (machine modes) or
 /// `clap`'s own message (text mode).
 pub fn parse<P: clap::Parser>() -> Result<P, u8> {
@@ -217,10 +241,10 @@ pub fn parse<P: clap::Parser>() -> Result<P, u8> {
         let mode = argv_mode();
         if !mode.is_machine() {
             let _ = e.print();
-            return EXIT_USAGE;
+            return EXIT_ERROR;
         }
         let bin = P::command().get_name().to_string();
-        CliError::new("usage", EXIT_USAGE, usage_message(&e))
+        CliError::new("usage", Kind::Usage, usage_message(&e))
             .hint(usage_hint(&bin))
             .report(mode)
     })
@@ -236,7 +260,7 @@ pub struct Response {
     human: String,
     ids: Option<Vec<String>>,
     count: Option<usize>,
-    exit: u8,
+    short: Option<CliError>,
 }
 
 /// `{"ok":true,"data","summary","meta"?}`, in this key order.
@@ -281,10 +305,11 @@ impl Response {
         self
     }
 
-    /// A non-zero exit code alongside the data, for a command that produced
-    /// its result but didn't get everything done.
-    pub fn exit(mut self, code: u8) -> Self {
-        self.exit = code;
+    /// What a command that produced its result didn't get done: the result
+    /// still goes to stdout, this goes to stderr as any failure does, and
+    /// the command exits 1.
+    pub fn fell_short(mut self, failure: CliError) -> Self {
+        self.short = Some(failure);
         self
     }
 
@@ -355,15 +380,18 @@ impl Response {
         (text, None)
     }
 
-    /// Writes the result to stdout in `mode` and returns the exit code (0
-    /// unless set with [`Response::exit`]).
+    /// Writes the result to stdout in `mode` and returns the exit code: 0,
+    /// or 1 after what it [fell short](Response::fell_short) of.
     pub fn print(&self, mode: Mode) -> u8 {
         let (text, note) = self.render(mode);
         if let Some(note) = note {
             eprintln!("{note}");
         }
         write_line(&text);
-        self.exit
+        match &self.short {
+            Some(failure) => failure.report(mode),
+            None => EXIT_OK,
+        }
     }
 }
 
@@ -374,17 +402,18 @@ struct ErrorEnvelope<'a> {
     error: ErrorBody<'a>,
 }
 
-/// `{"code","message","hint"?}`, in this key order.
+/// `{"code","kind","message","hint"?}`, in this key order.
 #[derive(Serialize)]
 struct ErrorBody<'a> {
     code: &'a str,
+    kind: &'a str,
     message: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     hint: Option<&'a str>,
 }
 
-/// A failure, rendered according to the [`Mode`]: the contract error object
-/// on stdout for a machine, `error:`/`hint:` on stderr for a person. Put the
+/// A failure, rendered according to the [`Mode`] on stderr: the contract
+/// error object for a machine, `error:`/`hint:` lines for a person. Put the
 /// remediation in the hint, not the message. It is a `std::error::Error`, so
 /// it travels inside an `anyhow::Error` until the command returns.
 #[derive(Debug, Clone)]
@@ -392,16 +421,16 @@ pub struct CliError {
     pub code: String,
     pub message: String,
     pub hint: Option<String>,
-    pub exit: u8,
+    pub kind: Kind,
 }
 
 impl CliError {
-    pub fn new(code: &str, exit: u8, message: impl Into<String>) -> Self {
+    pub fn new(code: &str, kind: Kind, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
             hint: None,
-            exit,
+            kind,
         }
     }
 
@@ -415,6 +444,7 @@ impl CliError {
             ok: false,
             error: ErrorBody {
                 code: &self.code,
+                kind: self.kind.as_str(),
                 message: &self.message,
                 hint: self.hint.as_deref(),
             },
@@ -430,15 +460,21 @@ impl CliError {
         terminal_safe(&msg)
     }
 
-    /// Prints the error (machine: stdout; human: stderr) and returns the exit
-    /// code.
+    /// Prints the error on stderr and returns the exit code, 1. For a
+    /// machine it is the error object on one line, the last on stderr, after
+    /// any warning logged before it: a reader takes the last line.
     pub fn report(&self, mode: Mode) -> u8 {
         if mode.is_machine() {
-            write_line(&pretty(&self.envelope()));
+            eprintln!("{}", self.json());
         } else {
             eprintln!("{}", self.text());
         }
-        self.exit
+        EXIT_ERROR
+    }
+
+    /// The error object, on one line.
+    fn json(&self) -> String {
+        compact(&self.envelope())
     }
 }
 
@@ -457,7 +493,6 @@ pub fn pretty<T: Serialize + ?Sized>(v: &T) -> String {
 }
 
 /// [`pretty`], on one line.
-#[cfg(test)]
 pub fn compact<T: Serialize + ?Sized>(v: &T) -> String {
     json_safe(&serde_json::to_string(v).unwrap_or_default())
 }
@@ -554,28 +589,28 @@ mod tests {
 
     #[test]
     fn error_is_ok_error_code_message_hint_in_order() {
-        let e = CliError::new("not_found", 4, "no such device").hint("list the devices");
+        let e = CliError::new("no_device", Kind::NotFound, "no such device").hint("list the devices");
         assert_eq!(
-            compact(&e.envelope()),
-            r#"{"ok":false,"error":{"code":"not_found","message":"no such device","hint":"list the devices"}}"#
+            e.json(),
+            r#"{"ok":false,"error":{"code":"no_device","kind":"not_found","message":"no such device","hint":"list the devices"}}"#
         );
-        let e = CliError::new("usage", 2, "bad");
+        let e = CliError::new("usage", Kind::Usage, "bad");
         assert_eq!(
-            compact(&e.envelope()),
-            r#"{"ok":false,"error":{"code":"usage","message":"bad"}}"#
+            e.json(),
+            r#"{"ok":false,"error":{"code":"usage","kind":"usage","message":"bad"}}"#
         );
         assert_eq!(e.text(), "error: bad");
-        let e = CliError::new("x", 1, "a\u{1b}[2Jb").hint("do \u{9b}this");
+        let e = CliError::new("x", Kind::Error, "a\u{1b}[2Jb").hint("do \u{9b}this");
         assert_eq!(e.text(), "error: a?[2Jb\nhint: do ?this");
     }
 
     #[test]
     fn a_cli_error_survives_anyhow_and_its_context() {
         use anyhow::Context;
-        let r: anyhow::Result<()> = Err(CliError::new("not_found", 4, "gone").into());
+        let r: anyhow::Result<()> = Err(CliError::new("not_found", Kind::NotFound, "gone").into());
         let e = r.context("while looking").unwrap_err();
         let found = e.chain().find_map(|c| c.downcast_ref::<CliError>()).unwrap();
-        assert_eq!((found.code.as_str(), found.exit), ("not_found", 4));
+        assert_eq!((found.code.as_str(), found.kind), ("not_found", Kind::NotFound));
     }
 
     #[test]
@@ -612,11 +647,15 @@ mod tests {
     }
 
     #[test]
-    fn exit_rides_along_with_the_data() {
-        assert_eq!(Response::new(json!([]), "").exit, 0);
-        let r = Response::new(json!([{ "id": "a", "error": "x" }]), "1 failed").exit(1);
-        assert_eq!(r.exit, 1);
+    fn falling_short_keeps_the_data_and_exits_1() {
+        assert!(Response::new(json!([]), "").short.is_none());
+        let r = Response::new(json!([{ "id": "a", "error": "x" }]), "1 failed").fell_short(CliError::new(
+            "unavailable",
+            Kind::Unavailable,
+            "systemd is out of reach",
+        ));
         assert!(r.render(Mode::Json).0.contains("\"ok\": true"));
+        assert_eq!(r.short.map(|e| e.kind), Some(Kind::Unavailable));
     }
 
     #[test]

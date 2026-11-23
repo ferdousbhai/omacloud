@@ -1,0 +1,12 @@
+{
+  "tooltip": "Omacloud: %1",
+  "daemon.not running": "not running",
+  "daemon.up to date": "up to date",
+  "daemon.syncing": "syncing",
+  "daemon.paused on battery": "paused on battery",
+  "daemon.waiting to be approved on another computer": "waiting to be approved on another computer",
+  "daemon.couldn't sync, trying again": "couldn't sync, trying again",
+  "daemon.your storage refused this computer's key": "your storage refused this computer's key",
+  "daemon.stopped: open Omacloud to see why": "stopped: open Omacloud to see why",
+  "daemon.a setting changed on two computers: choose one": "a setting changed on two computers: choose one"
+}

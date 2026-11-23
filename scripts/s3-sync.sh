@@ -187,7 +187,8 @@ if [ -n "${S3_KEY2:-}" ]; then
   if [ -n "$keys" ]; then
     # the old key goes at the provider: the removed computer has only that
     echo "$S3_KEY2" >"$keys"
-    b_says=$("$OMACLOUD" --config "$work/b.toml" sync --json || true)
+    # a failure is the error object on stderr's last line; stdout holds only a result
+    b_says=$("$OMACLOUD" --config "$work/b.toml" sync --json 2>&1 >/dev/null | tail -n 1 || true)
     echo "$b_says" | grep -q '"key_refused"' || { echo "$b_says"; echo "the old key still works"; exit 1; }
   fi
   echo "after the key change" >"$work/A/docs/rekeyed.txt"

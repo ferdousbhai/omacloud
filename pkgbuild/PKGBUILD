@@ -56,13 +56,20 @@ check() {
 package() {
   cd "$srcdir/$pkgname"
   install -Dm755 "${CARGO_TARGET_DIR:-target}/release/omacloud" "$pkgdir/usr/bin/omacloud"
-  install -Dm755 "${CARGO_TARGET_DIR:-target}/release/omacloud-app" "$pkgdir/usr/bin/omacloud-app"
-  install -Dm644 contrib/com.ferdousbhai.Omacloud.desktop \
-    "$pkgdir/usr/share/applications/com.ferdousbhai.Omacloud.desktop"
+  # The window is a program of its own, out of PATH: `omacloud open` (the
+  # desktop entry's Exec) runs it, so the one command is omacloud. The old
+  # omacloud-app command, which notifications and launchers may still run,
+  # opens it too.
+  install -Dm755 "${CARGO_TARGET_DIR:-target}/release/omacloud-app" "$pkgdir/usr/lib/omacloud/omacloud-app"
+  ln -s ../lib/omacloud/omacloud-app "$pkgdir/usr/bin/omacloud-app"
+  # Omarchy's one name: the entry, its icon and the window's Wayland app id
+  install -Dm644 contrib/omacloud.desktop "$pkgdir/usr/share/applications/omacloud.desktop"
+  install -Dm644 contrib/omacloud.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/omacloud.svg"
   install -Dm644 contrib/omacloud.service "$pkgdir/usr/lib/systemd/user/omacloud.service"
   # the cloud in Omarchy's bar; `omacloud bar on` links it among the shell's plugins
   install -Dm644 contrib/omarchy-plugin/manifest.json contrib/omarchy-plugin/Widget.qml \
     -t "$pkgdir/usr/share/omacloud/omarchy-plugin"
+  install -Dm644 contrib/omarchy-plugin/i18n/*.json -t "$pkgdir/usr/share/omacloud/omarchy-plugin/i18n"
   # Enabled for every user by the package, so an update through pacman
   # turns it on too; the unit's condition skips users without omacloud.
   install -dm755 "$pkgdir/usr/lib/systemd/user/default.target.wants"

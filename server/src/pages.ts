@@ -149,7 +149,7 @@ it. Omacloud runs on Omarchy (Arch Linux, x86_64 and aarch64), as a GTK app and 
 
 ## Command line
 
-- [omacloud CLI](${repo}/blob/master/README.md): \`omacloud --help\` lists every command. Piped, every command prints a JSON envelope ({ok, data, summary} or {ok: false, error: {code, message, hint}}; \`--quiet\` for the data alone) and exits 0, 1, 2 usage, 3 not set up, 4 not found or 5 unreachable; \`omacloud status\` reports state. Commands that print a secret (\`join-code\`, \`invite\`, \`drive-code\`, \`drive-link\`, \`export\`, \`recovery split\` and \`combine\`, a new account's recovery code) print only to a terminal. Secrets come from environment variables (OMACLOUD_RECOVERY_CODE, OMACLOUD_JOIN_CODE, OMACLOUD_SECRET_ACCESS_KEY) or a prompt, never arguments
+- [omacloud CLI](${repo}/blob/master/README.md): \`omacloud --help\` lists every command. Piped, every command prints a JSON envelope ({ok, data, summary}; \`--quiet\` for the data alone) on stdout and exits 0; a failure exits 1 with {ok: false, error: {code, kind, message, hint}} on one line of stderr, kind being usage, setup, not_found, unavailable or error; \`omacloud status\` reports state. Commands that print a secret (\`join-code\`, \`invite\`, \`drive-code\`, \`drive-link\`, \`export\`, \`recovery split\` and \`combine\`, a new account's recovery code) print only to a terminal. Secrets come from environment variables (OMACLOUD_RECOVERY_CODE, OMACLOUD_JOIN_CODE, OMACLOUD_SECRET_ACCESS_KEY) or a prompt, never arguments
 
 ## Site
 

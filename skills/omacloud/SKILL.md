@@ -32,11 +32,12 @@ omacloud settings status
 
 Piped (as in agent tools), every command prints a JSON envelope
 `{"ok":true,"data":...,"summary":"..."}`; `--quiet` prints only `data`,
-`--ids-only` ids, `--count` a number, `--styled` text. Failures are
-`{"ok":false,"error":{"code","message","hint"?}}` on stdout: follow the hint.
-Exit codes: 1 other failure, 2 usage (incl. a missing `--yes` or a secret
-command off a terminal), 3 not set up/approved or a refused key/code, 4 not
-found, 5 storage or network out of reach. Inspection may contact the
+`--ids-only` ids, `--count` a number, `--styled` text. A failure exits 1 and
+goes to stderr, stdout staying empty, as one line
+`{"ok":false,"error":{"code","kind","message","hint"?}}`: follow the hint.
+`kind` is `usage` (incl. a missing `--yes` or a secret command off a
+terminal), `setup` (not set up/approved or a refused key/code), `not_found`,
+`unavailable` (storage or network out of reach) or `error`. Inspection may contact the
 repository; report errors and offline state instead of implying everything is
 current. Consult `omacloud <command> --help`.
 

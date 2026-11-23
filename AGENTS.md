@@ -10,14 +10,14 @@ docs/design.md; build, test and release: CONTRIBUTING.md.
 | path | what |
 |---|---|
 | `crates/omacloud-core` | sync engine (`sync.rs`), settings sync (`settings.rs`, `agents.rs`, `merged.rs`, `chromium/`, `wifi.rs`), signed heads (`head.rs`), the on-demand view of a head (`browse.rs`), device chain (`devices.rs`, `account.rs`), repository keys and rotation (`epoch.rs`), coordination (`Coordinator`, and `DirCoordinator` for development and tests, in `head.rs`; `BucketCoordinator` in `bucket.rs`), the bucket's key (`bucket_key.rs`), secrets bundle (`secrets.rs`), Shamir split (`shamir.rs`). Integration tests in `tests/` |
-| `crates/omacloud` | the `omacloud` CLI and `watch` daemon (`main.rs`: every subcommand; `dropbox.rs`: allowing Omacloud in Dropbox; `mount.rs`: the read-only FUSE view `mount` serves; `output.rs`: the shared output contract, vendored from icloud-for-omarchy; `fail.rs`: error codes and exit codes; `agent_skill.rs`: installs `skills/omacloud` for coding agents; `alerts.rs`, `bar.rs`, `power.rs`; `uploads.rs`: the daemon taking in what a browser uploaded). CLI tests in `tests/cli.rs` |
-| `crates/omacloud-app` | GTK4 app; its look, icons, dialogs, rows and tabs are [omui](https://github.com/ferdousbhai/omui)'s, a git dependency pinned by revision (no libadwaita: the two cannot share a process). `dev/preview.sh` runs it in a nested Hyprland on `dev/fake-omacloud`'s made-up account, and `dev/qa.sh` drives a build with feature `qa` through `dev/qa/*.jsonl` on that account (in `bin/check`). It shells out to the CLI with `--json` and reads the envelope's `data` (`status` above all) or `error.code`, so keep that output stable; `init` and `join-code` it runs on a pseudo-terminal of its own |
+| `crates/omacloud` | the `omacloud` CLI and `watch` daemon (`main.rs`: every subcommand; `dropbox.rs`: allowing Omacloud in Dropbox; `mount.rs`: the read-only FUSE view `mount` serves; `output.rs`: the shared output contract, vendored from icloud-for-omarchy; `fail.rs`: error codes and kinds; `agent_skill.rs`: installs `skills/omacloud` for coding agents; `alerts.rs`, `bar.rs`, `power.rs`; `uploads.rs`: the daemon taking in what a browser uploaded). CLI tests in `tests/cli.rs` |
+| `crates/omacloud-app` | GTK4 app; its look, icons, dialogs, rows and tabs are [omui](https://github.com/ferdousbhai/omui)'s, a git dependency pinned by revision (no libadwaita: the two cannot share a process). `dev/preview.sh` runs it in a nested Hyprland on `dev/fake-omacloud`'s made-up account, and `dev/qa.sh` drives a build with feature `qa` through `dev/qa/*.jsonl` on that account (in `bin/check`). It shells out to the CLI with `--json` and reads the envelope's `data` (`status` above all) from stdout or `error.code` from stderr's last line, so keep that output stable; `init` and `join-code` it runs on a pseudo-terminal of its own. Every string it shows goes through omui's `tr`/`trn` and is listed in `src/i18n/en.json` (a test checks); the CLI's failures are shown in the window's words by `code` (`Failure::known`), else in the CLI's English. `omacloud open [page]` execs it, installed as `/usr/lib/omacloud/omacloud-app`: the one name, `omacloud`, is the command, the desktop entry, the icon and the window's Wayland app id; the GApplication id stays `com.ferdousbhai.Omacloud` |
 | `crates/omacloud-web`, `web/` | Omacloud Drive in a browser: the page (`web/`) fetches from the person's own storage (`s3.js` with presigned URLs, `dropbox.js` through Dropbox's API) and hands the bytes to `omacloud-web`, compiled to WebAssembly, to decrypt, to open a drive link (`link.rs`) and to sign and seal an upload (`upload.rs`); that crate never does I/O and must build for `wasm32-unknown-unknown`, so no rustic_core there. What a browser uploads waits in an inbox a computer's daemon takes in (`crates/omacloud-core/src/inbox.rs`). `scripts/web-files.sh` runs it all on a throwaway account. See web/README.md |
 | `vendor/rustic_core`, `vendor/rustic_backend`, `vendor/opendal-service-dropbox` | patched rustic_core 0.13 (pack padding, `splice_tree`), rustic_backend (S3 and Dropbox) and OpenDAL's Dropbox service (create-only writes, refresh without an app secret), wired in through `[patch.crates-io]`; see their `OMACLOUD.md` |
 | `server/` | Cloudflare Worker (TypeScript, `cf` CLI): omacloud.computer's public pages (home, privacy, terms, `/llms.txt`, `/install.sh`) and Omacloud Drive at `/drive/`, the page in `web/` served as static assets under a strict policy (`server/build-drive.sh` builds it into `server/public/drive`, which isn't committed). No account depends on it. See server/README.md |
-| `scripts/` | end to end checks (`s3-sync.sh`: an account in a bucket, on `fake-s3.py`; `s3-choices.sh`: daemons following changing files and choices; `restic-compat.sh`: upstream restic; `dropbox-sync.sh`: a real Dropbox, which needs someone at a browser, so not in `bin/check`), release scripts, and `tests/*.py` for installer and release tooling |
+| `scripts/` | end to end checks (`s3-sync.sh`: an account in a bucket, on `fake-s3.py`; `s3-choices.sh`: daemons following changing files and choices; `restic-compat.sh`: upstream restic; `bar-widget.sh`: the bar widget following the daemon's line; `dropbox-sync.sh`: a real Dropbox, which needs someone at a browser, so not in `bin/check`), release scripts, and `tests/*.py` for installer and release tooling |
 | `pkgbuild/`, `packaging/omarchy-pkgs/` | Arch PKGBUILD and the Omarchy recipe: change them together |
-| `contrib/` | systemd user unit, desktop entry, and the Omarchy bar widget (`omarchy-plugin/`, which watches the line the daemon writes through `crates/omacloud/src/bar.rs`) |
+| `contrib/` | systemd user unit, desktop entry and icon (`omacloud.desktop`, `omacloud.svg`), and the Omarchy bar widget (`omarchy-plugin/`, which watches the line the daemon writes through `crates/omacloud/src/bar.rs`; its words are in `omarchy-plugin/i18n/en.json`, the daemon's lines among them, keyed `daemon.<line>`) |
 
 ## Commands
 
@@ -32,10 +32,11 @@ cd server && npm ci && npm run check     # Worker types + unit tests (node --tes
 
 The app crate needs `libgtk-4-dev` (Arch: `gtk4`);
 `cargo build -p omacloud` builds the CLI alone. Packaging checks:
-`python3 scripts/tests/<name>.py` (all run by `bin/check`; GitHub CI runs only for a release).
+`python3 scripts/tests/<name>.py` (all run by `bin/check`, which GitHub CI runs on every push, on Arch).
 `scripts/s3-sync.sh [path/to/omacloud]` (in `bin/check`) runs accounts through a
 stand-in S3; with `S3_*` set it proves a real provider. `scripts/restic-compat.sh` needs restic
-(or a docker wrapper); see CONTRIBUTING.md.
+(or a docker wrapper; `NO_RESTIC=1 bin/check` leaves it out), and `scripts/bar-widget.sh` quickshell and
+qmllint; see CONTRIBUTING.md.
 
 ## Conventions
 
@@ -43,9 +44,11 @@ stand-in S3; with `S3_*` set it proves a real provider. `scripts/restic-compat.s
   new dependencies without need.
 - Comments and docs are plain, short prose saying why; match it.
 - Every command returns a `Response` (data, summary, text, ids/count) or
-  fails with a `CliError` (`fail.rs`: code, exit 1-5, remediation in the
-  hint); piped output is the JSON envelope, so scripts parsing text pass
-  `--styled`. Commands that print a secret (a recovery code, join code,
+  fails with a `CliError` (`fail.rs`: code, kind, remediation in the hint).
+  Exit codes are Omarchy's, 0 done and 1 failed; stdout holds only a result,
+  and a failure goes to stderr (the error object on one line when piped), so
+  the app and scripts read errors there. Piped output is the JSON envelope,
+  so scripts parsing text pass `--styled`. Commands that print a secret (a recovery code, join code,
   shares, an invite, a drive code or link, export's password) check `output::to_terminal` (stdin and
   stdout a terminal; `combine` stdout only) first and refuse otherwise;
   tests and scripts run them under a pty (`script`), the app on its own.

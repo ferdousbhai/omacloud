@@ -12,6 +12,29 @@
 - In the app, Enter after the recovery code goes on to restoring a computer's secrets.
 - In the app, Enter after the last four characters of a new recovery code closes it, as the button does.
 - The keyboard stays on the button or switch you used when the app's page updates after it.
+- The app has keyboard shortcuts: Ctrl+Q and Ctrl+W, Ctrl+1 to Ctrl+5 for its pages, Ctrl+R to
+  sync now, and a key for each page's main action. The README lists them.
+- Closing the app's window while it is still doing something (setting up, removing a computer)
+  no longer cuts that short: the app stays, without a window, until it is done.
+- `omacloud` exits 0 when it did what was asked and 1 when anything failed, as Omarchy's
+  commands do; it used 1 to 5. A failure now goes to stderr, so stdout only ever holds a
+  result: piped or with `--json` it is `{"ok":false,"error":{…}}` on one line, whose new
+  `kind` (`usage`, `setup`, `not_found`, `unavailable`, `error`) is the class the exit code
+  gave. `code` is unchanged. `omacloud watch` keeps its exit codes for systemd.
+- The app's launcher entry has Omacloud's own cloud as its icon.
+- The bar widget shows a daemon that has just started at once, where it could take half a
+  minute, and no longer wakes every half minute to look.
+- The app speaks the language picked in Omarchy (Setup > Region > Language) and follows a
+  switch while it is open; for now it ships in English only. Sizes, counts and dates are
+  written as the language writes them. What the command line says stays English; the app
+  shows its well-known failures in its own words. The bar widget's words are translatable too.
+- `?` or F1 in the app shows every keyboard shortcut.
+- One name: `omacloud open [page]` opens the app, and the launcher entry, its icon and the
+  window's class are all `omacloud` (they were `com.ferdousbhai.Omacloud`). The window's own
+  program moved to `/usr/lib/omacloud/omacloud-app`; the `omacloud-app` command still opens
+  it. A Hyprland window rule that matched the old class needs `class:^(omacloud)$` now.
+- The app's Back Up a Settings File Only asks through the desktop's file chooser, and says so
+  in the window when the chooser can't be shown.
 
 ## 0.0.32 (2026-11-19)
 

@@ -173,7 +173,8 @@ wait "$changing"
 oc c sync >/dev/null
 rm -f "$saved"
 oc a bucket status | grep -q 'the old Dropbox token is revoked' || { oc a bucket status; echo "the old token wasn't revoked"; exit 1; }
-says=$("$OMACLOUD" --config "$work/b-stolen.toml" sync --json || true)
+# a failure is the error object on stderr's last line; stdout holds only a result
+says=$("$OMACLOUD" --config "$work/b-stolen.toml" sync --json 2>&1 >/dev/null | tail -n 1 || true)
 echo "$says" | grep -q '"key_refused"' || { echo "$says" | cut -c1-300; echo "the old token still works"; exit 1; }
 echo "after the key change" >"$work/A/docs/rekeyed.txt"
 oc a sync >/dev/null

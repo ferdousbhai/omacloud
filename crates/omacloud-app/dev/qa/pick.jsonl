@@ -1,0 +1,23 @@
+# Back Up a Settings File Only asks the file chooser (answered in the portal's place by omui's `picker` command): the
+# file chosen is backed up only, and joins the list; one closed unanswered does nothing; and a chooser that can't be
+# shown or that stops says why, in the window's words.
+# dev/qa.sh target/debug/omacloud-app dev/qa/pick.jsonl [directory for the shots]
+# state: account
+
+{"do":"wait","role":"list-item","name":"Documents","visible":true}
+{"do":"click","role":"toggle-button","name":"Devices"}
+{"do":"picker","fail":"cancel"}
+{"do":"click","role":"button","name":"Choose…"}
+{"do":"wait","toasts":[],"focus":{"role":"button","name":"Choose…"}}
+{"do":"picker","files":["/qa/starship.toml"]}
+{"do":"click","role":"button","name":"Choose…"}
+{"do":"wait","toasts":["Backed up only"]}
+{"do":"wait","role":"list-item","name":"/qa/starship.toml","visible":true}
+{"do":"picker","fail":"unavailable"}
+{"do":"click","role":"button","name":"Choose…"}
+{"do":"wait","toasts":["No file chooser is available on this desktop."]}
+{"do":"shot","path":"picker-unavailable.png"}
+{"do":"picker","fail":"lost"}
+{"do":"click","role":"button","name":"Choose…"}
+{"do":"wait","toasts":["The desktop's file chooser stopped while it was open."]}
+{"do":"quit"}

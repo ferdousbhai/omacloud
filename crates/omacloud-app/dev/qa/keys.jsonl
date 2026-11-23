@@ -1,0 +1,67 @@
+# The keyboard's shortcuts on a set-up account: Ctrl and a digit for each page, Ctrl and a letter for a page's main
+# actions and for Sync now, and `?` or F1 for the list of them all. A dialog holds them back while it is open. README.md
+# lists them.
+# dev/qa.sh target/debug/omacloud-app dev/qa/keys.jsonl [directory for the shots]
+# state: account
+
+{"do":"wait","role":"list-item","name":"Documents","visible":true}
+
+# Devices, and its join code. Under the dialog Ctrl+1 changes no page, and Escape gives the keyboard back to the
+# button the shortcut pressed.
+{"do":"key","keys":"<Control>2"}
+{"do":"wait","role":"toggle-button","name":"Devices","checked":true}
+{"do":"wait","role":"button","name":"Show Join Code","visible":true}
+{"do":"key","keys":"<Control>j"}
+{"do":"wait","dialog":"Join code"}
+{"do":"key","keys":"<Control>1"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"wait","role":"toggle-button","name":"Devices","checked":true}
+{"do":"wait","focus":{"role":"button","name":"Show Join Code"}}
+
+# A page's key is that page's alone: Ctrl+S saves nothing from Devices, and on Keys it asks first.
+{"do":"key","keys":"<Control>s"}
+{"do":"key","keys":"<Control>4"}
+{"do":"wait","role":"toggle-button","name":"Keys","checked":true}
+{"do":"wait","role":"button","name":"Save…","visible":true}
+{"do":"wait","dialog":null}
+{"do":"key","keys":"<Control>s"}
+{"do":"wait","dialog":"Save secrets?"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+
+# The other pages. On one with a control, the keyboard goes to its first.
+{"do":"key","keys":"<Control>5"}
+{"do":"wait","role":"toggle-button","name":"Recovery","checked":true}
+{"do":"key","keys":"<Control>3"}
+{"do":"wait","role":"toggle-button","name":"Omarchy","checked":true}
+{"do":"wait","focus":{"role":"switch","name":"Sync settings on this device"}}
+{"do":"key","keys":"<Control>1"}
+{"do":"wait","role":"toggle-button","name":"Overview","checked":true}
+
+# The overview's: Recently Deleted, your files on a phone, and Sync now from any page.
+{"do":"key","keys":"<Control>d"}
+{"do":"wait","dialog":"Recently Deleted"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"key","keys":"<Control>p"}
+{"do":"wait","dialog":"Open on a phone"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"key","keys":"<Control>r"}
+{"do":"wait","toasts":["Synced"]}
+
+# `?` and F1 list every key, and the same key or Escape puts the list away. Under it the window's keys wait.
+{"do":"key","keys":"question"}
+{"do":"wait","dialog":"Keyboard shortcuts"}
+{"do":"wait","role":"list-item","name":"Go on to the next step","visible":true}
+{"do":"shot","path":"shortcuts.png"}
+{"do":"key","keys":"<Control>2"}
+{"do":"key","keys":"question"}
+{"do":"wait","dialog":null}
+{"do":"wait","role":"toggle-button","name":"Overview","checked":true}
+{"do":"key","keys":"F1"}
+{"do":"wait","dialog":"Keyboard shortcuts"}
+{"do":"key","keys":"Escape"}
+{"do":"wait","dialog":null}
+{"do":"quit"}

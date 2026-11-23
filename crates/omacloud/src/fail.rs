@@ -1,17 +1,18 @@
-//! Failures as the output contract's error codes and exit codes. A command
+//! Failures as the output contract's error codes and kinds. A command
 //! raises a [`CliError`] for what it knows (not set up, not found, a refused
 //! code); it travels in the `anyhow::Error` and [`classify`] finds it. The
 //! rest is recognised by type: the sync engine's membership errors, the
 //! storage refusing the key or being out of reach, a network failure. Anything
-//! else is `error`, exit 1.
+//! else is `error`. Every failure exits 1; the `kind` says its class (the
+//! exit code each class had before Omacloud took Omarchy's 0 and 1).
 //!
-//! | code | exit |
-//! |---|---|
-//! | `error` (anything unrecognised), `verification_failed`, `pending`, `command_failed`, `cancelled` | 1 |
-//! | `usage`, `confirmation_required`, `terminal_required`, `ambiguous`, `already_set_up`, `exists`, `unsupported`, `same_key` | 2 |
-//! | `not_set_up`, `storage_gone`, `dropbox_not_allowed`, `dropbox_code_rejected`, `not_approved`, `removed`, `recovery_code_rejected`, `join_code_rejected`, `no_account`, `key_refused`, `shares_rejected`, `settings_off` | 3 |
-//! | `not_found` | 4 |
-//! | `unavailable` | 5 |
+//! | code | kind | exit before |
+//! |---|---|---|
+//! | `error` (anything unrecognised), `verification_failed`, `pending`, `command_failed`, `cancelled` | `error` | 1 |
+//! | `usage`, `confirmation_required`, `terminal_required`, `ambiguous`, `already_set_up`, `exists`, `unsupported`, `same_key` | `usage` | 2 |
+//! | `not_set_up`, `storage_gone`, `dropbox_not_allowed`, `dropbox_code_rejected`, `not_approved`, `removed`, `recovery_code_rejected`, `join_code_rejected`, `no_account`, `key_refused`, `shares_rejected`, `settings_off` | `setup` | 3 |
+//! | `not_found` | `not_found` | 4 |
+//! | `unavailable` | `unavailable` | 5 |
 
 use omacloud_core::{
     DeviceError, HeadError, Membership, NoCloudFolder,
@@ -20,13 +21,13 @@ use omacloud_core::{
 };
 
 pub use crate::output::CliError;
-use crate::output::{EXIT_ERROR, EXIT_NOT_FOUND, EXIT_SETUP, EXIT_UNAVAILABLE, EXIT_USAGE};
+use crate::output::Kind;
 
 /// A computer set up on storage Omacloud dropped.
 pub fn storage_gone(kind: &str) -> CliError {
     CliError::new(
         "storage_gone",
-        EXIT_SETUP,
+        Kind::Setup,
         format!("this computer was set up on {kind}, which Omacloud no longer uses"),
     )
     .hint("run `omacloud init` with your Dropbox or a bucket to set it up again (the old config is kept aside); the files here stay as they are")
@@ -40,23 +41,23 @@ pub fn key_refused(message: impl Into<String>) -> CliError {
 }
 
 pub fn usage(message: impl Into<String>) -> CliError {
-    CliError::new("usage", EXIT_USAGE, message)
+    CliError::new("usage", Kind::Usage, message)
 }
 
 pub fn unsupported(message: impl Into<String>) -> CliError {
-    CliError::new("unsupported", EXIT_USAGE, message)
+    CliError::new("unsupported", Kind::Usage, message)
 }
 
 pub fn not_found(message: impl Into<String>) -> CliError {
-    CliError::new("not_found", EXIT_NOT_FOUND, message)
+    CliError::new("not_found", Kind::NotFound, message)
 }
 
 pub fn setup(code: &str, message: impl Into<String>) -> CliError {
-    CliError::new(code, EXIT_SETUP, message)
+    CliError::new(code, Kind::Setup, message)
 }
 
 pub fn unavailable(message: impl Into<String>) -> CliError {
-    CliError::new("unavailable", EXIT_UNAVAILABLE, message)
+    CliError::new("unavailable", Kind::Unavailable, message)
 }
 
 pub fn not_set_up() -> CliError {
@@ -81,7 +82,7 @@ pub fn settings_off(what: &str) -> CliError {
 pub fn terminal_required(what: &str) -> CliError {
     CliError::new(
         "terminal_required",
-        EXIT_USAGE,
+        Kind::Usage,
         format!("this prints {what}, so it only prints to a terminal, never as JSON or into a pipe"),
     )
     .hint(
@@ -92,11 +93,11 @@ pub fn terminal_required(what: &str) -> CliError {
 
 /// A destructive command without `--yes`, where nobody can be asked.
 pub fn confirmation_required(what: &str) -> CliError {
-    CliError::new("confirmation_required", EXIT_USAGE, format!("{what} needs confirming")).hint("pass --yes")
+    CliError::new("confirmation_required", Kind::Usage, format!("{what} needs confirming")).hint("pass --yes")
 }
 
 /// The contract's error for `e`: a [`CliError`] it carries, else what its
-/// type says, else `error`, exit 1.
+/// type says, else `error`.
 pub fn classify(e: &anyhow::Error) -> CliError {
     if let Some(known) = e.chain().find_map(|c| c.downcast_ref::<CliError>()) {
         return known.clone();
@@ -114,16 +115,16 @@ pub fn classify(e: &anyhow::Error) -> CliError {
         None => {}
     }
     if is_waiting(e) {
-        return CliError::new("pending", EXIT_ERROR, message).hint("try again in a minute");
+        return CliError::new("pending", Kind::Error, message).hint("try again in a minute");
     }
     if is_rollback(e) {
-        return CliError::new("verification_failed", EXIT_ERROR, message).hint(
+        return CliError::new("verification_failed", Kind::Error, message).hint(
             "the storage's records are older than this computer has seen: it was restored from an old \
              copy, or someone with its key rolled it back; check the account from another computer",
         );
     }
     if is_unverified(e) {
-        return CliError::new("verification_failed", EXIT_ERROR, message)
+        return CliError::new("verification_failed", Kind::Error, message)
             .hint("the storage served a history this computer refuses; check the account from another computer");
     }
     if e.downcast_ref::<NoCloudFolder>().is_some() {
@@ -145,7 +146,7 @@ pub fn classify(e: &anyhow::Error) -> CliError {
     if unreachable(e) || e.chain().any(network_failure) {
         return unavailable(message).hint("check the network connection and that the storage is up, then try again");
     }
-    CliError::new("error", EXIT_ERROR, message)
+    CliError::new("error", Kind::Error, message)
 }
 
 /// A key rotation in progress, or a grant not written yet: worth waiting for.
@@ -193,30 +194,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn known_failures_keep_their_code_and_exit() {
+    fn known_failures_keep_their_code_and_kind() {
         let e: anyhow::Error = not_found("no device abc").into();
         let e = e.context("approving");
         let c = classify(&e);
         assert_eq!(
-            (c.code.as_str(), c.exit, c.message.as_str()),
-            ("not_found", 4, "no device abc")
+            (c.code.as_str(), c.kind, c.message.as_str()),
+            ("not_found", Kind::NotFound, "no device abc")
         );
     }
 
     #[test]
     fn membership_and_network_by_type() {
         let c = classify(&anyhow::Error::new(Membership::NotApproved));
-        assert_eq!((c.code.as_str(), c.exit), ("not_approved", 3));
+        assert_eq!((c.code.as_str(), c.kind), ("not_approved", Kind::Setup));
         let c = classify(&anyhow::Error::new(Membership::Revoked));
-        assert_eq!((c.code.as_str(), c.exit), ("removed", 3));
+        assert_eq!((c.code.as_str(), c.kind), ("removed", Kind::Setup));
         let io = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
         let c = classify(&anyhow::Error::new(io).context("reaching the storage"));
-        assert_eq!((c.code.as_str(), c.exit), ("unavailable", 5));
+        assert_eq!((c.code.as_str(), c.kind), ("unavailable", Kind::Unavailable));
         assert!(c.hint.is_some());
         let c = classify(&anyhow::anyhow!("something else"));
         assert_eq!(
-            (c.code.as_str(), c.exit, c.message.as_str()),
-            ("error", 1, "something else")
+            (c.code.as_str(), c.kind, c.message.as_str()),
+            ("error", Kind::Error, "something else")
         );
     }
 }

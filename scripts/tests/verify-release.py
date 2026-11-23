@@ -51,7 +51,7 @@ for index, arg in enumerate(args):
     if arg == '-e':
         key, value = args[index + 1].split('=', 1)
         env[key] = value
-payload = args[-1].replace('/usr/bin/', os.environ['TEST_BINARIES'] + '/')
+payload = args[-1].replace('/usr/bin/', os.environ['TEST_BINARIES'] + '/').replace('/usr/lib/omacloud/', os.environ['TEST_BINARIES'] + '/')
 payload = payload.replace('/etc/pacman.conf', os.environ['TEST_PACMAN_CONF'])
 result = subprocess.run(['bash', '-euo', 'pipefail', '-c', payload], env=env)
 sys.exit(result.returncode)

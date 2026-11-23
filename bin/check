@@ -28,12 +28,19 @@ for script in crates/omacloud-app/dev/qa/*.jsonl; do
   fi
 done
 
+step "the bar widget, linted and run on the daemon's line (needs quickshell and qmllint)"
+scripts/bar-widget.sh
+
 cargo build --locked -q -p omacloud
-if command -v restic >/dev/null; then
-  step "restore with plain restic"
-  scripts/restic-compat.sh target/debug/omacloud
+# A check that is skipped where its tool is missing proves nothing when it passes, so without restic this fails:
+# NO_RESTIC=1 says the restore was left out on purpose, on a machine that has none. CI installs restic.
+if [[ ${NO_RESTIC:-} == 1 ]]; then
+  echo "note: skipping the plain-restic restore (NO_RESTIC=1)" >&2
 else
-  echo "note: skipping the plain-restic restore (install restic to run it)" >&2
+  step "restore with plain restic"
+  command -v "${RESTIC:-restic}" >/dev/null \
+    || { echo "restic is required (Arch: restic); NO_RESTIC=1 leaves the restore out" >&2; exit 1; }
+  scripts/restic-compat.sh target/debug/omacloud
 fi
 
 step "an account in a bucket"
