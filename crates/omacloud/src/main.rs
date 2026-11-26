@@ -2319,7 +2319,17 @@ fn run(cli: Cli) -> Out {
                 coordination_bucket: target.coordination_bucket,
                 bucket_key_seq: 0,
             };
-            init(&paths, config, recovery_code, target.account)
+            let done = init(&paths, config, recovery_code, target.account);
+            // the package can't write into a home, so the agent skill comes
+            // with the first setup, as this person; a test account's never
+            // reaches the real home. It's best effort, as refresh is
+            if done.is_ok()
+                && paths.is_default()
+                && let Some(home) = agent_skill::home()
+            {
+                _ = agent_skill::install(&home, &SKILL);
+            }
+            done
         }
         Cmd::Sync => {
             let config = load(&paths)?;

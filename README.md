@@ -360,7 +360,8 @@ with someone you trust, or split it among several: `omacloud recovery split
 ## Agent skill
 
 [skills/omacloud/SKILL.md](skills/omacloud/SKILL.md) teaches AI agents to install,
-set up, and use omacloud. It is built into the CLI:
+set up, and use omacloud. It is built into the CLI, and setting up or joining
+an account installs it for you; to install or remove it yourself:
 
 ```sh
 omacloud skill install   # ~/.agents/skills/omacloud, linked into ~/.claude/skills
