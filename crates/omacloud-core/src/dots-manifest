@@ -96,6 +96,14 @@ local .codex/auth.json
 shared .gemini/GEMINI.md
 shared .gemini/commands/**
 shared .gemini/skills/**
+# Antigravity (agy): its instructions, skills, workflows, hook scripts and MCP
+# servers, never its brain, conversations or databases
+shared .gemini/AGENTS.md
+shared .gemini/config/skills/**
+shared .gemini/config/workflows/**
+shared .gemini/config/global_workflows/**
+shared .gemini/config/hooks/**
+shared .gemini/config/mcp_config.json
 shared .config/opencode/opencode.json
 shared .config/opencode/AGENTS.md
 shared .config/opencode/tui.json

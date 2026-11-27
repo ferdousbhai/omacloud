@@ -782,7 +782,11 @@ trust_level = "trusted"
 
         // a file of hooks keyed by program, flat under each event (Antigravity)
         let file = home.path().join(".gemini/config/hooks.json");
-        fs::create_dir_all(file.parent().unwrap())?;
+        fs::create_dir_all(home.path().join(".gemini/config/hooks"))?;
+        fs::write(
+            home.path().join(".gemini/config/hooks/state.sh"),
+            "#!/bin/sh\n# installed by herdr\n# managed by herdr; updating overwrites this file.\n",
+        )?;
         let path_free =
             json!({ "type": "command", "command": "command -v tool >/dev/null || exit 0; LOG=1 tool hook agy" });
         let script =

@@ -931,6 +931,20 @@ mod tests {
             ".pi/agent/extensions/state.ts",
             b"// installed by herdr\n// managed by herdr; updating overwrites this file.\n",
         );
+        // Antigravity's own, and its state beside them
+        put(".gemini/AGENTS.md", b"# Mine\n");
+        put(".gemini/config/skills/mine/SKILL.md", b"# Mine\n");
+        put(".gemini/config/workflows/release.md", b"# Release\n");
+        put(".gemini/config/global_workflows/review.md", b"# Review\n");
+        put(".gemini/config/hooks/mine.sh", b"#!/bin/sh\necho mine\n");
+        put(
+            ".gemini/config/hooks/state.sh",
+            b"#!/bin/sh\n# installed by herdr\n# managed by herdr; updating overwrites this file.\n",
+        );
+        put(".gemini/config/mcp_config.json", b"{}");
+        put(".gemini/config/projects/default-cli-project.json", b"{}");
+        put(".gemini/antigravity-cli/brain/x/scratch/note.md", b"x\n");
+        put(".gemini/antigravity-cli/conversations/x.pb", b"\0");
         std::os::unix::fs::symlink("/etc", h.join(".claude/skills/outside"))?;
         let m = Manifest::parse(BUNDLED)?;
         let files = m.shared_files(h);
@@ -945,6 +959,16 @@ mod tests {
         assert!(has(".claude/skills/review/scripts/run.sh"));
         assert!(has(".config/herdr/config.toml"));
         for p in [
+            ".gemini/AGENTS.md",
+            ".gemini/config/skills/mine/SKILL.md",
+            ".gemini/config/workflows/release.md",
+            ".gemini/config/global_workflows/review.md",
+            ".gemini/config/hooks/mine.sh",
+            ".gemini/config/mcp_config.json",
+        ] {
+            assert!(has(p), "{p}");
+        }
+        for p in [
             ".claude/skills/review/node_modules/x/index.js",
             ".claude/skills/review/logo.png",
             ".claude/skills/review/big.txt",
@@ -955,6 +979,10 @@ mod tests {
             ".claude/projects/x/session.jsonl",
             ".codex/auth.json",
             ".config/herdr/session.json",
+            ".gemini/config/hooks/state.sh",
+            ".gemini/config/projects/default-cli-project.json",
+            ".gemini/antigravity-cli/brain/x/scratch/note.md",
+            ".gemini/antigravity-cli/conversations/x.pb",
             // merged without its hooks instead (agents.rs)
             ".claude/settings.json",
             // another program's: a launcher and its icon, hooks, a marked
