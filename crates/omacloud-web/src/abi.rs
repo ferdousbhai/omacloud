@@ -69,6 +69,20 @@ pub unsafe extern "C" fn open(password: *const u8, password_len: usize, key: *co
     })())
 }
 
+/// Open with the repository's master key in place of its password (see
+/// [`Reader::with_key`]).
+///
+/// # Safety
+///
+/// As [`open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn open_key(key: *const u8, key_len: usize) -> *mut u8 {
+    answer((|| {
+        READER.set(Some(Reader::with_key(unsafe { bytes(key, key_len) })?));
+        Ok(Vec::new())
+    })())
+}
+
 /// # Safety
 ///
 /// As [`open`].

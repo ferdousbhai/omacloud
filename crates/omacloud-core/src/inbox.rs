@@ -29,22 +29,71 @@ pub struct Endorsement {
     pub until: u64,
     /// The member that signed (hex).
     pub device: String,
+    /// The key is an agent's connector's, not a browser session's: what it
+    /// may write, which the member signed too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<Agent>,
     pub sig: String,
 }
 
+/// What a connector for agents may do with its key: write under these folders
+/// (paths in the synced folder, like `Documents/Notes`) and nowhere else,
+/// and, unlike a browser, over a file that's there: an agent edits. What it
+/// replaced is the version before.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Agent {
+    /// What the person called the connector.
+    pub name: String,
+    pub folders: Vec<String>,
+}
+
+impl Agent {
+    /// Whether `path` is in one of the folders.
+    fn reaches(&self, path: &Path) -> bool {
+        self.folders
+            .iter()
+            .any(|folder| !folder.is_empty() && path.starts_with(folder))
+    }
+}
+
 impl Endorsement {
-    fn signed_bytes(key: &str, until: u64, device: &str) -> Vec<u8> {
-        format!("omacloud-upload-key-v1\n{key}\n{until}\n{device}\n").into_bytes()
+    /// A browser session's key is signed as lines; an agent's, with what it
+    /// may do, as JSON under a domain of its own, so neither reads as the other.
+    fn signed_bytes(key: &str, until: u64, device: &str, agent: Option<&Agent>) -> Vec<u8> {
+        match agent {
+            None => format!("omacloud-upload-key-v1\n{key}\n{until}\n{device}\n").into_bytes(),
+            Some(agent) => serde_json::json!({
+                "domain": "omacloud-agent-key-v1",
+                "key": key,
+                "until": until,
+                "device": device,
+                "name": agent.name,
+                "folders": agent.folders,
+            })
+            .to_string()
+            .into_bytes(),
+        }
     }
 
     #[must_use]
     pub fn new(device: &SigningKey, key: &str, until: u64) -> Self {
+        Self::sign(device, key, until, None)
+    }
+
+    /// A member's word for a connector's key, and for what it may write.
+    #[must_use]
+    pub fn for_agent(device: &SigningKey, key: &str, until: u64, agent: Agent) -> Self {
+        Self::sign(device, key, until, Some(agent))
+    }
+
+    fn sign(device: &SigningKey, key: &str, until: u64, agent: Option<Agent>) -> Self {
         let signer = public_hex(device);
-        let sig = device.sign(&Self::signed_bytes(key, until, &signer));
+        let sig = device.sign(&Self::signed_bytes(key, until, &signer, agent.as_ref()));
         Self {
             key: key.to_string(),
             until,
             device: signer,
+            agent,
             sig: hex::encode(sig.to_bytes()),
         }
     }
@@ -55,7 +104,7 @@ impl Endorsement {
         verify_sig(
             &self.device,
             &self.sig,
-            &Self::signed_bytes(&self.key, self.until, &self.device),
+            &Self::signed_bytes(&self.key, self.until, &self.device, self.agent.as_ref()),
         )
     }
 }
@@ -92,6 +141,8 @@ pub struct Upload {
     pub path: PathBuf,
     pub mtime: Option<u64>,
     pub content: Vec<u8>,
+    /// From an agent's connector: it goes over a file that's there.
+    pub replace: bool,
 }
 
 /// A path a browser may name: inside the folder, through no `..`, nothing
@@ -143,10 +194,19 @@ pub fn open(plain: &[u8], written: u64, member: impl Fn(&str) -> bool) -> Result
         bail!("the upload isn't signed by the key vouched for");
     }
     let path = safe(&header.path).with_context(|| format!("an upload may not go to {:?}", header.path))?;
+    if let Some(agent) = &endorsement.agent {
+        ensure!(
+            agent.reaches(&path),
+            "{} may not write to {:?}: it's outside the folders it was given",
+            agent.name,
+            header.path
+        );
+    }
     Ok(Upload {
         path,
         mtime: header.mtime,
         content: content.to_vec(),
+        replace: endorsement.agent.is_some(),
     })
 }
 
@@ -197,6 +257,30 @@ mod tests {
         let mut longer = endorsement.clone();
         longer.until = 5000;
         assert!(open(&upload(&session, &longer, "Work/plan.md", b"x"), 900, is_member).is_err());
+        // an agent's key: its folders only, and over a file that's there
+        assert!(!got.replace);
+        let agent = Agent {
+            name: "claude".into(),
+            folders: vec!["Work".into(), "Notes/Shared".into()],
+        };
+        let vouched = Endorsement::for_agent(&device, &public_hex(&session), 1000, agent);
+        let got = open(&upload(&session, &vouched, "Work/plan.md", b"new"), 900, is_member).unwrap();
+        assert!(got.replace);
+        assert!(open(&upload(&session, &vouched, "Notes/Shared/a.md", b"x"), 900, is_member).is_ok());
+        for outside in ["Notes/mine.md", "Workshop/x.md", "Pictures/a.png"] {
+            assert!(open(&upload(&session, &vouched, outside, b"x"), 900, is_member).is_err());
+        }
+        // more folders than the member signed for
+        let mut wider = vouched.clone();
+        wider.agent.as_mut().unwrap().folders.push("Pictures".into());
+        assert!(open(&upload(&session, &wider, "Pictures/a.png", b"x"), 900, is_member).is_err());
+        // a browser's key made out to be an agent's, and an agent's a browser's
+        let mut dressed = endorsement.clone();
+        dressed.agent = vouched.agent.clone();
+        assert!(open(&upload(&session, &dressed, "Work/plan.md", b"x"), 900, is_member).is_err());
+        let mut bare = vouched.clone();
+        bare.agent = None;
+        assert!(open(&upload(&session, &bare, "Work/plan.md", b"x"), 900, is_member).is_err());
         // the content changed after signing
         let mut changed = plain.clone();
         *changed.last_mut().unwrap() ^= 1;

@@ -20,9 +20,10 @@ jobs:
       # Beyond the build: jq and gtk4 (gtk4-broadwayd) for the app's QA, with a font, since the image has none and
       # GTK warns of text it cannot draw, which fails the QA; restic for the plain restore, which bin/check fails
       # without; quickshell and qt6-declarative (qmllint) for the bar widget; util-linux's `script` and curl for the
-      # checks on a stand-in bucket; nodejs and npm for the Worker; libarchive's bsdtar and unzip for the packaging tests.
+      # checks on a stand-in bucket; nodejs and npm for the Worker; rust-wasm for the connector's reader, built to
+      # WebAssembly; libarchive's bsdtar and unzip for the packaging tests.
       - run: >
-          pacman -Syu --noconfirm --needed base-devel git rust gtk4 ttf-dejavu jq restic quickshell qt6-declarative
+          pacman -Syu --noconfirm --needed base-devel git rust rust-wasm gtk4 ttf-dejavu jq restic quickshell qt6-declarative
           python nodejs npm curl util-linux libarchive unzip fuse3
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2

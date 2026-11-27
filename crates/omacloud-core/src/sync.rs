@@ -917,6 +917,13 @@ impl Engine {
         crate::inbox::Endorsement::new(&self.signing, key, until)
     }
 
+    /// This device's word for the key of a connector for agents, and for
+    /// what it may write (see [`crate::inbox::Agent`]).
+    #[must_use]
+    pub fn endorse_agent_key(&self, key: &str, until: u64, agent: crate::inbox::Agent) -> crate::inbox::Endorsement {
+        crate::inbox::Endorsement::for_agent(&self.signing, key, until, agent)
+    }
+
     /// Whether a device is in the account, by the chain as last verified.
     #[must_use]
     pub fn is_member(&self, device: &str) -> bool {

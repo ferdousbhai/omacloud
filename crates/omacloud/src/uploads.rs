@@ -112,7 +112,11 @@ impl Uploads {
                 continue;
             }
             let to = save(root, &upload)?;
-            info!("took in {} from a browser", to.display());
+            info!(
+                "took in {} from {}",
+                to.display(),
+                if upload.replace { "an agent" } else { "a browser" }
+            );
             self.inbox.remove(&name)?;
         }
         Ok(done)
@@ -132,15 +136,19 @@ fn free_name(path: &Path) -> PathBuf {
         .unwrap_or_else(|| path.to_path_buf())
 }
 
-/// Save an upload under `root`, never over a file that's there (unless it's
-/// the same file, taken in before): where it was saved.
+/// Save an upload under `root`: where it was saved. A browser's never goes
+/// over a file that's there (unless it's the same file, taken in before); an
+/// agent's does, as editing a file is what it was let in to do, and what was
+/// there is the version before.
 fn save(root: &Path, upload: &inbox::Upload) -> Result<PathBuf> {
     let mut to = root.join(&upload.path);
     if let Ok(there) = fs::read(&to) {
         if there == upload.content {
             return Ok(to);
         }
-        to = free_name(&to);
+        if !upload.replace {
+            to = free_name(&to);
+        }
     }
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent)?;
@@ -170,6 +178,7 @@ mod tests {
             path: PathBuf::from("Work/plan.md"),
             mtime: Some(1_700_000_000_000),
             content: content.to_vec(),
+            replace: false,
         };
         assert_eq!(
             save(dir.path(), &upload(b"one")).unwrap(),
@@ -194,6 +203,14 @@ mod tests {
             .modified()
             .unwrap();
         assert_eq!(changed, UNIX_EPOCH + Duration::from_secs(1_700_000_000));
+        assert_eq!(fs::read_dir(dir.path().join("Work")).unwrap().count(), 3);
+        // an agent's goes over the file that's there
+        let edit = inbox::Upload {
+            replace: true,
+            ..upload(b"edited")
+        };
+        assert_eq!(save(dir.path(), &edit).unwrap(), dir.path().join("Work/plan.md"));
+        assert_eq!(fs::read(dir.path().join("Work/plan.md")).unwrap(), b"edited");
         assert_eq!(fs::read_dir(dir.path().join("Work")).unwrap().count(), 3);
     }
 }

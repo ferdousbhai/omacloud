@@ -14,6 +14,15 @@ async function hmac(key, message) {
 	return crypto.subtle.sign("HMAC", k, text.encode(message));
 }
 
+// What an element of a listing says, its XML escapes undone.
+const escapes = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+function said(xml, element) {
+	const text = xml.match(new RegExp(`<${element}>([\\s\\S]*?)</${element}>`))?.[1] ?? "";
+	return text.replace(/&(amp|lt|gt|quot|apos|#(\d+)|#x([0-9a-fA-F]+));/g, (_, name, decimal, hex) =>
+		decimal ? String.fromCodePoint(Number(decimal)) : hex ? String.fromCodePoint(parseInt(hex, 16)) : escapes[name],
+	);
+}
+
 export class Bucket {
 	// endpoint like https://<account>.r2.cloudflarestorage.com; root is the
 	// repository's folder in the bucket, if it has one
@@ -81,14 +90,15 @@ export class Bucket {
 			const query = { "list-type": "2", prefix };
 			if (token) query["continuation-token"] = token;
 			const response = await this.fetch(await this.url("", query));
-			const xml = new DOMParser().parseFromString(await response.text(), "application/xml");
-			for (const entry of xml.querySelectorAll("Contents")) {
+			// read as text, not with the browser's XML reader: a Worker has none
+			const xml = await response.text();
+			for (const [, entry] of xml.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)) {
 				// the folder's own marker comes back too
-				const name = (entry.querySelector("Key")?.textContent ?? "").slice(prefix.length);
-				const modified = entry.querySelector("LastModified")?.textContent ?? "";
+				const name = said(entry, "Key").slice(prefix.length);
+				const modified = said(entry, "LastModified");
 				if (name && !name.endsWith("/")) names.push({ name, modified });
 			}
-			token = xml.querySelector("NextContinuationToken")?.textContent;
+			token = said(xml.replace(/<Contents>[\s\S]*?<\/Contents>/g, ""), "NextContinuationToken") || undefined;
 		} while (token);
 		return names;
 	}

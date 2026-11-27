@@ -391,6 +391,14 @@ the session's public key, `until` in Unix seconds, and the member that
 signed. `omacloud-inbox/changed` holds 16 random raw bytes, rewritten after
 each batch (`web/app.js`).
 
+An endorsement of a connector for agents ([cloud-agents.md](cloud-agents.md))
+also holds `"agent":{"name":"agents","folders":["Documents/Notes"]}`, and is
+signed in the JSON form under a domain of its own (compact, keys sorted):
+`{"device":…,"domain":"omacloud-agent-key-v1","folders":[…],"key":…,"name":…,"until":…}`.
+An upload under one must have its `path` in one of `folders`, and goes over
+a file that's there; a browser's never does (`inbox.rs`, `Agent`, `open`;
+`omacloud/src/uploads.rs`, `save`).
+
 The inbox is always under the epoch 0 `root`, not under `omacloud-e<n>`
 (`bucket.rs`, `Inbox::beside` with `config.repo`; `main.rs`,
 `WebCode::with_upload`).
@@ -434,7 +442,7 @@ written by Omacloud does (a device name is checked at `init`; see the end).
 | head | `omacloud-head-v3\n{seq}\n{snapshot}\n{prev}\n{devices}\n{epoch}\n{device}\n` | `head.rs`, `Head::signed_bytes` |
 | grant | `omacloud-grant-v1\n{epoch}\n{device}\n{sealed}\n{signer}\n` | `epoch.rs`, `Grant::signed_bytes` |
 | join request | `omacloud-join-v1\n{device}\n{name}\n{root}\n` | `devices.rs`, `JoinRequest::signed_bytes` |
-| upload key endorsement | `omacloud-upload-key-v1\n{key}\n{until}\n{device}\n` | `inbox.rs`, `Endorsement::signed_bytes` |
+| upload key endorsement (a browser's) | `omacloud-upload-key-v1\n{key}\n{until}\n{device}\n` | `inbox.rs`, `Endorsement::signed_bytes` |
 | upload | `omacloud-upload-v1\n{path}\n{hex(SHA-256(content))}\n` | `inbox.rs`, `upload_signed_bytes` |
 
 **JSON form**: compact serde_json of a fixed object, the `sig` left out and
@@ -605,7 +613,7 @@ existing file.
 - Version lives in each signed message's domain:
   `omacloud-recovery-v1`, `omacloud-device-v1`, `omacloud-head-v3`,
   `omacloud-epoch-v1`, `omacloud-grant-v1`, `omacloud-join-v1`,
-  `omacloud-bucket-key-v1`, `omacloud-upload-key-v1`, `omacloud-upload-v1`,
+  `omacloud-bucket-key-v1`, `omacloud-upload-key-v1`, `omacloud-agent-key-v1`, `omacloud-upload-v1`,
   `omacloud web link 1`, and the bundle magic `omacloud-secrets-v1\n`. A
   record whose signature doesn't verify under the current domain is
   refused; there is no fallback to an older one (only `v3` heads verify).

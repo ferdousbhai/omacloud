@@ -17,6 +17,7 @@ use std::{
 mod agent_skill;
 mod alerts;
 mod bar;
+mod cloudflare;
 mod doorbell;
 mod dropbox;
 mod fail;
@@ -178,6 +179,13 @@ enum Cmd {
     Devices {
         #[command(subcommand)]
         action: Option<DevicesCmd>,
+    },
+    /// Let an agent that isn't on your computers (claude.ai, one on a phone)
+    /// read and write folders you name, through a connector in your own
+    /// Cloudflare account, put there only by `agents connect`
+    Agents {
+        #[command(subcommand)]
+        action: Option<AgentsCmd>,
     },
     /// The browsers that stay signed in to your files (a phone, at
     /// omacloud.computer/files), as each said so; `remove` cuts one off
@@ -409,6 +417,42 @@ fn open_window(config: Option<PathBuf>, page: Option<Page>) -> Out {
     }
     let error = cmd.exec();
     Err(fail::unavailable(format!("opening {}: {error}", app.display())).into())
+}
+
+#[derive(Subcommand)]
+enum AgentsCmd {
+    /// List the connectors this computer set up
+    List,
+    /// Put a connector in your Cloudflare account (it needs the Workers Paid
+    /// plan there) and show its address and passphrase, once. It holds the
+    /// key to your storage and to your files, so that account can read them.
+    /// The API token (permission Workers Scripts: Edit) comes from
+    /// OMACLOUD_CLOUDFLARE_TOKEN, or is asked for. Connecting again replaces
+    /// it, and ends every sign-in to the one before
+    Connect {
+        /// A folder agents may reach, like `Documents/Notes` (repeatable);
+        /// nothing outside these is shown or written
+        #[arg(long = "folder", required = true)]
+        folders: Vec<String>,
+        /// Agents read, and write nothing
+        #[arg(long)]
+        read_only: bool,
+        /// What to call it; also in its address
+        #[arg(long, default_value = "agents")]
+        name: String,
+        /// Your Cloudflare account id, if the token reaches more than one
+        #[arg(long)]
+        account: Option<String>,
+        /// How long agents may write before you connect again
+        #[arg(long, default_value_t = 90)]
+        days: u64,
+    },
+    /// Take a connector out of your Cloudflare account: no agent reaches
+    /// anything through it afterwards
+    Disconnect {
+        #[arg(default_value = "agents")]
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1012,6 +1056,11 @@ impl Paths {
     }
     /// Its being there says the bar was decided: shown once by the daemon,
     /// or turned on or off by the person. So it's never put back unasked.
+    /// The connectors for agents this computer set up: what they reach, not
+    /// their secrets.
+    fn agents(&self) -> PathBuf {
+        self.data.join("agents.json")
+    }
     /// The browsers that stay signed in, as last listed: what `status` shows
     /// without asking the storage each time.
     fn browsers(&self) -> PathBuf {
@@ -2500,6 +2549,7 @@ fn run(cli: Cli) -> Out {
         }
         Cmd::Devices { action } => devices(&paths, action.unwrap_or(DevicesCmd::List)),
         Cmd::Browsers { action } => browsers(&paths, action.unwrap_or(BrowsersCmd::List)),
+        Cmd::Agents { action } => agents(&paths, action.unwrap_or(AgentsCmd::List)),
         Cmd::Versions { path } => {
             let config = load(&paths)?;
             let mut e = engine(&paths, &config)?;
@@ -3218,6 +3268,280 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
             Ok(Response::new(data, format!("removed {name} ({fp})"))
                 .human(out.trim_end())
                 .ids(vec![fp]))
+        }
+    }
+}
+
+/// The connector's modules, compiled in: its own (`connector/`) and the ones
+/// it shares with the browser page (`web/`). The one that runs comes first.
+const CONNECTOR: [(&str, &str); 7] = [
+    ("worker.js", include_str!("../../../connector/worker.js")),
+    ("files.js", include_str!("../../../connector/files.js")),
+    ("mcp.js", include_str!("../../../connector/mcp.js")),
+    ("oauth.js", include_str!("../../../connector/oauth.js")),
+    ("reader.js", include_str!("../../../web/reader.js")),
+    ("s3.js", include_str!("../../../web/s3.js")),
+    ("dropbox.js", include_str!("../../../web/dropbox.js")),
+];
+
+/// The reader the connector decrypts with, built to WebAssembly.
+const CONNECTOR_READER: &str = "omacloud_web.wasm";
+
+/// The connector as Cloudflare takes it: each module's name and bytes, the
+/// one that runs first. The modules are this program's own. The reader isn't
+/// built with it (a package's builder has no WebAssembly target everywhere),
+/// so it's the one the browser page runs, fetched from where that page is
+/// served, and looked at before it's used. `OMACLOUD_CONNECTOR` names a
+/// folder holding a build of all of it instead (`scripts/build-connector.sh`).
+fn connector_modules() -> Result<Vec<(String, Vec<u8>)>> {
+    if let Some(dir) = std::env::var_os("OMACLOUD_CONNECTOR").map(PathBuf::from) {
+        let missing = || fail::unsupported(format!("the connector's files aren't at {}", dir.display()));
+        let mut modules = Vec::new();
+        for entry in fs::read_dir(&dir).map_err(|_| missing())?.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".js") || name.ends_with(".wasm") {
+                modules.push((name, fs::read(entry.path())?));
+            }
+        }
+        modules.sort_by_key(|(name, _)| (name != "worker.js", name.clone()));
+        if modules.first().is_none_or(|(name, _)| name != "worker.js") {
+            return Err(missing().into());
+        }
+        return Ok(modules);
+    }
+    let mut modules: Vec<(String, Vec<u8>)> = CONNECTOR
+        .iter()
+        // side by side there, where connector/ names them in web/
+        .map(|(name, text)| {
+            (
+                (*name).to_string(),
+                text.replace("from \"../web/", "from \"./").into_bytes(),
+            )
+        })
+        .collect();
+    let page = std::env::var("OMACLOUD_WEB_URL").unwrap_or_else(|_| "https://omacloud.computer/files/".into());
+    let address = format!("{}/{CONNECTOR_READER}", page.trim_end_matches('/'));
+    let reader = reqwest::blocking::Client::builder()
+        .user_agent(concat!("omacloud/", env!("CARGO_PKG_VERSION")))
+        .timeout(Duration::from_secs(60))
+        .build()?
+        .get(&address)
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .and_then(|r| r.bytes())
+        .map_err(|e| fail::unavailable(format!("the connector's reader didn't come from {address}: {e}")))?;
+    // a WebAssembly module, and one that opens with the repository's key,
+    // which the connector needs and an older one doesn't do
+    let has = |name: &[u8]| reader.windows(name.len()).any(|w| w == name);
+    if !reader.starts_with(b"\0asm") || !has(b"open_key") {
+        return Err(fail::unavailable(format!(
+            "what {address} serves isn't the reader this version's connector needs"
+        ))
+        .hint("the site may not have this version yet: try again later")
+        .into());
+    }
+    modules.push((CONNECTOR_READER.to_string(), reader.to_vec()));
+    Ok(modules)
+}
+
+/// A folder as an agent's connector names it: its path in the synced folder,
+/// with nothing hidden in it.
+fn granted_folder(config: &Config, given: &str) -> Result<String> {
+    let expanded = given.strip_prefix("~/").map_or_else(
+        || PathBuf::from(given),
+        |rest| home_dir().map_or_else(|_| PathBuf::from(given), |h| h.join(rest)),
+    );
+    let rel = if expanded.is_absolute() {
+        expanded
+            .strip_prefix(&config.folder)
+            .map(Path::to_path_buf)
+            .map_err(|_| fail::usage(format!("{given} isn't in the folder that syncs")))?
+    } else {
+        expanded
+    };
+    let plain = rel.components().count() > 0
+        && rel
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(name) if !name.to_string_lossy().starts_with('.')));
+    if !plain {
+        return Err(fail::usage(format!("{given} isn't a folder an agent can be given"))
+            .hint("name one inside what syncs, like `Documents/Notes`")
+            .into());
+    }
+    if !config.folder.join(&rel).is_dir() {
+        return Err(fail::not_found(format!("{} isn't a folder here", config.folder.join(&rel).display())).into());
+    }
+    Ok(rel.to_string_lossy().into_owned())
+}
+
+fn text_of(v: &Value) -> String {
+    v.as_str().unwrap_or_default().to_string()
+}
+
+/// What `agents` remembers of the connectors it set up.
+fn agents_known(paths: &Paths) -> Vec<Value> {
+    fs::read_to_string(paths.agents())
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn agents(paths: &Paths, action: AgentsCmd) -> Out {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use sha2::{Digest, Sha256};
+    match action {
+        AgentsCmd::List => {
+            let known = agents_known(paths);
+            let mut out = String::new();
+            for c in &known {
+                let folders: Vec<&str> = c["folders"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect();
+                say!(
+                    out,
+                    "{}  {}/mcp  {} {}",
+                    text_of(&c["name"]),
+                    text_of(&c["url"]),
+                    if c["write"] == json!(true) {
+                        "reads and writes"
+                    } else {
+                        "reads"
+                    },
+                    folders.join(", ")
+                );
+            }
+            if known.is_empty() {
+                say!(out, "no connector for agents is set up from this computer");
+            }
+            let n = known.len();
+            Ok(Response::new(
+                json!({ "agents": known }),
+                format!("{n} connector{}", if n == 1 { "" } else { "s" }),
+            )
+            .human(out.trim_end()))
+        }
+        AgentsCmd::Connect {
+            folders,
+            read_only,
+            name,
+            account,
+            days,
+        } => {
+            // its passphrase is shown once, to a person
+            if !output::to_terminal(mode()) {
+                return Err(fail::terminal_required("the connector's passphrase").into());
+            }
+            if name.is_empty()
+                || name.len() > 40
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            {
+                return Err(fail::usage("a connector's name is lowercase letters, digits and dashes").into());
+            }
+            let (config, e, code) = WebCode::read(paths)?;
+            let folders = folders
+                .iter()
+                .map(|f| granted_folder(&config, f))
+                .collect::<Result<Vec<_>>>()?;
+            let (_, secret, _) = e.repository()?;
+            let until = (std::time::SystemTime::now() + Duration::from_secs(days.clamp(1, 366) * 86400))
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            let upload = if read_only {
+                Value::Null
+            } else {
+                let (seed, public) = omacloud_core::inbox::session_key();
+                let agent = omacloud_core::inbox::Agent {
+                    name: name.clone(),
+                    folders: folders.clone(),
+                };
+                json!({
+                    "inbox": omacloud_core::Inbox::beside(&config.repo)?.prefix(),
+                    "seed": URL_SAFE_NO_PAD.encode(seed),
+                    "endorsement": e.endorse_agent_key(&public, until, agent),
+                })
+            };
+            // typed once on the connector's own page; it keeps only its hash
+            let passphrase: String = omacloud_core::devices::random_secret().chars().take(20).collect();
+            let shown = passphrase
+                .as_bytes()
+                .chunks(4)
+                .map(|c| String::from_utf8_lossy(c).into_owned())
+                .collect::<Vec<_>>()
+                .join("-");
+            let mut storage = serde_json::to_value(&code)?;
+            for field in ["v", "password", "browsers", "upload"] {
+                _ = storage.as_object_mut().and_then(|o| o.remove(field));
+            }
+            let settings = json!({
+                "v": 1,
+                "version": env!("CARGO_PKG_VERSION"),
+                "name": name,
+                "storage": storage,
+                "key": secret.key,
+                "folders": folders,
+                "write": !read_only,
+                "upload": upload,
+                "secret": hex::encode(rand::random::<[u8; 32]>()),
+                "passphrase_hash": hex::encode(Sha256::digest(passphrase.as_bytes())),
+            })
+            .to_string();
+            let script = format!("omacloud-{name}");
+            let (url, account) = if let Some(out) = std::env::var_os("OMACLOUD_CONNECTOR_OUT") {
+                // for trying the connector without Cloudflare: its settings, to a file
+                fs::write(&out, &settings)?;
+                ("http://127.0.0.1".to_string(), String::new())
+            } else {
+                // the reader is fetched last: nothing is asked of anyone until
+                // all that could be refused here has been
+                let modules = connector_modules()?;
+                let api = cloudflare::Api::new(read_secret("OMACLOUD_CLOUDFLARE_TOKEN", "Cloudflare API token")?)?;
+                let account = api.account(account.as_deref())?;
+                (api.deploy(&account, &script, &modules, &settings)?, account)
+            };
+            let mut known = agents_known(paths);
+            known.retain(|c| c["name"] != json!(name));
+            known.push(json!({ "name": name, "url": url, "account": account, "folders": folders, "write": !read_only, "until": until }));
+            fs::write(paths.agents(), Value::Array(known).to_string())?;
+            let human = format!(
+                "The connector is in your Cloudflare account. Add it to your agent as a connector, at:\n\n  {url}/mcp\n\nWhen it \
+                 asks, allow it with this passphrase, shown only now:\n\n  {shown}\n\nIt {} {}. It needs Cloudflare's \
+                 Workers Paid plan to open your files. `omacloud agents disconnect{}` takes it out.",
+                if read_only { "reads" } else { "reads and writes" },
+                folders.join(", "),
+                if name == "agents" {
+                    String::new()
+                } else {
+                    format!(" {name}")
+                },
+            );
+            Ok(Response::new(Value::Null, "connector set up").human(human))
+        }
+        AgentsCmd::Disconnect { name } => {
+            let mut known = agents_known(paths);
+            let Some(found) = known.iter().find(|c| c["name"] == json!(name)).cloned() else {
+                return Err(
+                    fail::not_found(format!("no connector called {name} was set up from this computer"))
+                        .hint("`omacloud agents` lists them")
+                        .into(),
+                );
+            };
+            let account = text_of(&found["account"]);
+            if !account.is_empty() {
+                let api = cloudflare::Api::new(read_secret("OMACLOUD_CLOUDFLARE_TOKEN", "Cloudflare API token")?)?;
+                api.remove(&account, &format!("omacloud-{name}"))?;
+            }
+            known.retain(|c| c["name"] != json!(name));
+            fs::write(paths.agents(), Value::Array(known).to_string())?;
+            Ok(Response::new(json!({ "removed": name }), format!("removed the connector {name}")).human(format!(
+                "The connector {name} is out of your Cloudflare account: no agent reaches anything through it. It held \
+                 the keys to your storage and files; if that account isn't yours alone, change them: `omacloud rotate` \
+                 and `omacloud bucket set-key`."
+            )))
         }
     }
 }

@@ -78,6 +78,10 @@ fn reads_what_the_engine_wrote() {
     let mut reader = Reader::open(&secret.password, key).unwrap();
     let config: Value = serde_json::from_slice(&reader.file(&fs::read(repo.join("config")).unwrap()).unwrap()).unwrap();
     assert_eq!(config["version"], 2);
+    // the master key itself opens it too, as the account's secret holds it
+    let by_key = Reader::with_key(&serde_json::to_vec(&secret.key).unwrap()).unwrap();
+    assert!(by_key.file(&fs::read(repo.join("config")).unwrap()).is_ok());
+    assert!(Reader::with_key(b"{}").is_err());
     for index in stored(&repo, "index") {
         assert!(reader.add_index(&index).unwrap() > 0);
     }

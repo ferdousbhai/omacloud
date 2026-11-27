@@ -151,7 +151,19 @@ impl Reader {
         let master = Key(user)
             .decrypt(&base64(&file.data)?)
             .map_err(|_| "the password doesn't open this repository".to_string())?;
-        let master: MasterKey = serde_json::from_slice(&master).map_err(|e| format!("not a master key: {e}"))?;
+        Self::with_key(&master)
+    }
+
+    /// Open with the repository's master key itself, as a key file holds it
+    /// once opened (JSON: `mac.k`, `mac.r`, `encrypt`): no password is worked
+    /// out, which is most of what opening costs. For a holder of the key
+    /// that runs where time is short (a connector for agents).
+    ///
+    /// # Errors
+    ///
+    /// If it isn't a master key.
+    pub fn with_key(master: &[u8]) -> Result<Self> {
+        let master: MasterKey = serde_json::from_slice(master).map_err(|e| format!("not a master key: {e}"))?;
         let mut key = [0; 64];
         let parts = [
             (0, 32, base64(&master.encrypt)?),

@@ -28,6 +28,14 @@ last week" or "set up my new laptop like this one", and it does it through the
 `omacloud` command ([below](#agent-skill)). What you taught your agents follows
 you too: their instructions, skills and settings, and Claude Code's memory.
 
+An agent that isn't on your computers (claude.ai, one on your phone) can
+reach the folders you name too, through a connector you put in your own
+Cloudflare account: `omacloud agents connect --folder Documents/Notes`.
+It's there only if you set it up, and it's the one thing here that lets
+anything but your computers read your files (that account can, with the
+keys the connector holds): [docs/cloud-agents.md](docs/cloud-agents.md)
+says what it trades, and what it needs at Cloudflare.
+
 Omacloud has no AI of its own and never sees your files: your agents see what
 you let them on your own computer. There's no account with us and no
 analytics. Omacloud talks only to your own storage, and omacloud.computer

@@ -340,6 +340,7 @@ fn commands_that_print_a_secret_refuse_anywhere_but_a_terminal() {
         &["web-code"],
         &["web-link"],
         &["web-link", "--keep"],
+        &["agents", "connect", "--folder", "Notes"],
         &["recovery", "split", "--threshold", "2", "--shares", "3"],
         &["recovery", "combine"],
     ] {
@@ -449,6 +450,20 @@ fn only_an_account_in_a_bucket_has_browsers_that_stay_signed_in() {
     // and status says none, without asking anything
     let status = json(&h.run("a", &["status"]));
     assert_eq!(status["data"]["browsers"], serde_json::json!([]));
+}
+
+#[test]
+fn no_connector_for_agents_until_one_is_set_up() {
+    let h = Home::new();
+    h.create();
+    let listed = json(&h.run("a", &["agents"]));
+    assert_eq!(listed["data"]["agents"], serde_json::json!([]));
+    _ = machine_error(&h.run("a", &["agents", "disconnect"]), "not_found", "not_found");
+    // a connector reads a bucket or a Dropbox, which this account isn't in
+    let (out, exit) = on_tty(h.cmd("a", &["agents", "connect", "--folder", "A"]));
+    assert_eq!(exit, 1, "{out}");
+    assert!(out.contains("reads a bucket or a Dropbox"), "{out}");
+    assert!(!h.path("a.d/agents.json").exists());
 }
 
 #[test]

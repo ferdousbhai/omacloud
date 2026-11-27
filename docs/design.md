@@ -237,6 +237,11 @@ and every computer of the account can, Wi-Fi keys included.
   history unnoticed. They can delete everything: see below.
 - **Omacloud** sees nothing: it runs no service your data or your computers
   talk to.
+- **Your Cloudflare account, only if you set up a connector for agents**
+  (`omacloud agents connect`, [cloud-agents.md](cloud-agents.md)): it then
+  holds the key to your storage and the repository's key, so it, and
+  Cloudflare, could read your files, and the agent's provider sees what the
+  agent reads. Nobody has a connector who didn't set one up.
 - **A removed computer** keeps what it had synced before removal. With a new
   epoch it can't read what comes after; once the bucket's key changes and the
   old one is deleted it can't reach the bucket at all.
@@ -288,7 +293,4 @@ names, settings or keys.
 - Sharing with other people (#8, #15).
 - A phone app (#35); a phone's browser has the page above. Editing a file in a
   browser: it reads, uploads and puts back, and nothing more.
-- Agents that aren't on one of your computers (claude.ai, one on a phone)
-  reading and writing folders you grant them, answered by a computer of
-  yours: [cloud-agents.md](cloud-agents.md) has the design.
 - An outside review of this design (#18).

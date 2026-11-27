@@ -14,6 +14,10 @@
 - The name Omacloud Drive is gone: your files in a browser are at omacloud.computer/files, the
   commands are `omacloud web-link` and `omacloud web-code`, and a code starts `omacloud-web-`.
   The old address, commands and codes no longer work: make a new code with `omacloud web-code`.
+- An agent that isn't on your computers (claude.ai, one on a phone) can read and write folders
+  you name, through a connector in your own Cloudflare account: `omacloud agents connect
+  --folder Documents/Notes`. Only if you set it up; that account then holds the keys, and it
+  needs Cloudflare's Workers Paid plan. docs/cloud-agents.md says what it trades.
 - A phone can stay signed in to your files in its browser: press Stay Signed In once it's open,
   and it opens from then on with its fingerprint or face, with no new code. Your computers list
   the browsers that do (Devices in the app, `omacloud browsers`), and removing a lost one changes

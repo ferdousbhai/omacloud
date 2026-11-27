@@ -8,6 +8,11 @@ let wasm;
 export async function load(url) {
 	wasm ??= (await WebAssembly.instantiateStreaming(fetch(url))).instance.exports;
 }
+// the same from a module already at hand, where there's no address to fetch
+// (a Worker imports it)
+export async function loadModule(module) {
+	wasm ??= (await WebAssembly.instantiate(module)).exports;
+}
 
 function call(name, ...args) {
 	const given = args.map((arg) => {
@@ -32,6 +37,8 @@ const json = (bytes) => JSON.parse(words.decode(bytes));
 
 // open with the repository's password and a key file; throws when it's wrong
 export const open = (password, keyFile) => void call("open", password, keyFile);
+// open with the repository's master key itself (JSON), skipping the password
+export const openKey = (masterKey) => void call("open_key", masterKey);
 // the JSON of a config or snapshot file, as stored
 export const file = (stored) => json(call("file", stored));
 // take in an index file; how many blobs it lists
