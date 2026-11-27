@@ -897,6 +897,8 @@ mod tests {
         put(".claude/.credentials.json", b"{}");
         put(".claude/settings.local.json", b"{}");
         put(".claude/projects/x/session.jsonl", b"{}");
+        put(".claude/projects/x/memory/MEMORY.md", b"- [Mine](mine.md)\n");
+        put(".claude/projects/x/memory/mine.md", b"remembered\n");
         put(".codex/auth.json", b"{}");
         put(".config/herdr/config.toml", b"x = 1\n");
         put(".config/herdr/session.json", b"{}");
@@ -958,6 +960,8 @@ mod tests {
         assert!(has(".local/share/icons/hicolor/256x256/apps/maps.png"));
         assert!(has(".claude/skills/review/scripts/run.sh"));
         assert!(has(".config/herdr/config.toml"));
+        assert!(has(".claude/projects/x/memory/MEMORY.md"));
+        assert!(has(".claude/projects/x/memory/mine.md"));
         for p in [
             ".gemini/AGENTS.md",
             ".gemini/config/skills/mine/SKILL.md",

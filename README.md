@@ -203,7 +203,8 @@ project of their own ([docs/providers.md](docs/providers.md)).
   the others, as choosing it in the menu does; one not installed there waits.
 - **AI agents:** what you wrote or chose for them: the settings, instructions
   (`CLAUDE.md`, `AGENTS.md`), skills (theirs and `~/.agents/skills`), commands
-  and themes of Claude Code, Codex, Gemini, Antigravity, opencode, pi, Grok and Copilot.
+  and themes of Claude Code, Codex, Gemini, Antigravity, opencode, pi, Grok and Copilot,
+  and what Claude Code remembers of each project (its memory files).
   Never their sign-ins, sessions, history, caches or databases: any credential,
   auth or token file is refused by name. API keys written into these settings
   files (a provider's `apiKey`, an MCP server's env or headers) sync with them,

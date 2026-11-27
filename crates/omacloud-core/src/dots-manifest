@@ -85,6 +85,9 @@ shared .claude/skills/**
 local .claude/skills/synced/**
 shared .claude/hooks/**
 shared .claude/themes/**
+# what Claude Code remembers, per project: a project's folder is named for
+# its path, the same on each computer that home syncs to
+shared .claude/projects/*/memory/**
 machine .claude/settings.local.json
 local .claude/.credentials.json
 shared .codex/AGENTS.md
