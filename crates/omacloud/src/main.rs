@@ -309,11 +309,16 @@ enum Cmd {
 /// Where a bucket is: a provider's shorthand, or any S3 endpoint.
 #[derive(clap::Args, Clone, Debug, Default)]
 struct BucketArgs {
-    /// Who keeps the files: `dropbox` (allowed in the browser), or a bucket:
+    /// Who keeps the files: `dropbox` (allowed in the browser), a bucket:
     /// `r2` (with --account), `hetzner` (with --location) or `s3` (with
-    /// --endpoint)
+    /// --endpoint), or `folder` (with --path)
     #[arg(long, value_enum)]
     provider: Option<Provider>,
+    /// With `--provider folder`: a folder on a drive or a NAS's share, there
+    /// on every computer of the account (it needs hard links: ext4, btrfs,
+    /// NFS; not exFAT or FAT)
+    #[arg(long)]
+    path: Option<PathBuf>,
     /// Cloudflare account id, from the R2 overview page
     #[arg(long)]
     account: Option<String>,
@@ -406,11 +411,68 @@ enum Provider {
     R2,
     Hetzner,
     S3,
+    /// A folder every computer of the account reaches: a drive, or a NAS's
+    /// share (`init` only)
+    Folder,
 }
 
 impl BucketArgs {
     fn given(&self) -> bool {
-        self.provider.is_some() || self.bucket.is_some() || self.endpoint.is_some()
+        self.provider.is_some() || self.bucket.is_some() || self.endpoint.is_some() || self.path.is_some()
+    }
+
+    /// The folder `--provider folder --path` names, once it's seen to be
+    /// there and to take hard links: `None` for any other provider. Nothing
+    /// is made in it yet.
+    fn folder(&self) -> Result<Option<PathBuf>, CliError> {
+        if self.provider != Some(Provider::Folder) {
+            if self.path.is_some() {
+                return Err(fail::usage("--path goes with --provider folder"));
+            }
+            return Ok(None);
+        }
+        if self.bucket.is_some()
+            || self.access_key_id.is_some()
+            || self.endpoint.is_some()
+            || self.account.is_some()
+            || self.location.is_some()
+            || self.root.is_some()
+            || self.coordination_bucket.is_some()
+        {
+            return Err(fail::usage("a folder takes only --path: no bucket, key or root"));
+        }
+        let path = self
+            .path
+            .as_ref()
+            .ok_or_else(|| fail::usage("this provider needs the folder: --path"))?;
+        let path = std::path::absolute(path).map_err(|e| fail::usage(format!("{}: {e}", path.display())))?;
+        if !path.is_dir() {
+            return Err(
+                fail::unavailable(format!("{} isn't a folder that's there", path.display()))
+                    .hint("plug in or mount the drive, and make the folder, first"),
+            );
+        }
+        // create-only writes are hard links there (DirCoordinator)
+        let probe = path.join(format!(".omacloud-check-{}", std::process::id()));
+        let link = probe.with_extension("link");
+        let wrote = fs::write(&probe, b"");
+        let linked = wrote.is_ok() && fs::hard_link(&probe, &link).is_ok();
+        _ = fs::remove_file(&probe);
+        _ = fs::remove_file(&link);
+        if let Err(e) = wrote {
+            return Err(fail::setup(
+                "folder_not_writable",
+                format!("{} can't be written to: {e}", path.display()),
+            ));
+        }
+        if !linked {
+            return Err(fail::setup(
+                "no_hard_links",
+                format!("{} can't keep an account: its filesystem has no hard links", path.display()),
+            )
+            .hint("use a drive formatted as ext4 or btrfs, or a NAS's NFS share; exFAT, FAT and most SMB shares have none"));
+        }
+        Ok(Some(path.join("Omacloud")))
     }
 
     /// The repository these name, with all of its key but the secret: what's
@@ -425,6 +487,11 @@ impl BucketArgs {
             )
         })?;
         let (endpoint, region) = match provider {
+            Provider::Folder => {
+                return Err(fail::usage("a folder holds the account of the one who set it up").hint(
+                    "the other person sets up their own: `omacloud init --provider folder --path <their folder>`",
+                ));
+            }
             Provider::Dropbox => {
                 if self.bucket.is_some() || self.access_key_id.is_some() || self.coordination_bucket.is_some() {
                     return Err(fail::usage(
@@ -1297,6 +1364,15 @@ fn follow_bucket_key(paths: &Paths, e: &mut Engine) -> Result<()> {
 
 fn engine(paths: &Paths, config: &Config) -> Result<Engine> {
     let signing = load_or_create_key(&paths.device_key())?;
+    // an account in a folder whose drive isn't there: opening it would make
+    // an empty one where the drive mounts, on this computer's own disk
+    if config.coordinator != BUCKET && !Path::new(&config.coordinator).join("account.json").exists() {
+        return Err(
+            fail::unavailable(format!("the account's folder isn't there: {}", config.coordinator))
+                .hint("plug in or mount the drive it's on")
+                .into(),
+        );
+    }
     let coord = coordinator(config)?;
     let mut repo = config.repo.clone();
     config.limits.apply(&mut repo);
@@ -1425,6 +1501,20 @@ fn init_target(
     }
     if repo.is_some() {
         return Err(fail::usage("--repo goes with --coordinator; a bucket needs neither").into());
+    }
+    if let Some(base) = bucket.folder()? {
+        if join_code.is_some() {
+            return Err(fail::usage("a join code is for a bucket; a folder is joined by naming it again").into());
+        }
+        return Ok(InitTarget {
+            coordinator: base.join("coordination").to_string_lossy().into_owned(),
+            repo: RepoSpec {
+                repository: base.join("repo").to_string_lossy().into_owned(),
+                options: BTreeMap::new(),
+            },
+            coordination_bucket: None,
+            account: None,
+        });
     }
     if let Some(code) = join_code {
         if bucket.given() {

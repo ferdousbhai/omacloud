@@ -441,6 +441,74 @@ fn join_b(h: &Home, recovery: &str) -> String {
 }
 
 #[test]
+fn an_account_in_a_folder_waits_for_its_drive() {
+    let h = Home::new();
+    let drive = h.path("drive");
+    std::fs::create_dir_all(&drive).unwrap();
+    let init = |device: &str| {
+        let folder = h.path(&device.to_uppercase());
+        h.cmd(
+            device,
+            &[
+                "init",
+                "--folder",
+                folder.to_str().unwrap(),
+                "--provider",
+                "folder",
+                "--path",
+                drive.to_str().unwrap(),
+                "--device",
+                device,
+            ],
+        )
+    };
+    // a folder is named, there, and the only thing given
+    let e = machine_error(
+        &h.run("a", &["init", "--provider", "folder", "--device", "a"]),
+        "usage",
+        "usage",
+    );
+    assert!(e["message"].as_str().unwrap().contains("--path"), "{e}");
+    let nowhere = h.path("nowhere");
+    let out = h.run(
+        "a",
+        &["init", "--provider", "folder", "--path", nowhere.to_str().unwrap()],
+    );
+    _ = machine_error(&out, "unavailable", "unavailable");
+    assert!(!nowhere.exists(), "nothing is made where no drive is");
+    let out = h.run("a", &["init", "--provider", "r2", "--path", drive.to_str().unwrap()]);
+    _ = machine_error(&out, "usage", "usage");
+
+    let (out, code_a) = on_tty(init("a"));
+    assert_eq!(code_a, 0, "{out}");
+    assert!(drive.join("Omacloud/coordination/account.json").exists());
+    assert!(drive.join("Omacloud/repo/config").exists());
+    // another computer joins by naming the folder, and is approved
+    let out = init("b").output().unwrap();
+    assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
+    let fp = json(&out)["data"]["fingerprint"].as_str().unwrap().to_string();
+    assert_eq!(code(&h.run("a", &["devices", "approve", &fp])), 0);
+    std::fs::write(h.path("A/note.txt"), "hello").unwrap();
+    assert_eq!(code(&h.run("a", &["sync"])), 0);
+    assert_eq!(code(&h.run("b", &["sync"])), 0);
+    assert_eq!(std::fs::read_to_string(h.path("B/note.txt")).unwrap(), "hello");
+
+    // the drive unplugged: where it mounts is an empty folder, and stays one
+    let away = h.path("drive.away");
+    std::fs::rename(&drive, &away).unwrap();
+    std::fs::create_dir(&drive).unwrap();
+    for command in ["sync", "status"] {
+        let e = machine_error(&h.run("b", &[command]), "unavailable", "unavailable");
+        assert!(e["hint"].as_str().unwrap().contains("drive"), "{e}");
+    }
+    assert_eq!(std::fs::read_dir(&drive).unwrap().count(), 0);
+    // and back
+    std::fs::remove_dir(&drive).unwrap();
+    std::fs::rename(&away, &drive).unwrap();
+    assert_eq!(code(&h.run("b", &["sync"])), 0);
+}
+
+#[test]
 fn watch_exits_2_once_this_computer_is_removed() {
     let h = Home::new();
     let recovery = h.create();

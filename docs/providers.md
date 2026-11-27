@@ -1,8 +1,9 @@
 # Where your files live
 
-Omacloud keeps everything in your own Dropbox, or an S3 bucket you rent yourself.
+Omacloud keeps everything in your own Dropbox, or an S3 bucket you rent yourself,
+or a folder on a drive or NAS of yours ([below](#a-folder-a-drive-or-a-nas)).
 You pay the provider for what you store and transfer, at their prices; Omacloud
-charges nothing. Each person needs a Dropbox, or a bucket and key, of their own.
+charges nothing. Each person needs a Dropbox, a bucket and key, or a folder of their own.
 
 ## Dropbox
 
@@ -76,6 +77,31 @@ once. Keep the bucket private, the usual default.
 `omacloud init --provider s3 --endpoint <url> --region <region> --bucket <name>
 --access-key-id <id>`. AWS S3, MinIO and SeaweedFS have create-only writes.
 Backblaze B2 was reported to refuse them.
+
+## A folder: a drive or a NAS
+
+`omacloud init --provider folder --path <folder>` keeps the account in a folder you
+name, under `Omacloud/` in it: on a USB drive, a second disk, or a NAS's share
+mounted on the computer. Nothing is rented and nothing leaves the house; it's as
+encrypted there as anywhere else, so a lost drive gives nothing away.
+
+- **It needs hard links**, which is how two computers are kept from writing the same
+  record: ext4, btrfs or an NFS share have them; exFAT, FAT and most SMB shares
+  don't, and `init` refuses such a folder before an account depends on it.
+- **Another computer joins by naming the folder** as it sees it (`omacloud init
+  --provider folder --path <folder>`, the path its own), and is approved on one
+  already in. So the computers of an account need to reach the same folder: a NAS's
+  share for computers that sync with each other, a USB drive for one computer's
+  versions and deleted files, or to carry between two.
+- **While the drive isn't there**, nothing syncs and nothing is written where it
+  mounts; `omacloud status` says the folder isn't there, and sync carries on once it
+  is.
+- **It's one copy, where you keep it.** A fire or a theft that takes the computers
+  takes the drive too; a bucket or Dropbox is somewhere else.
+- **Not there:** Omacloud Drive in a browser, which reads a bucket or a Dropbox
+  (`omacloud mount` shows every file on a computer), and a key to change after a
+  computer is lost: whoever reaches the folder reaches its encrypted files, so
+  `omacloud devices revoke <fingerprint> --rotate` moves to a new encryption key.
 
 ## Delete protection
 

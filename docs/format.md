@@ -149,7 +149,9 @@ write a stray entry), then probe `seq+1`, `seq+2`, ... until one is missing
 
 ### The directory form
 
-`DirCoordinator` (`head.rs`), for development and tests, keeps the same
+`DirCoordinator` (`head.rs`), for an account in a folder (`init --provider
+folder`: `<folder>/Omacloud/coordination`, the repository beside it at
+`<folder>/Omacloud/repo`) and for development and tests, keeps the same
 records as files in one directory: `account.json`, `heads/`, `devices/`,
 `epochs/`, `grants/`, `requests/`, `synced/`, with the same names and
 numbering, except:

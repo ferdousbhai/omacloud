@@ -94,7 +94,8 @@ owner runs `omacloud devices revoke FINGERPRINT --lost`; the rest is in
 ## Setup (only when requested)
 
 Storage is the owner's own Dropbox (the simplest), or an S3 bucket: Cloudflare R2,
-Hetzner or any other with create-only writes (https://github.com/ferdousbhai/omacloud/blob/master/docs/providers.md). Agree on device name, folders, and whether
+Hetzner or any other with create-only writes, or a folder on a drive or NAS of theirs
+(https://github.com/ferdousbhai/omacloud/blob/master/docs/providers.md). Agree on device name, folders, and whether
 to sync settings first.
 
 - New account: on Dropbox, the owner runs `omacloud init --provider dropbox` in their
@@ -112,6 +113,12 @@ to sync settings first.
   runs `omacloud invite` with those details; the person runs `omacloud init` with
   the code in `OMACLOUD_JOIN_CODE`, and gets an account and recovery code of their
   own. Never put two people on one account: its computers read all of it.
+- A folder: `omacloud init --provider folder --path <folder>` on a drive or a NAS's
+  share with hard links (ext4, btrfs, NFS; `no_hard_links` otherwise), in the owner's
+  terminal. Another computer joins by running the same with the folder as it sees it,
+  and is approved. `unavailable` with "the account's folder isn't there" means the
+  drive isn't plugged in or mounted: nothing to fix in Omacloud. No Omacloud Drive
+  in a browser and no `bucket` commands there.
 - `init --repo <path> --coordinator <directory>` uses plain directories, for
   development and tests only. Point test accounts at `OMACLOUD_CONFIG`, never
   the owner's real `~/.config/omacloud`.

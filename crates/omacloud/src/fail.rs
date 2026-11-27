@@ -10,7 +10,7 @@
 //! |---|---|---|
 //! | `error` (anything unrecognised), `verification_failed`, `pending`, `command_failed`, `cancelled` | `error` | 1 |
 //! | `usage`, `confirmation_required`, `terminal_required`, `ambiguous`, `already_set_up`, `exists`, `unsupported`, `same_key` | `usage` | 2 |
-//! | `not_set_up`, `storage_gone`, `dropbox_not_allowed`, `dropbox_code_rejected`, `not_approved`, `removed`, `recovery_code_rejected`, `join_code_rejected`, `no_account`, `key_refused`, `shares_rejected`, `settings_off` | `setup` | 3 |
+//! | `not_set_up`, `storage_gone`, `dropbox_not_allowed`, `dropbox_code_rejected`, `not_approved`, `removed`, `recovery_code_rejected`, `join_code_rejected`, `no_account`, `key_refused`, `shares_rejected`, `settings_off`, `no_hard_links`, `folder_not_writable` | `setup` | 3 |
 //! | `not_found` | `not_found` | 4 |
 //! | `unavailable` | `unavailable` | 5 |
 

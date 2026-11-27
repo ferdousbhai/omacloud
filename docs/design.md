@@ -15,8 +15,10 @@ files, and beside it, under `omacloud-coordination/`, the records that keep your
 computers in step. Dropbox or any S3 store with create-only writes works
 ([providers.md](providers.md)); `omacloud init` checks for them before an
 account depends on them (`BucketCoordinator::check`). Omacloud runs no storage
-and no service an account depends on. For development and tests, `omacloud init
---repo <path> --coordinator <dir>` keeps both in directories instead. Either way
+and no service an account depends on. `omacloud init --provider folder --path
+<folder>` keeps both in a folder of a drive or NAS instead, as directories
+(`DirCoordinator`), and `--repo <path> --coordinator <dir>` does for development
+and tests. Either way
 the storage sees only encrypted objects, and nothing below depends on trusting
 it.
 
@@ -86,8 +88,9 @@ The heads, device chain and epoch records are append-only logs
 (`head.rs`'s `Coordinator`), objects in the bucket (`bucket.rs`). Appending is
 a create-only write (`If-None-Match: *`, or Dropbox's add mode): the storage refuses it
 if another computer took that position first, which makes it a compare and swap.
-For development they are files in a shared directory (`DirCoordinator`), each
-hard linked into place so a taken name fails. Every write the others need also rewrites an
+In a folder they are files in a directory (`DirCoordinator`), each
+hard linked into place so a taken name fails; an account whose folder isn't
+there (a drive unplugged) is left alone, never made again where it mounts. Every write the others need also rewrites an
 object named `changed`; a computer reads it and syncs when it moves, with a
 full sync now and then regardless. It reads every ten seconds while anything moved
 in the last ten minutes, then every minute, and after half an hour every fifteen

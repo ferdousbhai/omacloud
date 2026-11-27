@@ -13,8 +13,9 @@ only ever holds what it can't read. Underneath it's plain restic, so you can
 always restore without Omacloud. [docs/design.md](docs/design.md) explains
 how it protects your data.
 
-Storage is your own: your Dropbox, or an S3 bucket at Cloudflare R2, Hetzner or any
-other provider with create-only writes ([docs/providers.md](docs/providers.md)).
+Storage is your own: your Dropbox, an S3 bucket at Cloudflare R2, Hetzner or any
+other provider with create-only writes, or a folder on a drive or NAS of yours
+([docs/providers.md](docs/providers.md)).
 You pay your provider, if anything; Omacloud runs no storage and charges
 nothing. Your family and friends each get an account of their own, in their own
 Dropbox or a bucket you set up for them ([below](#family-and-friends)).
@@ -95,6 +96,15 @@ omacloud init --provider s3 --endpoint <url> --bucket <name> --access-key-id <id
 ```
 
 It asks for the key's secret (or takes it from `OMACLOUD_SECRET_ACCESS_KEY`).
+
+Or keep it at home, in a folder on a USB drive or a NAS's share (one with hard
+links: ext4, btrfs or NFS; [docs/providers.md](docs/providers.md#a-folder-a-drive-or-a-nas)
+says what that gives and doesn't):
+
+```sh
+omacloud init --provider folder --path /run/media/$USER/Backup
+```
+
 Either way it checks that the storage can hold an account, and shows your **recovery code**
 once: write it down and keep it offline. With it you can add a computer when
 no other is at hand and recover everything; without it and without a
