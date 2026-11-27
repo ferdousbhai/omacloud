@@ -120,6 +120,22 @@ pub unsafe extern "C" fn unseal(seed: *const u8, seed_len: usize, sealed: *const
     }))
 }
 
+/// Seal with the open repository's key (see [`Reader::seal`]): what the page
+/// leaves beside the repository for the account's computers alone to read.
+///
+/// # Safety
+///
+/// As [`open`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn seal(nonce: *const u8, nonce_len: usize, plain: *const u8, plain_len: usize) -> *mut u8 {
+    answer(with(|r| {
+        let nonce: [u8; 16] = unsafe { bytes(nonce, nonce_len) }
+            .try_into()
+            .map_err(|_| "a nonce is 16 bytes".to_string())?;
+        r.seal(nonce, unsafe { bytes(plain, plain_len) })
+    }))
+}
+
 /// A file for the account's inbox (see [`crate::upload::make`]); `mtime` is
 /// its number as text.
 ///

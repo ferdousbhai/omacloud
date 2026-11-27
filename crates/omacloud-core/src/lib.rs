@@ -26,7 +26,7 @@ pub mod theme;
 pub mod throttle;
 pub mod wifi;
 
-pub use bucket::{BucketCoordinator, Inbox, Links};
+pub use bucket::{Browsers, BucketCoordinator, Inbox, Links};
 pub use devices::{Anchor, DeviceChain, DeviceError, JoinRequest, fingerprint};
 pub use head::{Coordinator, DirCoordinator, Head, HeadError, HeadTracker};
 pub use ignore::Ignores;

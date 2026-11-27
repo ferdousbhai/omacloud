@@ -130,6 +130,22 @@ good as the keys, so it's shown as a code for a camera and only to a terminal.
 The page runs whatever the site serves, so using it trusts the site's code that
 day, as any web app does; the computers' sync never depends on it.
 
+A browser can stay signed in (`web/remember.js`), which changes two things
+above, and only for someone who asks for it. The keys then rest on that
+device: in the browser's own storage, encrypted under a key that comes from
+a passkey where the browser can make one give it (WebAuthn's `prf`), so
+each opening takes the device's fingerprint or face; elsewhere under a key
+the browser holds and won't export, which the device's lock is all that
+guards, and the page says which. And the page's code is trusted not for the
+day a link was used but on every later visit, as it runs with the keys in
+reach each time. The browser says it stays signed in with a note in the
+bucket under `omacloud-browsers/`, sealed with the repository's key, which
+the computers list; a browser that kept the keys and wrote no note couldn't
+be told from one that pasted a code and remembered it, so the list is what
+was said, not a wall. What ends a lost phone's reach is what ends a lost
+computer's: a new repository key and a new key to the storage (`omacloud
+browsers remove`), after which no browser's kept keys open anything.
+
 A browser holds no device key, so it can't push a version. To upload, it
 leaves each file in the bucket, in `omacloud-inbox/`, sealed with the
 repository's key, and a computer's daemon takes it in: saves it into the

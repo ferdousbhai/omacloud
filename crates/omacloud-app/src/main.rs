@@ -2266,7 +2266,11 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
                     ],
                     move |id| {
                         if id == "lost" {
-                            cut_off(&ui3, &fp2, on_dropbox);
+                            cut_off(
+                                &ui3,
+                                &["omacloud", "devices", "revoke", fp2.as_str(), "--yes", "--lost"],
+                                on_dropbox,
+                            );
                         } else {
                             ui3.act(
                                 &["omacloud", "devices", "revoke", fp2.as_str(), "--yes"],
@@ -2281,6 +2285,50 @@ fn devices(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
         g.add(&rw.widget);
     }
     column.append(&g.widget);
+
+    let browsers = list("browsers");
+    if !browsers.is_empty() {
+        let g = group(
+            &tr("Browsers that stay signed in"),
+            &tr("A phone or another device that opens your files in its browser without a new code each time."),
+        );
+        for b in browsers {
+            let (name, id) = (text(&b["name"]), text(&b["id"]));
+            let lock = if b["lock"] == "passkey" {
+                tr("Opens with its fingerprint or face")
+            } else {
+                tr("Opens for anyone who can unlock it")
+            };
+            let rw = row(&name, &lock);
+            let remove = button(&tr("Remove…"), Some("flat"));
+            let ui2 = ui.clone();
+            remove.connect_clicked(move |_| {
+                let ui3 = ui2.clone();
+                let id = id.clone();
+                let name = name.clone();
+                ui2.confirm(
+                    move || tr!("Remove {}?", name),
+                    || {
+                        tr(
+                            "Omacloud changes your keys so it can't open anything. That uploads everything again, so \
+                             it can take a while, and every browser that stays signed in has to be paired again.",
+                        )
+                    },
+                    &[("remove", || tr("Remove"), Appearance::Destructive)],
+                    move |_| {
+                        cut_off(
+                            &ui3,
+                            &["omacloud", "browsers", "remove", id.as_str(), "--yes"],
+                            on_dropbox,
+                        )
+                    },
+                );
+            });
+            rw.add_suffix(&remove);
+            g.add(&rw.widget);
+        }
+        column.append(&g.widget);
+    }
 
     column.append(&each_computer(ui, &s["choices"]).widget);
 
@@ -2447,8 +2495,9 @@ fn back_up_only(ui: &Rc<Ui>) {
     );
 }
 
-/// A computer lost or stolen: removed, and cut off as far as the storage allows.
-fn cut_off(ui: &Rc<Ui>, fingerprint: &str, on_dropbox: bool) {
+/// A computer lost or stolen, or a browser that stayed signed in: removed by
+/// `argv`, and cut off as far as the storage allows.
+fn cut_off(ui: &Rc<Ui>, argv: &[&str], on_dropbox: bool) {
     let wait = move || {
         if on_dropbox {
             tr(
@@ -2466,15 +2515,11 @@ fn cut_off(ui: &Rc<Ui>, fingerprint: &str, on_dropbox: bool) {
     };
     let busy = waiting(ui, wait);
     let ui = ui.clone();
-    cli_then(
-        &["omacloud", "devices", "revoke", fingerprint, "--yes", "--lost"],
-        Vec::new(),
-        move |removed| {
-            busy.force_close();
-            ui.toast(&removed.map_or_else(|e| e.shown(), |_| done));
-            ui.refresh();
-        },
-    );
+    cli_then(argv, Vec::new(), move |removed| {
+        busy.force_close();
+        ui.toast(&removed.map_or_else(|e| e.shown(), |_| done));
+        ui.refresh();
+    });
 }
 
 /// A join code for adding another computer to this account.

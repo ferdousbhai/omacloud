@@ -441,6 +441,17 @@ fn join_b(h: &Home, recovery: &str) -> String {
 }
 
 #[test]
+fn only_an_account_in_a_bucket_has_browsers_that_stay_signed_in() {
+    let h = Home::new();
+    h.create();
+    let e = machine_error(&h.run("a", &["browsers"]), "unsupported", "usage");
+    assert!(e["hint"].as_str().is_some(), "{e}");
+    // and status says none, without asking anything
+    let status = json(&h.run("a", &["status"]));
+    assert_eq!(status["data"]["browsers"], serde_json::json!([]));
+}
+
+#[test]
 fn a_computers_name_is_one_line() {
     let h = Home::new();
     for name in ["a\nb", "", "tab\tbed"] {

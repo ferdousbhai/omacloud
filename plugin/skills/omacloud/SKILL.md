@@ -127,7 +127,10 @@ In a browser: omacloud.computer/files shows the account's files. The
 owner signs in with `omacloud web-link` (a code for a phone's camera, good for five
 minutes) or Open on a Phone in the app; both print a secret, so the owner runs them.
 `omacloud web-link --close` closes an open link and prints nothing secret. A file
-uploaded there reaches a computer within about a minute, if one is on.
+uploaded there reaches a computer within about a minute, if one is on. A phone can
+stay signed in (Stay Signed In on that page); `omacloud browsers` lists the browsers
+that do, and `omacloud browsers remove ID` cuts a lost one off by changing the
+account's keys, as `devices revoke --lost` does: it needs `--yes`, the owner's to give.
 
 In Omarchy's bar a cloud shows how sync stands; `omacloud bar on` and `omacloud bar off`
 put it there or take it out.

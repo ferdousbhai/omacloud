@@ -14,7 +14,12 @@
 <form id="connect" autocomplete="off">
 <svg class="mark" viewBox="0 0 64 44" aria-hidden="true"><path d="M50 44H16a14 14 0 0 1-2.6-27.8A19 19 0 0 1 50.6 14 15 15 0 0 1 50 44z"/></svg>
 <h1>Omacloud</h1>
-<p class="note">Your files, read in this browser straight from your own storage. What you enter stays in this tab and is gone when it closes.</p>
+<div id="kept" hidden>
+<p id="kept-words" class="note"></p>
+<button id="kept-open" type="button" class="primary">Open</button>
+<button id="kept-forget" type="button">Forget This Device</button>
+</div>
+<p class="note">Your files, read in this browser straight from your own storage. What you enter stays in this tab and is gone when it closes, unless you choose to stay signed in.</p>
 <p class="note">On one of your computers, open Omacloud and press Open on a Phone (or run <code>omacloud web-link</code>), then point this device's camera at the code. Nothing to type.</p>
 <label><span>Or paste the code <code>omacloud web-code</code> prints</span>
 <textarea id="pasted" rows="3" spellcheck="false" placeholder="omacloud-web-…"></textarea></label>
@@ -38,8 +43,11 @@
 <svg class="mark" viewBox="0 0 64 44" aria-hidden="true"><path d="M50 44H16a14 14 0 0 1-2.6-27.8A19 19 0 0 1 50.6 14 15 15 0 0 1 50 44z"/></svg>
 <strong>Omacloud</strong>
 <span class="grow"></span>
-<button id="home-lock" type="button" title="Forget the keys and close your files">Lock</button>
+<button id="home-stay" type="button" hidden title="Keep this device signed in, behind its fingerprint or face where it has one">Stay Signed In</button>
+<button id="home-forget" type="button" hidden title="Stop keeping this device signed in">Forget This Device</button>
+<button id="home-lock" type="button" title="Close your files">Lock</button>
 </header>
+<p id="home-status" class="note" role="status"></p>
 <div id="tiles">
 <button id="home-files" type="button" class="tile"><svg viewBox="0 0 64 64" aria-hidden="true"><path class="folder-back" d="M6 14a4 4 0 0 1 4-4h14l6 6h24a4 4 0 0 1 4 4v6H6z"/><path class="folder-front" d="M6 22h52v26a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4z"/></svg><strong>Files</strong><span>Every folder you sync</span></button>
 <button id="home-photos" type="button" class="tile"><svg viewBox="0 0 64 64" aria-hidden="true"><rect class="tile-photo" x="8" y="12" width="48" height="40" rx="5"/><circle class="tile-sun" cx="23" cy="26" r="5"/><path class="tile-hill" d="M8 46l14-13 10 9 9-8 15 13v0a5 5 0 0 1-5 5H13a5 5 0 0 1-5-5z"/></svg><strong>Photos</strong><span>The pictures in them</span></button>
@@ -53,7 +61,7 @@
 <button id="go-home" type="button" title="Home"><svg class="mark" viewBox="0 0 64 44" aria-hidden="true"><path d="M50 44H16a14 14 0 0 1-2.6-27.8A19 19 0 0 1 50.6 14 15 15 0 0 1 50 44z"/></svg>
 <strong>Omacloud</strong></button>
 <span class="grow"></span>
-<button id="lock" type="button" title="Forget the keys and close your files">Lock</button>
+<button id="lock" type="button" title="Close your files">Lock</button>
 </header>
 <nav id="sidebar" aria-label="Folders"></nav>
 <section id="main">

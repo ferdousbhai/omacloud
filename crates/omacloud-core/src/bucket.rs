@@ -265,6 +265,98 @@ impl Inbox {
     }
 }
 
+/// Where a browser that stays signed in says so, beside the repository.
+const BROWSERS: &str = "omacloud-browsers";
+
+/// The browsers that keep an account's keys (a phone that stays signed in),
+/// as each said so itself: a small sealed note under a name it chose, which
+/// it writes over when it stops. The notes are what a person is shown; a
+/// browser that keeps the keys and says nothing isn't among them, as nothing
+/// could make it be.
+pub struct Browsers {
+    op: opendal::Operator,
+    prefix: String,
+}
+
+impl Browsers {
+    /// # Errors
+    ///
+    /// If `repo` isn't in a bucket, or its options don't make an operator.
+    pub fn beside(repo: &RepoSpec) -> Result<Self> {
+        let scheme = repo
+            .repository
+            .strip_prefix("opendal:")
+            .context("a browser stays signed in to an account in a bucket")?;
+        let mut options = repo.options.clone();
+        let prefix = repo.under_root(BROWSERS);
+        _ = options.insert("root".into(), prefix.clone());
+        let _guard = runtime().enter();
+        let op = opendal::Operator::via_iter(scheme, options)
+            .with_context(|| format!("opening the {scheme} location for browsers"))?
+            .layer(RetryLayer::new().with_jitter());
+        Ok(Self { op, prefix })
+    }
+
+    /// The notes' folder in the bucket, as a browser writes to it.
+    #[must_use]
+    pub fn prefix(&self) -> &str {
+        self.prefix.trim_matches('/')
+    }
+
+    /// Each note's name with what it holds, sealed.
+    ///
+    /// # Errors
+    ///
+    /// If the storage can't be reached.
+    pub fn notes(&self) -> Result<Vec<(String, Vec<u8>)>> {
+        runtime().block_on(async {
+            let mut found = Vec::new();
+            for entry in self.op.list("/").await.context("listing browsers")? {
+                let name = entry.path().to_string();
+                if name.ends_with('/') {
+                    continue;
+                }
+                match self.op.read(&name).await {
+                    Ok(note) => found.push((name, note.to_vec())),
+                    // gone between the listing and the read
+                    Err(e) if e.kind() == ErrorKind::NotFound => {}
+                    Err(e) => return Err(e).context("reading a browser's note"),
+                }
+            }
+            Ok(found)
+        })
+    }
+
+    /// # Errors
+    ///
+    /// If the storage can't be reached.
+    pub fn remove(&self, name: &str) -> Result<()> {
+        runtime()
+            .block_on(self.op.delete(name))
+            .context("removing a browser's note")
+    }
+
+    /// Remove every note: after the account's keys changed, no browser that
+    /// kept the old ones opens anything.
+    ///
+    /// # Errors
+    ///
+    /// If the storage can't be reached.
+    pub fn clear(&self) -> Result<()> {
+        runtime().block_on(async {
+            for entry in self.op.list("/").await.context("listing browsers")? {
+                if !entry.path().ends_with('/') {
+                    self.op
+                        .delete(entry.path())
+                        .await
+                        .context("removing a browser's note")?;
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
 /// Parallel reads when catching up on a long history.
 const READERS: usize = 16;
 

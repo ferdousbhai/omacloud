@@ -52,6 +52,7 @@ an OpenDAL scheme (`opendal:s3` or `opendal:dropbox`) and options,
   omacloud-links/<16 hex>                    a web link's sealed keys, minutes at most
   omacloud-inbox/<24 hex>                    files a browser uploaded, sealed
   omacloud-inbox/changed                     16 random bytes, rewritten after uploads
+  omacloud-browsers/<24 hex>                 a browser that stays signed in, as it said, sealed
 ```
 
 ### The restic repositories
@@ -331,7 +332,7 @@ the sealed web code (section 3). The web code, JSON
 
 ```json
 {"v":1,"endpoint":"https://acct.r2.cloudflarestorage.com","bucket":"my-omacloud","root":"","region":"auto",
- "key":"AKIA…","secret":"…","password":"k7m2…",
+ "key":"AKIA…","secret":"…","password":"k7m2…","browsers":"omacloud-browsers",
  "upload":{"inbox":"omacloud-inbox","seed":"<base64url 32 bytes>",
   "endorsement":{"key":"0e44…","until":1795000000,"device":"5d2e…71b0","sig":"…"}}}
 ```
@@ -348,6 +349,23 @@ The link itself is never stored:
 `https://omacloud.computer/files/#link=<base64url(seed)>.<base64url(address)>`,
 `address` being a presigned GET of the object, good for five minutes, or
 Dropbox's temporary link (`main.rs`, `web_link`).
+
+### Browser note: `omacloud-browsers/<24 hex>`
+
+Named by 12 random bytes in hex, chosen by a browser that stays signed in
+(`web/remember.js`, `keep`), and sealed as an inbox item is, with the
+current repository's key and no signature (`web/app.js`, `record`;
+`omacloud/src/main.rs`, `BrowserNote`):
+
+```json
+{"v":1,"name":"iPhone, Safari","lock":"passkey","at":1795000000}
+```
+
+`lock` is `"passkey"` or `"device"`; `at` is Unix seconds. A browser that
+stops writes the same with `"gone":true` over it, and a computer removes
+it. All are removed when the repository key changes (`forget_browsers`).
+Like the inbox, they are under the epoch 0 `root`, at the web code's
+`browsers`.
 
 ### Inbox item: `omacloud-inbox/<24 hex>`
 

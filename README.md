@@ -352,6 +352,14 @@ it, so one of them has to be on. `omacloud web-code` prints a one-line code to p
 reads; keep that one private, since it doesn't run out. A bucket needs one rule first
 ([docs/providers.md](docs/providers.md#reading-in-a-browser)); an account in Dropbox needs nothing.
 
+A phone is for when you're away from your computers, so it can stay signed in: once it's open,
+press Stay Signed In. From then on omacloud.computer/files opens your files there with the
+phone's fingerprint or face (a passkey), with no new code; a browser that can't do that keeps
+the keys behind the phone's own lock, and says so. Opened that way it reads; to upload, open it
+with a new code from a computer. Your computers list the browsers that stay signed in
+(Devices in the app, or `omacloud browsers`). Forget This Device on the phone ends it; for a
+lost phone, Remove there (`omacloud browsers remove`) changes your keys, as for a lost computer.
+
 Leaving needs nothing from Omacloud: `omacloud export` prints the command that
 has plain restic or rustic restore everything from your storage, with the
 repository's password (and the bucket's key; Dropbox goes through rclone), and `omacloud export --to <folder>` copies the

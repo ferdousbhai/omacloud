@@ -43,6 +43,12 @@ gives for the sealed file, good until the file is taken back.
 The site's Worker serves it at omacloud.computer/files/ (`server/build-files.sh`
 puts it in place at deploy).
 
+Stay Signed In keeps what opened the account in this browser (`remember.js`):
+encrypted under a key from a passkey where the browser can (WebAuthn's `prf`
+extension), else under one the browser holds and won't export. The page leaves a
+sealed note beside the repository (`omacloud-browsers/`) so the person's
+computers can list the browser, and writes over it when told to forget.
+
 The bucket must allow the page's origin to read it (a CORS rule allowing `GET`
 from that origin, and `PUT` to upload); nothing else about the bucket changes.
 

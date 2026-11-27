@@ -5,6 +5,7 @@
 
 import { account, linked, pasted } from "./paste.js";
 import * as reader from "./reader.js";
+import * as remember from "./remember.js";
 import { Dropbox } from "./dropbox.js";
 import { Bucket } from "./s3.js";
 
@@ -128,8 +129,14 @@ async function readFile(node, progress) {
 	return new Blob(parts, { type: kindOf(node.name).type });
 }
 
-async function connect(form) {
-	const status = (words) => ($("signin-status").textContent = words);
+// What opened the account, as a web code has it: what staying signed in
+// keeps. And where the account's bucket lists the browsers that do.
+let current;
+let browsers = "";
+
+// The storage and the repository's key, from what the form holds: enough to
+// seal something for the account's computers, without reading its files.
+async function unlock(form) {
 	const field = (name) => form.elements[name].value.trim();
 	bucket = dropbox
 		? new Dropbox(dropbox)
@@ -141,9 +148,18 @@ async function connect(form) {
 				accessKeyId: field("key"),
 				secretAccessKey: form.elements.secret.value,
 			});
-	status("Opening…");
-	// let that show before the password is worked out, which takes a moment
-	await new Promise((shown) => setTimeout(shown, 30));
+	current = dropbox
+		? { dropbox, password: form.elements.password.value }
+		: {
+				endpoint: field("endpoint"),
+				bucket: field("bucket"),
+				root: field("root"),
+				region: field("region"),
+				key: field("key"),
+				secret: form.elements.secret.value,
+				password: form.elements.password.value,
+			};
+	if (browsers) current.browsers = browsers;
 	await reader.load("omacloud_web.wasm");
 	const keys = await bucket.list("keys");
 	if (!keys.length) throw new Error(dropbox ? "No Omacloud files in this Dropbox." : "No Omacloud files here: check the bucket and its folder.");
@@ -156,6 +172,14 @@ async function connect(form) {
 		} catch {}
 	}
 	if (!opened) throw new Error("The password doesn't open these files.");
+}
+
+async function connect(form) {
+	const status = (words) => ($("signin-status").textContent = words);
+	status("Opening…");
+	// let that show before the password is worked out, which takes a moment
+	await new Promise((shown) => setTimeout(shown, 30));
+	await unlock(form);
 	reader.file(await bucket.read("config"));
 
 	status("Reading the index…");
@@ -175,6 +199,71 @@ async function connect(form) {
 	$("signin").hidden = true;
 	await sidebar();
 	home();
+	await stayOffer();
+}
+
+// Staying signed in on this device (remember.js). The home page offers it,
+// or to stop, whichever applies.
+let keptHere = null;
+async function stayOffer() {
+	keptHere = await remember.kept();
+	$("home-stay").hidden = !remember.able() || !!keptHere;
+	$("home-forget").hidden = !keptHere;
+}
+// A browser that stays signed in says so in the account's bucket, sealed with
+// the repository's key, so the person's computers can list it; forgetting
+// writes over that with a note that it's gone, which they clear away.
+async function record(kept, gone) {
+	if (!current?.browsers) return;
+	const said = { v: 1, name: kept.name, lock: kept.lock, at: Math.floor(Date.now() / 1000), ...(gone ? { gone: true } : {}) };
+	const sealed = reader.seal(crypto.getRandomValues(new Uint8Array(16)), new TextEncoder().encode(JSON.stringify(said)));
+	await bucket.put(`${current.browsers}/${kept.id}`, sealed);
+}
+async function stay() {
+	if (!current) return;
+	const kept = await remember.keep(current, remember.deviceName());
+	await record(kept, false);
+	await stayOffer();
+	$("home-status").textContent =
+		kept.lock === "passkey"
+			? "This device stays signed in. Opening your files here asks for its fingerprint or face."
+			: "This device stays signed in. Anyone who can unlock it can open your files here.";
+}
+// Stop: the note that it's gone needs the account open, so on the sign-in
+// page it's opened first, as far as that takes; either way nothing stays here.
+async function forget() {
+	const kept = await remember.kept();
+	if (!kept) return;
+	try {
+		if (!current) await unlockKept();
+		await record(kept, true);
+	} catch {}
+	await remember.forget();
+	if ($("signin").hidden) {
+		await stayOffer();
+		$("home-status").textContent = "This device no longer stays signed in.";
+	} else location.reload();
+}
+// What's kept here into the form, and the storage and key from it.
+async function unlockKept() {
+	const found = await remember.open();
+	fill($("connect"), found);
+	dropbox = found.dropbox ?? null;
+	browsers = found.browsers || "";
+	uploader = null;
+	await unlock($("connect"));
+}
+async function openKept() {
+	const found = await remember.open();
+	fill($("connect"), found);
+	dropbox = found.dropbox ?? null;
+	browsers = found.browsers || "";
+	uploader = null;
+	try {
+		await connect($("connect"));
+	} catch (e) {
+		throw new Error(`${e.message} If the account's keys changed since this device was paired, pair it again: Open on a Phone in Omacloud, on one of your computers.`);
+	}
 }
 
 // Take in the index files not read yet.
@@ -643,7 +732,7 @@ async function act(work) {
 	try {
 		await work();
 	} catch (e) {
-		($("browser").hidden ? $("signin-status") : $("status")).textContent = e.message;
+		(!$("home").hidden ? $("home-status") : $("browser").hidden ? $("signin-status") : $("status")).textContent = e.message;
 	}
 }
 
@@ -674,6 +763,7 @@ async function follow({ seed, address }) {
 	fill($("connect"), found);
 	uploader = found.upload;
 	dropbox = found.dropbox ?? null;
+	browsers = found.browsers || "";
 	await connect($("connect"));
 }
 
@@ -688,6 +778,7 @@ $("pasted").addEventListener("input", (event) => {
 	}
 	fill(form, found);
 	dropbox = found.dropbox ?? null;
+	browsers = found.browsers || "";
 	// a Dropbox has nothing more to enter: open it
 	if (dropbox) return found.password ? act(() => connect(form)) : status("Found your Dropbox, but not the password: paste the whole code.");
 	const missing = !found.key || !found.secret || !found.password;
@@ -705,9 +796,14 @@ $("connect").addEventListener("submit", (event) => {
 	if (!pasted($("pasted").value)?.dropbox) dropbox = null;
 	act(() => connect(event.target));
 });
-// forgetting everything is a fresh page: nothing was kept anywhere else
+// closing your files is a fresh page: only what staying signed in keeps
+// (remember.js) outlasts it
 $("lock").addEventListener("click", () => location.reload());
 $("home-lock").addEventListener("click", () => location.reload());
+$("home-stay").addEventListener("click", () => act(stay));
+$("home-forget").addEventListener("click", () => act(forget));
+$("kept-open").addEventListener("click", () => act(openKept));
+$("kept-forget").addEventListener("click", () => act(forget));
 $("filter").addEventListener("input", show);
 $("filter").placeholder = "Search";
 $("sort").addEventListener("change", (event) => {
@@ -728,5 +824,16 @@ $("items").addEventListener("keydown", (event) => {
 const link = linked(location.hash);
 if (location.hash) history.replaceState(null, "", location.pathname + location.search);
 if (link) act(() => follow(link));
+else {
+	// a device that stays signed in: a passkey's opens at a press, as it has
+	// to ask; one this browser holds the key to opens by itself
+	const here = await remember.kept();
+	if (here) {
+		$("kept").hidden = false;
+		$("kept-words").textContent =
+			here.lock === "passkey" ? "This device stays signed in. Open your files with its fingerprint or face." : "This device stays signed in.";
+		if (here.lock === "device") act(openKept);
+	}
+}
 // another link followed in this same tab: start afresh with it
 addEventListener("hashchange", () => linked(location.hash) && location.reload());

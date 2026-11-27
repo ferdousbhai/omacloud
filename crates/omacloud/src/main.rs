@@ -179,6 +179,12 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<DevicesCmd>,
     },
+    /// The browsers that stay signed in to your files (a phone, at
+    /// omacloud.computer/files), as each said so; `remove` cuts one off
+    Browsers {
+        #[command(subcommand)]
+        action: Option<BrowsersCmd>,
+    },
     /// List the versions of a file, oldest first
     Versions {
         /// Path inside the synced folder
@@ -403,6 +409,22 @@ fn open_window(config: Option<PathBuf>, page: Option<Page>) -> Out {
     }
     let error = cmd.exec();
     Err(fail::unavailable(format!("opening {}: {error}", app.display())).into())
+}
+
+#[derive(Subcommand)]
+enum BrowsersCmd {
+    /// List them
+    List,
+    /// It's lost, or no longer yours: move to a new encryption key and a new
+    /// key to your storage, as for a lost computer. Every browser that stays
+    /// signed in has to be paired again; your computers switch by themselves
+    Remove {
+        /// Its id (or the start of it), from `omacloud browsers`
+        id: String,
+        /// Don't ask; needed where nobody can be asked
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -990,6 +1012,11 @@ impl Paths {
     }
     /// Its being there says the bar was decided: shown once by the daemon,
     /// or turned on or off by the person. So it's never put back unasked.
+    /// The browsers that stay signed in, as last listed: what `status` shows
+    /// without asking the storage each time.
+    fn browsers(&self) -> PathBuf {
+        self.data.join("browsers.json")
+    }
     fn bar_decided(&self) -> PathBuf {
         self.data.join("bar-decided")
     }
@@ -1175,6 +1202,8 @@ struct WebCode {
     key: String,
     secret: String,
     password: String,
+    /// Where a browser that stays signed in says so (`omacloud_core::Browsers`).
+    browsers: String,
     /// For an account in Dropbox, in place of the bucket's fields.
     #[serde(skip_serializing_if = "Option::is_none")]
     dropbox: Option<DropboxKey>,
@@ -1255,6 +1284,7 @@ impl WebCode {
             key: opt("access_key_id"),
             secret: opt("secret_access_key"),
             password: secret.password,
+            browsers: omacloud_core::Browsers::beside(&config.repo)?.prefix().to_string(),
             dropbox,
             upload: None,
         };
@@ -1867,6 +1897,11 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             }
             record_packages(config, &mut engine);
             _ = record_choices(paths, config, &mut engine);
+            if config.repo.is_remote()
+                && let Err(e) = browsers_now(paths, &mut engine, config)
+            {
+                warn!("listing the browsers that stay signed in: {e:#}");
+            }
             packages_at = Some(Instant::now());
         }
         // changes noticed while paused stay pending and go out on resume
@@ -2464,6 +2499,7 @@ fn run(cli: Cli) -> Out {
             .ids(vec![fp]))
         }
         Cmd::Devices { action } => devices(&paths, action.unwrap_or(DevicesCmd::List)),
+        Cmd::Browsers { action } => browsers(&paths, action.unwrap_or(BrowsersCmd::List)),
         Cmd::Versions { path } => {
             let config = load(&paths)?;
             let mut e = engine(&paths, &config)?;
@@ -2816,6 +2852,7 @@ fn run(cli: Cli) -> Out {
                 "move to a new repository key? This uploads everything again and deletes the old repository",
             )?;
             let r = engine(&paths, &config)?.rotate()?;
+            forget_browsers(&paths, &config);
             let summary = format!(
                 "moved to repository epoch {} ({} snapshots copied)",
                 r.epoch, r.snapshots
@@ -3121,6 +3158,7 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
             let mut rotated = Value::Null;
             if rotate || lost {
                 let r = e.rotate()?;
+                forget_browsers(paths, &config);
                 say!(
                     out,
                     "moved to repository epoch {} ({} snapshots copied); {name} can't read it",
@@ -3180,6 +3218,175 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
             Ok(Response::new(data, format!("removed {name} ({fp})"))
                 .human(out.trim_end())
                 .ids(vec![fp]))
+        }
+    }
+}
+
+/// After the account moved to a new repository key: no browser that stayed
+/// signed in opens anything, so their notes go. Best effort, as the key has
+/// changed either way; an account in a folder has none.
+fn forget_browsers(paths: &Paths, config: &Config) {
+    if let Ok(notes) = omacloud_core::Browsers::beside(&config.repo) {
+        match notes.clear() {
+            Ok(()) => _ = fs::write(paths.browsers(), "[]"),
+            Err(e) => warn!("clearing the list of browsers that stayed signed in: {e:#}"),
+        }
+    }
+}
+
+/// What a browser that stays signed in said of itself (`web/app.js`, `record`).
+#[derive(Deserialize)]
+struct BrowserNote {
+    v: u8,
+    name: String,
+    #[serde(default)]
+    lock: String,
+    #[serde(default)]
+    at: u64,
+    #[serde(default)]
+    gone: bool,
+}
+
+/// The browsers that stay signed in, as (id, note). A note that says its
+/// browser stopped is removed on the way; one this repository's key doesn't
+/// open (older than a key change that didn't clear it) is left out.
+fn browsers_now(
+    paths: &Paths,
+    e: &mut Engine,
+    config: &Config,
+) -> Result<(omacloud_core::Browsers, Vec<(String, BrowserNote)>)> {
+    let notes = omacloud_core::Browsers::beside(&config.repo).map_err(|_| {
+        fail::unsupported("a browser stays signed in to an account in a bucket or a Dropbox")
+            .hint("this account's files are in neither")
+    })?;
+    let sealed = notes.notes()?;
+    let mut found = Vec::new();
+    if sealed.is_empty() {
+        _ = fs::write(paths.browsers(), "[]");
+        return Ok((notes, found));
+    }
+    let (spec, secret, _) = e.repository()?;
+    let reader = spec
+        .key_files()?
+        .iter()
+        .find_map(|key| omacloud_web::Reader::open(&secret.password, key).ok())
+        .context("the repository's key didn't open")?;
+    for (id, sealed) in sealed {
+        let Some(note) = reader
+            .unseal(&sealed)
+            .ok()
+            .and_then(|plain| serde_json::from_slice::<BrowserNote>(&plain).ok())
+            .filter(|note| note.v == 1)
+        else {
+            continue;
+        };
+        if note.gone {
+            notes.remove(&id)?;
+        } else {
+            found.push((id, note));
+        }
+    }
+    found.sort_by(|a, b| (a.1.at, &a.0).cmp(&(b.1.at, &b.0)));
+    _ = fs::write(paths.browsers(), browser_list(&found).to_string());
+    Ok((notes, found))
+}
+
+fn browser_list(found: &[(String, BrowserNote)]) -> Value {
+    found
+        .iter()
+        .map(|(id, n)| json!({ "id": id, "name": n.name, "lock": n.lock, "since": n.at }))
+        .collect()
+}
+
+fn browsers(paths: &Paths, action: BrowsersCmd) -> Out {
+    let config = load(paths)?;
+    let mut e = engine(paths, &config)?;
+    e.sync()?; // pick up any key rotation first
+    let (notes, found) = browsers_now(paths, &mut e, &config)?;
+    match action {
+        BrowsersCmd::List => {
+            let mut out = String::new();
+            for (id, note) in &found {
+                let lock = if note.lock == "passkey" {
+                    "behind a passkey"
+                } else {
+                    "behind the device's lock"
+                };
+                say!(
+                    out,
+                    "{}  {}  ({lock})",
+                    &id[..id.len().min(8)],
+                    output::terminal_safe(&note.name)
+                );
+            }
+            if found.is_empty() {
+                say!(out, "no browser stays signed in");
+            }
+            let ids = found.iter().map(|(id, _)| id.clone()).collect();
+            Ok(Response::new(
+                json!({ "browsers": browser_list(&found) }),
+                format!(
+                    "{} browser{} signed in",
+                    found.len(),
+                    if found.len() == 1 { " stays" } else { "s stay" }
+                ),
+            )
+            .human(out.trim_end())
+            .ids(ids))
+        }
+        BrowsersCmd::Remove { id, yes } => {
+            let mut matching = found.iter().filter(|(full, _)| full.starts_with(&id));
+            let (Some((full, note)), None) = (matching.next(), matching.next()) else {
+                return Err(fail::not_found(format!("no one browser's id starts with {id}"))
+                    .hint("`omacloud browsers` lists them")
+                    .into());
+            };
+            let name = output::terminal_safe(&note.name);
+            confirm(
+                yes,
+                "removing a browser",
+                &format!(
+                    "remove {name}? This moves to a new encryption key, which uploads everything again, and \
+                     every browser that stays signed in has to be paired again"
+                ),
+            )?;
+            let full = full.clone();
+            let r = e.rotate()?;
+            // every browser's keys are old now, this one's among them
+            notes.clear()?;
+            _ = fs::write(paths.browsers(), "[]");
+            let mut out = String::new();
+            say!(
+                out,
+                "moved to repository epoch {} ({} snapshots copied); {name} can't read it",
+                r.epoch,
+                r.snapshots
+            );
+            say!(out, "{}", leftover_text(&r));
+            if config.repo.is_dropbox() {
+                drop(e);
+                bucket(
+                    paths,
+                    BucketCmd::SetKey {
+                        access_key_id: None,
+                        here_only: false,
+                    },
+                )
+                .map_err(|err| err.context(format!("{name} is removed; finish with `omacloud bucket set-key`")))?;
+                say!(
+                    out,
+                    "The old Dropbox token is revoked once your computers have switched."
+                );
+            } else {
+                say!(
+                    out,
+                    "It still holds the bucket's key: make a new one at your provider, and run `omacloud bucket set-key`."
+                );
+            }
+            let data = json!({ "removed": { "id": full, "name": note.name }, "rotated": { "epoch": r.epoch, "snapshots": r.snapshots, "left": r.left } });
+            Ok(Response::new(data, format!("removed {name}"))
+                .human(out.trim_end())
+                .ids(vec![full]))
         }
     }
 }
@@ -4395,6 +4602,11 @@ fn status(paths: &Paths) -> Out {
         "devices": device_list(&members.valid, &me),
         "removed": device_list(&members.revoked, &me),
         "requests": requests,
+        // as last listed (`omacloud browsers`, and the daemon hourly)
+        "browsers": fs::read_to_string(paths.browsers())
+            .ok()
+            .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+            .unwrap_or_else(|| json!([])),
         "settings": {
             "on": settings.on,
             "dormant": settings.dormant,

@@ -20,11 +20,13 @@ export function account(said) {
 	try {
 		const text = (name) => (typeof said[name] === "string" ? said[name] : "");
 		const upload = uploadKey(said.upload) ? { upload: uploadKey(said.upload) } : {};
+		// where a browser that stays signed in says so, beside the repository
+		const browsers = text("browsers") ? { browsers: text("browsers").replace(/^\/+|\/+$/g, "") } : {};
 		// an account in Dropbox: the token in place of a bucket and its key
 		const box = said.dropbox;
 		if (typeof box?.refresh_token === "string" && box.refresh_token && typeof box.app_key === "string") {
 			const dropbox = { appKey: box.app_key, refreshToken: box.refresh_token, root: typeof box.root === "string" ? box.root : "" };
-			return { dropbox, password: text("password"), ...upload };
+			return { dropbox, password: text("password"), ...browsers, ...upload };
 		}
 		if (!text("bucket") || !new URL(text("endpoint")).host) return null;
 		return {
@@ -35,6 +37,7 @@ export function account(said) {
 			key: text("key"),
 			secret: text("secret"),
 			password: text("password"),
+			...browsers,
 			...upload,
 		};
 	} catch {

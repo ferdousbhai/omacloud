@@ -14,6 +14,10 @@
 - The name Omacloud Drive is gone: your files in a browser are at omacloud.computer/files, the
   commands are `omacloud web-link` and `omacloud web-code`, and a code starts `omacloud-web-`.
   The old address, commands and codes no longer work: make a new code with `omacloud web-code`.
+- A phone can stay signed in to your files in its browser: press Stay Signed In once it's open,
+  and it opens from then on with its fingerprint or face, with no new code. Your computers list
+  the browsers that do (Devices in the app, `omacloud browsers`), and removing a lost one changes
+  your keys, as for a lost computer.
 - A computer's name is one line of text: `init` refuses one with a line break in it.
 - docs/format.md says what is in the storage, record by record.
 - The app has the look of the other Omarchy apps and follows your theme as you switch it. It

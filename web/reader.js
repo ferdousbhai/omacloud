@@ -46,3 +46,5 @@ export const unseal = (seed, sealed) => json(call("unseal", seed, sealed));
 // with the repository's (see crates/omacloud-web/src/upload.rs)
 export const upload = (seed, endorsement, path, mtime, nonce, content) =>
 	call("upload", seed, endorsement, path, String(mtime), nonce, content);
+// sealed with the repository's key, for the account's computers to read
+export const seal = (nonce, plain) => call("seal", nonce, plain);
