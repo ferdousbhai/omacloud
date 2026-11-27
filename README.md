@@ -360,7 +360,7 @@ with someone you trust, or split it among several: `omacloud recovery split
 
 ## Agent skill
 
-[skills/omacloud/SKILL.md](skills/omacloud/SKILL.md) teaches AI agents to install,
+[plugin/skills/omacloud/SKILL.md](plugin/skills/omacloud/SKILL.md) teaches AI agents to install,
 set up, and use omacloud. It is built into the CLI, and setting up or joining
 an account installs it for you; to install or remove it yourself:
 
@@ -370,7 +370,22 @@ omacloud skill remove
 ```
 
 A new release refreshes the installed copy automatically; only a copy omacloud
-wrote (marked `.managed-by-omacloud`) is ever changed.
+wrote (marked `.managed-by-omacloud`) is ever changed. Codex, pi, opencode and
+Antigravity read it from there, as Claude Code does.
+
+An agent on a computer without Omacloud yet can have it as a plugin, which
+also teaches it to install Omacloud. In Claude Code:
+
+```
+/plugin install omacloud --marketplace ferdousbhai/omacloud
+```
+
+In Codex:
+
+```sh
+codex plugin marketplace add ferdousbhai/omacloud
+codex plugin add omacloud@omacloud
+```
 
 ## Scripting
 

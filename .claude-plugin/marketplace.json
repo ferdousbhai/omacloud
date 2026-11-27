@@ -1,0 +1,15 @@
+{
+  "name": "omacloud",
+  "description": "End-to-end encrypted sync of files and settings across Omarchy computers, in your own storage",
+  "owner": {
+    "name": "ferdousbhai",
+    "url": "https://github.com/ferdousbhai"
+  },
+  "plugins": [
+    {
+      "name": "omacloud",
+      "source": "./plugin",
+      "description": "Use Omacloud: sync, status, versions and restores, new computers, family accounts"
+    }
+  ]
+}

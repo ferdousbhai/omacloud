@@ -530,7 +530,7 @@ enum SkillCmd {
 
 const SKILL: agent_skill::Skill = agent_skill::Skill {
     name: "omacloud",
-    body: include_str!("../../../skills/omacloud/SKILL.md"),
+    body: include_str!("../../../plugin/skills/omacloud/SKILL.md"),
     cli: "omacloud",
     version: env!("CARGO_PKG_VERSION"),
     adopts_legacy: false,
