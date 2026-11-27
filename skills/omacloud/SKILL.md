@@ -41,6 +41,56 @@ terminal), `setup` (not set up/approved or a refused key/code), `not_found`,
 repository; report errors and offline state instead of implying everything is
 current. Consult `omacloud <command> --help`.
 
+## Jobs
+
+Whole tasks the owner asks for in plain words, step by step. Each uses the
+commands described further down; the safety rules there still hold.
+
+**Get back a deleted or changed file.** For a deleted one, `omacloud deleted`
+(`--days 90` to look further back) lists it with the version to restore; for a
+changed one, `omacloud versions PATH` lists its versions, oldest first. Restore
+next to it, never over it: `omacloud restore PATH --at N --to /tmp/PATH.vN`,
+and show the owner. Only once they say so, put it back in place with `--to
+PATH --yes`. A file is named by its path inside the synced folder.
+
+**Find something in an older state.** `omacloud mount DIR` (an empty folder)
+shows every file of the account read-only, with history, fetched as it's
+opened; run it in the background, search or read there, then stop it by its
+PID. Nothing there changes the account.
+
+**Work out why a computer isn't syncing.** Run `omacloud status` and read, in
+order: `set_up` false (not set up here); `daemon` false (the background sync
+isn't running: `systemctl --user status omacloud`; with the owner's OK,
+`systemctl --user start omacloud`); `synced_at` long ago; `requests` (computers
+waiting to be approved); `settings.held` (settings waiting to be settled:
+`omacloud settings status`). Then `omacloud sync` once shows the failure itself:
+`not_approved` is fixed on a computer already in (`devices approve`),
+`unavailable` is the network or the storage. `journalctl --user -u omacloud
+-n 50` has the daemon's own account; `pausing sync (battery)` is on purpose,
+unplugged and below 20% battery (by default), and ends once charging.
+
+**Move to a new computer.** Install there. The owner runs `omacloud join-code`
+on a computer already in, and on the new one runs `omacloud init` with the code
+in `OMACLOUD_JOIN_CODE`, in their own terminal; on the old one they compare the
+fingerprint the new one shows and run `omacloud devices approve FINGERPRINT`.
+Then, on the new computer, `omacloud restore-machine --from OLD` shows what
+would come over (settings, files, packages); `--yes` does it (pacman still
+asks), and `--replacing` also brings what OLD kept as its own, when the new one
+takes its place. Retiring the old one afterwards is `devices revoke` with the
+owner's `--yes`.
+
+**Add a family member.** Each person gets an account of their own, never a
+share of the owner's. With Dropbox, they set up on their own computer with
+their own Dropbox (`omacloud init --provider dropbox`, in their terminal).
+With a bucket, the owner makes them a bucket and key (docs/providers.md), and
+runs `omacloud invite --provider ...` with those details in their own terminal;
+the family member runs `omacloud init` with that code in `OMACLOUD_JOIN_CODE`,
+and keeps the recovery code it shows them alone.
+
+**A computer is lost or stolen.** `omacloud devices list` to find it, then the
+owner runs `omacloud devices revoke FINGERPRINT --lost`; the rest is in
+"Removing a lost computer" below.
+
 ## Setup (only when requested)
 
 Storage is the owner's own Dropbox (the simplest), or an S3 bucket: Cloudflare R2,
