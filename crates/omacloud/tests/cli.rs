@@ -455,6 +455,16 @@ fn watch_exits_2_once_this_computer_is_removed() {
     let out = h.run("a", &["devices", "revoke", &fp, "--yes"]);
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
 
+    // a computer on low battery pauses sync and would never find out
+    let config = h.path("b.toml");
+    let toml = std::fs::read_to_string(&config).unwrap();
+    assert!(toml.contains("pause_on_battery_below = 20"), "{toml}");
+    std::fs::write(
+        &config,
+        toml.replace("pause_on_battery_below = 20", "pause_on_battery_below = 0"),
+    )
+    .unwrap();
+
     // the systemd unit's RestartPreventExitStatus=2 depends on this exit
     let mut watch = h
         .cmd("b", &["watch", "--poll", "1"])

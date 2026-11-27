@@ -43,8 +43,10 @@ fi
 # Short: Quickshell puts a socket under the runtime directory, and a socket's path has little room.
 work=$(mktemp -d /tmp/omacloud-bar.XXXXXX)
 shell=
+broadway=
 cleanup() {
   [ -n "$shell" ] && kill "$shell" 2>/dev/null || true
+  [ -n "$broadway" ] && kill "$broadway" 2>/dev/null || true
   wait 2>/dev/null || true
   rm -rf "${work:?}"
 }
@@ -56,9 +58,17 @@ cp "$plugin/i18n/"*.json "$work/shell/i18n/"
 cp "$here/bar-widget/qs/Ui/"*.qml "$work/shell/Ui/"
 cp "$here/bar-widget/qs/Commons/"*.qml "$work/shell/Commons/"
 
+# A Quickshell built with GTK (Omarchy's, from 0.3.2.r7) exits where GTK finds no display, offscreen or not: it
+# gets a broadway display of its own, which nothing shows.
+gdk=()
+if command -v broadwayd >/dev/null; then
+  XDG_RUNTIME_DIR="$work/run" broadwayd :47 >/dev/null 2>&1 &
+  broadway=$!
+  gdk=(GDK_BACKEND=broadway BROADWAY_DISPLAY=:47)
+fi
 env -u WAYLAND_DISPLAY -u DISPLAY HOME="$work/home" XDG_RUNTIME_DIR="$work/run" XDG_CACHE_HOME="$work/home/cache" \
   XDG_CONFIG_HOME="$work/home/config" XDG_STATE_HOME="$work/home/state" XDG_DATA_HOME="$work/home/data" \
-  QT_QPA_PLATFORM=offscreen qs --no-color -p "$work/shell" >"$work/log" 2>&1 &
+  "${gdk[@]}" QT_QPA_PLATFORM=offscreen qs --no-color -p "$work/shell" >"$work/log" 2>&1 &
 shell=$!
 
 # The line as the daemon writes it: whole beside the file, then moved over it.
