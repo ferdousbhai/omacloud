@@ -31,7 +31,7 @@ you too: their instructions, skills and settings, and Claude Code's memory.
 Omacloud has no AI of its own and never sees your files: your agents see what
 you let them on your own computer. There's no account with us and no
 analytics. Omacloud talks only to your own storage, and omacloud.computer
-serves the installer and Omacloud Drive's page and nothing your files depend
+serves the installer and the browser page and nothing your files depend
 on: `omacloud export` gives you the plain restic command that restores
 everything without Omacloud.
 
@@ -337,18 +337,18 @@ one back where it was.
 
 ## In a browser
 
-[Omacloud Drive](https://omacloud.computer/drive/) opens your files from any browser: it reads them
+[omacloud.computer/files](https://omacloud.computer/files/) opens your files in any browser: it reads them
 from your storage and decrypts them there, so the site sees neither a file nor a key. It has your
-folders (Drive), every picture in them (Photos), what changed last (Recents), and what was deleted
+folders (Files), every picture in them (Photos), what changed last (Recents), and what was deleted
 in the last 30 days (Recently Deleted), each file to look at or download. To open it on
-a phone, press Open on a Phone in the app (or run `omacloud drive-link`) and point the phone's
+a phone, press Open on a Phone in the app (or run `omacloud web-link`) and point the phone's
 camera at the code: nothing is typed. The link works for five minutes, for whoever has it. A computer
 leaves the key to your storage and the password to your files in your storage for those minutes,
 sealed, and the link carries what opens them, in the part of an address that's never sent to a
 server. Signed in that way you can upload too: Upload, or drop files on a folder (up to 100 MB a
 file), and Put Back in Recently Deleted returns a deleted file. The browser encrypts each one and
 leaves it in your storage, and one of your computers takes it in within about a minute and syncs
-it, so one of them has to be on. `omacloud drive-code` prints a one-line code to paste instead, which only
+it, so one of them has to be on. `omacloud web-code` prints a one-line code to paste instead, which only
 reads; keep that one private, since it doesn't run out. A bucket needs one rule first
 ([docs/providers.md](docs/providers.md#reading-in-a-browser)); an account in Dropbox needs nothing.
 
@@ -452,7 +452,7 @@ from `--yes`.
 
 What prints a secret prints it only to your terminal, in text mode with
 stdin and stdout on it, and refuses (`terminal_required`) as JSON or into a pipe: `init`
-when it creates an account (the recovery code), `join-code`, `invite`, `drive-code`, `drive-link`, `export`,
+when it creates an account (the recovery code), `join-code`, `invite`, `web-code`, `web-link`, `export`,
 and `recovery split` and `combine`
 (`combine` reads its shares from stdin, so only its stdout must be a
 terminal). Joining with a join code or the recovery code prints no secret

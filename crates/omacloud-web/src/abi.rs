@@ -108,7 +108,7 @@ pub unsafe extern "C" fn blob(blob: *const u8, len: usize, stored: *const u8, st
     }))
 }
 
-/// Open what a drive link's computer left for it; needs no open repository.
+/// Open what a web link's computer left for it; needs no open repository.
 ///
 /// # Safety
 ///

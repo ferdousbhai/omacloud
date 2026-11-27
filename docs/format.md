@@ -49,7 +49,7 @@ an OpenDAL scheme (`opendal:s3` or `opendal:dropbox`) and options,
   config, keys/, data/, index/, snapshots/   restic repository, epoch 0
   omacloud-e1/, omacloud-e2/, ...            restic repositories of later epochs
   omacloud-coordination/                     signed records (below)
-  omacloud-links/<16 hex>                    a drive link's sealed keys, minutes at most
+  omacloud-links/<16 hex>                    a web link's sealed keys, minutes at most
   omacloud-inbox/<24 hex>                    files a browser uploaded, sealed
   omacloud-inbox/changed                     16 random bytes, rewritten after uploads
 ```
@@ -323,11 +323,11 @@ Values are `"sync"`, `"off"`, `"backup"` or a choice word (`Choice::word`
 in `main.rs`). `doorbell` is `doorbell::reach()`, not specified here. Choices
 are informational: nothing verifies them beyond the snapshot's own head.
 
-### Drive link object: `omacloud-links/<name>`
+### Web link object: `omacloud-links/<name>`
 
 `name` is 8 random bytes in hex (`bucket.rs`, `Links::leave`). Contents:
-the sealed drive code (section 3). The drive code, JSON
-(`main.rs`, `DriveCode`, `DropboxKey`, `UploadKey`):
+the sealed web code (section 3). The web code, JSON
+(`main.rs`, `WebCode`, `DropboxKey`, `UploadKey`):
 
 ```json
 {"v":1,"endpoint":"https://acct.r2.cloudflarestorage.com","bucket":"my-omacloud","root":"","region":"auto",
@@ -336,18 +336,18 @@ the sealed drive code (section 3). The drive code, JSON
   "endorsement":{"key":"0e44…","until":1795000000,"device":"5d2e…71b0","sig":"…"}}}
 ```
 
-`root` and `password` are the current epoch's (`DriveCode::read`, via
+`root` and `password` are the current epoch's (`WebCode::read`, via
 `Engine::repository`), so `root` ends in `omacloud-e<n>` after a rotation.
 For Dropbox the bucket fields are empty and
 `"dropbox":{"app_key":…,"refresh_token":…,"root":…}` is added. `upload` is
-only in a drive link. Only the newest link is kept; others are deleted when
+only in a web link. Only the newest link is kept; others are deleted when
 a new one is made, when the command ends, or when older than ten minutes
-(`Links::clear`, `clear_older`; `main.rs`, `DRIVE_LINK_VALID`).
+(`Links::clear`, `clear_older`; `main.rs`, `WEB_LINK_VALID`).
 
 The link itself is never stored:
-`https://omacloud.computer/drive/#link=<base64url(seed)>.<base64url(address)>`,
+`https://omacloud.computer/files/#link=<base64url(seed)>.<base64url(address)>`,
 `address` being a presigned GET of the object, good for five minutes, or
-Dropbox's temporary link (`main.rs`, `drive_link`).
+Dropbox's temporary link (`main.rs`, `web_link`).
 
 ### Inbox item: `omacloud-inbox/<24 hex>`
 
@@ -375,7 +375,7 @@ each batch (`web/app.js`).
 
 The inbox is always under the epoch 0 `root`, not under `omacloud-e<n>`
 (`bucket.rs`, `Inbox::beside` with `config.repo`; `main.rs`,
-`DriveCode::with_upload`).
+`WebCode::with_upload`).
 
 ## 3. Cryptography
 
@@ -409,8 +409,7 @@ rebuilt from its fields. Two forms are used:
 
 **Line form**: fields joined by `\n`, with a trailing `\n`, numbers in
 decimal. Nothing is escaped, so a field holding `\n` is ambiguous; no field
-written by Omacloud does, except that a device name isn't checked for one
-(see the end).
+written by Omacloud does (a device name is checked at `init`; see the end).
 
 | record | signed bytes | source |
 |---|---|---|
@@ -501,14 +500,14 @@ Poly1305-AES, `IV(16) || ciphertext || MAC(16)`, under the 64-byte master key
 (encryption key 32, then Poly1305 `k` 16 and `r` 16), keys files under
 scrypt (restic spec; `omacloud-web/src/lib.rs`, `Key`, `Reader::open`).
 
-### Drive links
+### Web links
 
 `omacloud-web/src/link.rs`, `key`, `seal`, `unseal`; crate
 `aes256ctr_poly1305aes` 0.2.1:
 
 ```
-key64  = SHA-512("omacloud drive link 1" || seed)      seed: 32 random bytes, no newline after the label
-object = nonce(16) || AES-256-CTR-Poly1305-AES(key64, nonce, drive code JSON)
+key64  = SHA-512("omacloud web link 1" || seed)      seed: 32 random bytes, no newline after the label
+object = nonce(16) || AES-256-CTR-Poly1305-AES(key64, nonce, web code JSON)
 ```
 
 The 64-byte key is laid out as restic's master key: the AES-256 key, then
@@ -519,7 +518,7 @@ layout. The seed travels only in the link's fragment.
 ### Uploads
 
 The browser holds a session key: a random Ed25519 seed (`inbox.rs`,
-`session_key`), base64url in the drive code's `upload.seed`, its public half
+`session_key`), base64url in the web code's `upload.seed`, its public half
 endorsed by a member for twelve hours (`Endorsement`; `main.rs`,
 `UPLOAD_KEY_VALID`). For each file it signs the upload line (above) with
 the session key, builds the plaintext of section 2, and encrypts it exactly
@@ -589,7 +588,7 @@ existing file.
   `omacloud-recovery-v1`, `omacloud-device-v1`, `omacloud-head-v3`,
   `omacloud-epoch-v1`, `omacloud-grant-v1`, `omacloud-join-v1`,
   `omacloud-bucket-key-v1`, `omacloud-upload-key-v1`, `omacloud-upload-v1`,
-  `omacloud drive link 1`, and the bundle magic `omacloud-secrets-v1\n`. A
+  `omacloud web link 1`, and the bundle magic `omacloud-secrets-v1\n`. A
   record whose signature doesn't verify under the current domain is
   refused; there is no fallback to an older one (only `v3` heads verify).
 - Explicit version fields: an upload header's `v` (must be 1), the drive
@@ -604,9 +603,10 @@ existing file.
 
 ## Not specified here
 
-- **Device names with a newline.** A join request's line form would be
-  ambiguous, and Omacloud doesn't check a name for one. Device entries (JSON
-  form) are unaffected.
+- **Device names.** `init` refuses a name with a control character from
+  0.0.33 on (`main.rs`, `Cmd::Init`); an earlier version didn't, so a
+  reader should refuse a join request whose name holds a newline, as its
+  line form is then ambiguous. Device entries (JSON form) are unaffected.
 - **`doorbell` in choices** and the merged documents' schemas
   (`.omacloud/merged/`; `merged.rs`, `wifi.rs`, `chromium/`).
 - **A snapshot's `paths`**: the folder's absolute path on the computer that

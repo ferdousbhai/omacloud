@@ -1,4 +1,4 @@
-# Omacloud Drive in a browser
+# Omacloud in a browser
 
 A static page that reads an account's files straight from the person's own
 storage, a bucket or Dropbox, and decrypts them in the browser. No server of
@@ -17,17 +17,17 @@ Omacloud's sees a file, a key or a request.
 - `reader.js`: calls `omacloud_web.wasm`, built from `crates/omacloud-web`,
   which decrypts what the page fetched.
 
-It opens with a drive link (`omacloud drive-link`, or Open on a Phone in the
-app): a computer seals the drive code, leaves it in the bucket under
+It opens with a web link (`omacloud web-link`, or Open on a Phone in the
+app): a computer seals the web code, leaves it in the bucket under
 `omacloud-links/` for five minutes, and shows a link, as a QR code too, to this
 page with the seed and a presigned address of that object after the `#`. The
 page takes the link out of its address at once, fetches the object, and opens it
 with the seed (`link.rs` in the crate). The bucket holds only what it can't read,
 and the link alone opens nothing once the object is gone. Or paste the code
-`omacloud drive-code` prints (the bucket, its key and the repository password in
+`omacloud web-code` prints (the bucket, its key and the repository password in
 one line; what `omacloud export` prints works too), which only reads.
 
-A session opened with a drive link can upload: the link carries a signing key
+A session opened with a web link can upload: the link carries a signing key
 made for it and a member computer's endorsement of that key. The page signs
 each file with the key, seals it with the repository's (`upload.rs` in the
 crate), and puts it in `omacloud-inbox/` beside the repository; a computer's
@@ -38,9 +38,9 @@ the same way.
 
 An account in Dropbox works the same through `dropbox.js`, which has `s3.js`'s
 few calls on Dropbox's API (Omacloud's Dropbox app has no secret, so the token a
-computer holds works from a page). A drive link's address is then one Dropbox
+computer holds works from a page). A web link's address is then one Dropbox
 gives for the sealed file, good until the file is taken back.
-The site's Worker serves it at omacloud.computer/drive/ (`server/build-drive.sh`
+The site's Worker serves it at omacloud.computer/files/ (`server/build-files.sh`
 puts it in place at deploy).
 
 The bucket must allow the page's origin to read it (a CORS rule allowing `GET`

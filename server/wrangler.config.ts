@@ -4,7 +4,7 @@ export default defineWranglerConfig({
 	types: {
 		generate: false,
 	},
-	// Omacloud Drive's page, built by build-drive.sh; the Worker hands it out
+	// the browser page, built by build-files.sh; the Worker hands it out
 	// (see cloudflare.config.ts).
 	assetsDirectory: "./public",
 });

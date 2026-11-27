@@ -337,9 +337,9 @@ fn commands_that_print_a_secret_refuse_anywhere_but_a_terminal() {
     let recovery = h.create();
     for args in [
         &["export"][..],
-        &["drive-code"],
-        &["drive-link"],
-        &["drive-link", "--keep"],
+        &["web-code"],
+        &["web-link"],
+        &["web-link", "--keep"],
         &["recovery", "split", "--threshold", "2", "--shares", "3"],
         &["recovery", "combine"],
     ] {
@@ -438,6 +438,19 @@ fn join_b(h: &Home, recovery: &str) -> String {
         .unwrap();
     assert_eq!(code(&out), 0, "{}{}", stdout(&out), stderr(&out));
     json(&out)["data"]["fingerprint"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn a_computers_name_is_one_line() {
+    let h = Home::new();
+    for name in ["a\nb", "", "tab\tbed"] {
+        let mut args = h.init_args("a");
+        *args.last_mut().unwrap() = name.to_string();
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let e = machine_error(&h.run("a", &args), "usage", "usage");
+        assert!(e["message"].as_str().unwrap().contains("name"), "{e}");
+    }
+    assert!(!h.path("a.toml").exists());
 }
 
 #[test]

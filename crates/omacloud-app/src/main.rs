@@ -1664,7 +1664,7 @@ fn overview(ui: &Rc<Ui>, s: &Value) -> gtk::ScrolledWindow {
     if whole_folder {
         let online = row(
             &tr("On another device"),
-            &tr("Your files in a browser, at omacloud.computer/drive"),
+            &tr("Your files in a browser, at omacloud.computer/files"),
         );
         online.add_suffix(&phone_button(ui));
         files.add(&online.widget);
@@ -1898,20 +1898,20 @@ fn switch_row(title: &str, on: bool, flip: impl Fn(bool) + 'static) -> Row {
 fn phone_button(ui: &Rc<Ui>) -> gtk::Button {
     let phone = button(&tr("Open on a Phone…"), Some("flat"));
     phone.set_tooltip_text(Some(&tr(
-        "Your files in a browser on another device, at omacloud.computer/drive",
+        "Your files in a browser on another device, at omacloud.computer/files",
     )));
     let ui2 = ui.clone();
-    phone.connect_clicked(move |_| show_drive_link(&ui2));
+    phone.connect_clicked(move |_| show_web_link(&ui2));
     phone
 }
 
-/// A drive link as the code a phone's camera reads: Omacloud Drive opens in
+/// A web link as the code a phone's camera reads: Omacloud in a browser opens in
 /// its browser with nothing typed. The link works for five minutes, and
 /// closes with this dialog.
-fn show_drive_link(ui: &Rc<Ui>) {
+fn show_web_link(ui: &Rc<Ui>) {
     let ui2 = ui.clone();
     // it opens the account's files: printed only to a terminal
-    tty_then(&["omacloud", "drive-link", "--keep"], Vec::new(), move |r| {
+    tty_then(&["omacloud", "web-link", "--keep"], Vec::new(), move |r| {
         let link = match r {
             Err(e) => return ui2.toast(&e.shown()),
             Ok(out) => out
@@ -1970,7 +1970,7 @@ fn show_drive_link(ui: &Rc<Ui>) {
                 ui3.toast(&tr("Link copied: it works for five minutes"));
             } else {
                 // Done, or the dialog put away: the link closes with it, as it said
-                cli_then(&["omacloud", "drive-link", "--close"], Vec::new(), |_| {});
+                cli_then(&["omacloud", "web-link", "--close"], Vec::new(), |_| {});
             }
         });
         dialog.present(&ui2.window);

@@ -14,11 +14,11 @@ export function secureDocument(response: Response): Response {
 	return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
-// Omacloud Drive's policy: this site's own scripts, styles and WebAssembly;
+// The browser page's policy: this site's own scripts, styles and WebAssembly;
 // pictures, sound and documents only as the page itself decrypted them; and
 // requests only to storage over HTTPS. No inline code, no other site's code,
 // no framing.
-export const DRIVE_CSP = [
+export const FILES_CSP = [
 	"default-src 'none'",
 	"script-src 'self' 'wasm-unsafe-eval'",
 	"style-src 'self'",

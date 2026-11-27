@@ -55,12 +55,12 @@ fn nonce() -> Vec<u8> {
     hex::encode(rand::random::<[u8; 16]>()).into_bytes()
 }
 
-/// Where a computer leaves what a drive link opens: beside the repository,
+/// Where a computer leaves what a web link opens: beside the repository,
 /// in its bucket, because that's the one place a browser is already allowed
 /// to read (the bucket's CORS rule) and the account already pays for.
 const LINKS: &str = "omacloud-links";
 
-/// What drive links were left in an account's bucket, each sealed (the bucket
+/// What web links were left in an account's bucket, each sealed (the bucket
 /// can't read it) and reachable for a few minutes through an address that
 /// needs no key.
 pub struct Links {
@@ -76,13 +76,13 @@ impl Links {
         let scheme = repo
             .repository
             .strip_prefix("opendal:")
-            .context("a drive link needs the repository in a bucket")?;
+            .context("a web link needs the repository in a bucket")?;
         let mut options = repo.options.clone();
         let root = repo.under_root(LINKS);
         _ = options.insert("root".into(), root.clone());
         let _guard = runtime().enter();
         let op = opendal::Operator::via_iter(scheme, options)
-            .with_context(|| format!("opening the {scheme} location for a drive link"))?
+            .with_context(|| format!("opening the {scheme} location for a web link"))?
             .layer(RetryLayer::new().with_jitter());
         Ok(Self { op, root })
     }
@@ -102,7 +102,7 @@ impl Links {
         let name = hex::encode(rand::random::<[u8; 8]>());
         _ = runtime()
             .block_on(self.op.write(&name, sealed))
-            .context("leaving the drive link")?;
+            .context("leaving the web link")?;
         Ok(name)
     }
 
@@ -127,7 +127,7 @@ impl Links {
     pub fn remove(&self, name: &str) -> Result<()> {
         runtime()
             .block_on(self.op.delete(name))
-            .context("removing the drive link")
+            .context("removing the web link")
     }
 
     /// Take back the links left here longer ago than `age`: none is meant to
@@ -140,14 +140,14 @@ impl Links {
     pub fn clear_older(&self, age: Duration) -> Result<()> {
         let now = std::time::SystemTime::now();
         runtime().block_on(async {
-            for entry in self.op.list("/").await.context("listing drive links")? {
+            for entry in self.op.list("/").await.context("listing web links")? {
                 if entry.path().ends_with('/') {
                     continue;
                 }
-                let meta = self.op.stat(entry.path()).await.context("looking at a drive link")?;
+                let meta = self.op.stat(entry.path()).await.context("looking at a web link")?;
                 let written: Option<std::time::SystemTime> = meta.last_modified().map(Into::into);
                 if written.is_none_or(|t| now.duration_since(t).is_ok_and(|d| d > age)) {
-                    self.op.delete(entry.path()).await.context("removing a drive link")?;
+                    self.op.delete(entry.path()).await.context("removing a web link")?;
                 }
             }
             Ok(())
@@ -162,9 +162,9 @@ impl Links {
     /// If the storage can't be reached.
     pub fn clear(&self) -> Result<()> {
         runtime().block_on(async {
-            for entry in self.op.list("/").await.context("listing drive links")? {
+            for entry in self.op.list("/").await.context("listing web links")? {
                 if !entry.path().ends_with('/') {
-                    self.op.delete(entry.path()).await.context("removing a drive link")?;
+                    self.op.delete(entry.path()).await.context("removing a web link")?;
                 }
             }
             Ok(())

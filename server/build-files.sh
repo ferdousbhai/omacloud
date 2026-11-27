@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Put Omacloud Drive's page where the Worker serves it from (public/drive):
+# Put the browser page where the Worker serves it from (public/files):
 # the page's files from ../web, and the reader built to WebAssembly from
 # ../crates/omacloud-web. Needs Rust's wasm32-unknown-unknown target.
 set -euo pipefail
 cd "$(dirname "$0")"
 export PATH="$HOME/.cargo/bin:$PATH"
 (cd .. && cargo build --locked --release -q -p omacloud-web --target wasm32-unknown-unknown)
-out=public/drive
+out=public/files
 rm -rf "${out:?}"
 mkdir -p "$out"
 cp ../web/index.html ../web/style.css ../web/*.js "$out/"

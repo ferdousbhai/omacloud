@@ -187,9 +187,9 @@ match args:
         secret('a join code')
         print('omacloud-join-' + 'mQ3xT7vK2pLs9dRw' * 6)
         sys.exit(0)
-    case ['drive-link', '--keep']:
-        secret('a drive link')
-        print('https://omacloud.computer/drive/#link=b3f1c2d49a7e.' + 'Zk4nP8sV' * 8)
+    case ['web-link', '--keep']:
+        secret('a web link')
+        print('https://omacloud.computer/files/#link=b3f1c2d49a7e.' + 'Zk4nP8sV' * 8)
         sys.exit(0)
     case ['deleted']:
         data = [

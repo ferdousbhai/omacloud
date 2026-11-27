@@ -271,9 +271,9 @@ enum Cmd {
         yes: bool,
     },
     /// Print a code that opens your files in a browser, at
-    /// omacloud.computer/drive (it holds the key to your storage and the
+    /// omacloud.computer/files (it holds the key to your storage and the
     /// password to your files)
-    DriveCode,
+    WebCode,
     /// Show how sync stands in Omarchy's bar (a cloud; a click opens
     /// Omacloud), or take it out
     Bar {
@@ -281,9 +281,9 @@ enum Cmd {
         action: BarCmd,
     },
     /// Show a link, and its code for a phone's camera, that opens your files
-    /// in a browser at omacloud.computer/drive. It works for five minutes;
+    /// in a browser at omacloud.computer/files. It works for five minutes;
     /// nothing is typed or pasted
-    DriveLink {
+    WebLink {
         /// Leave it open for its five minutes instead of waiting for Enter
         #[arg(long, conflicts_with = "close")]
         keep: bool,
@@ -1161,12 +1161,12 @@ impl JoinCode {
     }
 }
 
-/// What Omacloud Drive's page needs to read an account's files from its
+/// What the browser page needs to read an account's files from its
 /// bucket in a browser: where the bucket is, its key, and the repository's
 /// password. One line with no spaces, so a terminal's wrapping can't break
 /// a copy of it.
 #[derive(Serialize)]
-struct DriveCode {
+struct WebCode {
     v: u8,
     endpoint: String,
     bucket: String,
@@ -1178,7 +1178,7 @@ struct DriveCode {
     /// For an account in Dropbox, in place of the bucket's fields.
     #[serde(skip_serializing_if = "Option::is_none")]
     dropbox: Option<DropboxKey>,
-    /// What lets the page upload, in a drive link only: a pasted code opens
+    /// What lets the page upload, in a web link only: a pasted code opens
     /// files to read.
     #[serde(skip_serializing_if = "Option::is_none")]
     upload: Option<UploadKey>,
@@ -1202,11 +1202,11 @@ struct UploadKey {
     endorsement: omacloud_core::inbox::Endorsement,
 }
 
-/// How long a drive link's session may upload: a working day.
+/// How long a web link's session may upload: a working day.
 const UPLOAD_KEY_VALID: Duration = Duration::from_secs(12 * 3600);
 
-impl DriveCode {
-    const PREFIX: &str = "omacloud-drive-";
+impl WebCode {
+    const PREFIX: &str = "omacloud-web-";
 
     /// This account's, with the configuration it was read from.
     /// With what lets the page upload too, vouched for by this computer.
@@ -1236,11 +1236,9 @@ impl DriveCode {
         e.sync()?; // pick up any key rotation first
         let (spec, secret, _) = e.repository()?;
         if !spec.is_remote() {
-            return Err(
-                fail::unsupported("Omacloud Drive in a browser reads a bucket or a Dropbox")
-                    .hint("this account's files are in neither; `omacloud mount` shows them on a computer")
-                    .into(),
-            );
+            return Err(fail::unsupported("Omacloud in a browser reads a bucket or a Dropbox")
+                .hint("this account's files are in neither; `omacloud mount` shows them on a computer")
+                .into());
         }
         let opt = |k: &str| spec.options.get(k).cloned().unwrap_or_default();
         let dropbox = spec.is_dropbox().then(|| DropboxKey {
@@ -1273,15 +1271,15 @@ impl DriveCode {
     }
 }
 
-/// How long a drive link opens anything.
-const DRIVE_LINK_VALID: Duration = Duration::from_secs(300);
+/// How long a web link opens anything.
+const WEB_LINK_VALID: Duration = Duration::from_secs(300);
 
-/// The address a drive link is: Omacloud Drive's page, and after the `#`,
-/// which a browser keeps to itself, the seed and where the sealed drive code
-/// waits. `OMACLOUD_DRIVE_URL` names another copy of the page, for trying one.
-fn drive_link(seed: &[u8], address: &str) -> String {
+/// The address a web link is: the browser page, and after the `#`,
+/// which a browser keeps to itself, the seed and where the sealed web code
+/// waits. `OMACLOUD_WEB_URL` names another copy of the page, for trying one.
+fn web_link(seed: &[u8], address: &str) -> String {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-    let page = std::env::var("OMACLOUD_DRIVE_URL").unwrap_or_else(|_| "https://omacloud.computer/drive/".into());
+    let page = std::env::var("OMACLOUD_WEB_URL").unwrap_or_else(|_| "https://omacloud.computer/files/".into());
     // the address in base64 too: whatever passes the link along (a camera
     // app, a chat) then has nothing in it to re-encode, which would break
     // the address's signature
@@ -1859,13 +1857,13 @@ fn watch(paths: &Paths, config: &Config, poll: Duration) -> Result<Ended> {
             // what changed before the watch began went unseen
             engine.request_rescan();
         }
-        // the package list, at start and hourly; and any drive link left
+        // the package list, at start and hourly; and any web link left
         // open past its minutes (the app that showed it was killed)
         if packages_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(3600)) {
             if config.repo.is_remote()
-                && let Err(e) = Links::beside(&config.repo).and_then(|links| links.clear_older(2 * DRIVE_LINK_VALID))
+                && let Err(e) = Links::beside(&config.repo).and_then(|links| links.clear_older(2 * WEB_LINK_VALID))
             {
-                warn!("closing old drive links: {e:#}");
+                warn!("closing old web links: {e:#}");
             }
             record_packages(config, &mut engine);
             _ = record_choices(paths, config, &mut engine);
@@ -2394,6 +2392,12 @@ fn run(cli: Cli) -> Out {
                 }
             };
             let device = device.unwrap_or_else(hostname);
+            // a join request is signed as lines, the name one of them
+            if device.trim().is_empty() || device.chars().any(char::is_control) {
+                return Err(fail::usage("a computer's name is one line of text")
+                    .hint("give one: `--device <name>`")
+                    .into());
+            }
             let config = Config {
                 device,
                 folder,
@@ -2837,27 +2841,27 @@ fn run(cli: Cli) -> Out {
                 }
             }
         }
-        Cmd::DriveCode => {
+        Cmd::WebCode => {
             if !output::to_terminal(mode()) {
-                return Err(fail::terminal_required("a drive code (it opens your files)").into());
+                return Err(fail::terminal_required("a web code (it opens your files)").into());
             }
-            let code = DriveCode::of(&paths)?.1.encode()?;
+            let code = WebCode::of(&paths)?.1.encode()?;
             eprintln!(
-                "Paste it at https://omacloud.computer/drive/ to open your files in a browser. Keep it\n\
+                "Paste it at https://omacloud.computer/files/ to open your files in a browser. Keep it\n\
                  private: it holds the key to your storage and the password to your files, so whoever has\n\
                  it can read them. It stops working when the bucket's key is changed."
             );
-            Ok(Response::new(Value::Null, "drive code").human(code))
+            Ok(Response::new(Value::Null, "web code").human(code))
         }
-        Cmd::DriveLink { close: true, .. } => {
+        Cmd::WebLink { close: true, .. } => {
             Links::beside(&load(&paths)?.repo)?.clear()?;
-            Ok(Response::new(Value::Null, "drive link closed"))
+            Ok(Response::new(Value::Null, "web link closed"))
         }
-        Cmd::DriveLink { keep, .. } => {
+        Cmd::WebLink { keep, .. } => {
             if !output::to_terminal(mode()) {
-                return Err(fail::terminal_required("a drive link (it opens your files)").into());
+                return Err(fail::terminal_required("a web link (it opens your files)").into());
             }
-            let (config, code) = DriveCode::with_upload(&paths)?;
+            let (config, code) = WebCode::with_upload(&paths)?;
             let seed: [u8; omacloud_web::link::SEED] = rand::random();
             let sealed = omacloud_web::link::seal(&seed, rand::random(), &serde_json::to_vec(&code)?)
                 .map_err(anyhow::Error::msg)?;
@@ -2876,7 +2880,7 @@ fn run(cli: Cli) -> Out {
                     .unwrap_or_default();
                 dropbox::temporary_link(token, &links.path(&name))
             } else {
-                links.address(&name, DRIVE_LINK_VALID)
+                links.address(&name, WEB_LINK_VALID)
             };
             let address = match address {
                 Ok(address) => address,
@@ -2885,7 +2889,7 @@ fn run(cli: Cli) -> Out {
                     return Err(e);
                 }
             };
-            let link = drive_link(&seed, &address);
+            let link = web_link(&seed, &address);
             match qr_for_terminal(&link) {
                 Some(qr) => eprintln!("{qr}\nPoint a phone's camera at this, or open the link below in any browser."),
                 None => eprintln!(
@@ -2896,16 +2900,16 @@ fn run(cli: Cli) -> Out {
             let warning = format!(
                 "\nIt opens your files for the next {} minutes, to whoever has it: don't send it through\n\
                  anything you don't trust.",
-                DRIVE_LINK_VALID.as_secs() / 60
+                WEB_LINK_VALID.as_secs() / 60
             );
             if keep {
-                eprintln!("{warning} `omacloud drive-link --close` closes it sooner.");
-                return Ok(Response::new(Value::Null, "drive link open"));
+                eprintln!("{warning} `omacloud web-link --close` closes it sooner.");
+                return Ok(Response::new(Value::Null, "web link open"));
             }
             eprintln!("{warning} Press Enter to close it now.");
-            wait_for_enter(DRIVE_LINK_VALID);
+            wait_for_enter(WEB_LINK_VALID);
             links.remove(&name)?;
-            Ok(Response::new(Value::Null, "drive link closed"))
+            Ok(Response::new(Value::Null, "web link closed"))
         }
         Cmd::Export { to } => {
             if !output::to_terminal(mode()) {

@@ -1,5 +1,5 @@
 // What signs a person in, taken apart: where the bucket is, its key and the
-// repository's password. Either the one-line code `omacloud drive-code`
+// repository's password. Either the one-line code `omacloud web-code`
 // prints, or what `omacloud export` prints for restic. A terminal wraps long
 // lines, and copying from one can break a line anywhere, in the middle of a
 // name, a key or the address. So nothing here counts on where the lines end.
@@ -13,7 +13,7 @@ const loose = (text) =>
 
 const bytesOf = (base64url) => Uint8Array.from(atob(base64url.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
 
-// What a drive code says, as the page uses it: { endpoint, bucket, root,
+// What a web code says, as the page uses it: { endpoint, bucket, root,
 // region, key, secret, password }, or for an account in Dropbox { dropbox:
 // { appKey, refreshToken, root }, password }; null if it names neither.
 export function account(said) {
@@ -42,7 +42,7 @@ export function account(said) {
 	}
 }
 
-// What lets the page upload, when a drive link brought it: the inbox's folder
+// What lets the page upload, when a web link brought it: the inbox's folder
 // in the bucket, the session's signing key, and a computer's word for it.
 function uploadKey(said) {
 	try {
@@ -55,9 +55,9 @@ function uploadKey(said) {
 	}
 }
 
-// `omacloud-drive-` and base64url of that JSON.
-function driveCode(words) {
-	const code = words.replace(/\s+/g, "").match(/omacloud-drive-([A-Za-z0-9_-]+)/)?.[1];
+// `omacloud-web-` and base64url of that JSON.
+function webCode(words) {
+	const code = words.replace(/\s+/g, "").match(/omacloud-web-([A-Za-z0-9_-]+)/)?.[1];
 	if (!code) return null;
 	try {
 		return account(JSON.parse(new TextDecoder().decode(bytesOf(code))));
@@ -66,8 +66,8 @@ function driveCode(words) {
 	}
 }
 
-// What `omacloud drive-link` put after the page's `#`: the seed, and the
-// address in the person's bucket where the drive code waits, sealed under
+// What `omacloud web-link` put after the page's `#`: the seed, and the
+// address in the person's bucket where the web code waits, sealed under
 // it, both in base64url. { seed, address }, or null if that isn't what's there.
 export function linked(hash) {
 	const found = hash.match(/^#link=([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]+)$/);
@@ -84,7 +84,7 @@ export function linked(hash) {
 }
 
 export function pasted(words) {
-	const fromCode = driveCode(words);
+	const fromCode = webCode(words);
 	if (fromCode) return fromCode;
 	// a value in single quotes after NAME=, without the breaks a copy put in it
 	const quoted = (name) => words.match(new RegExp(`${loose(name)}\\s*=\\s*'([^']*)'`))?.[1].replace(/\s+/g, "");

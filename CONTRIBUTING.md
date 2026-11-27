@@ -103,10 +103,10 @@ from the environment, or a prompt that doesn't echo.
 
 ## The browser and the bar
 
-`scripts/web-files.sh` runs Omacloud Drive's page on a throwaway account: it
+`scripts/web-files.sh` runs the browser page on a throwaway account: it
 builds the reader for WebAssembly (`rustup target add wasm32-unknown-unknown`
 once), starts the stand-in S3 with a rule for the page, runs a daemon for the
-account, and prints a drive code and a drive link to open. Uploading there
+account, and prints a web code and a web link to open. Uploading there
 exercises the whole way round: the page, the inbox, the daemon, the next sync,
 and the page again. Dropbox has no stand-in: an account made with
 `init --provider dropbox --root /some-test-folder` and the same page proves it,

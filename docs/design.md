@@ -115,11 +115,11 @@ anything is read from.
 
 ## In a browser
 
-Omacloud Drive (omacloud.computer/drive/) is a static page: it reads the
+Omacloud in a browser (omacloud.computer/files/) is a static page: it reads the
 repository from the person's bucket and decrypts it in the tab (`web/`,
 `crates/omacloud-web`), so it needs what a computer has, the bucket's key and
-the repository password. A computer hands them over with a drive link
-(`omacloud drive-link`): it seals them under a random seed, leaves that in the
+the repository password. A computer hands them over with a web link
+(`omacloud web-link`): it seals them under a random seed, leaves that in the
 bucket under `omacloud-links/`, and shows a link to the page with the seed and
 a presigned address of the object, good for five minutes, after the `#`, which
 a browser sends to no server (in Dropbox, an address Dropbox gives for the
@@ -270,7 +270,7 @@ names, settings or keys.
   every file read-only, fetched on open, but a folder is either kept here
   in full or skipped, not freed file by file.
 - Sharing with other people (#8, #15).
-- A phone app (#35); a phone's browser has Omacloud Drive, above. Editing a file in a
+- A phone app (#35); a phone's browser has the page above. Editing a file in a
   browser: it reads, uploads and puts back, and nothing more.
 - Agents that aren't on one of your computers (claude.ai, one on a phone)
   reading and writing folders you grant them, answered by a computer of

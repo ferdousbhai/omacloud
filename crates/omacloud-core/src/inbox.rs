@@ -6,7 +6,7 @@
 //!
 //! What makes a computer trust such a file is a chain of two signatures. A
 //! member computer endorses a key made for one browser session (it does so
-//! when it makes a drive link, and the link carries the key). The browser
+//! when it makes a web link, and the link carries the key). The browser
 //! signs each upload with that key. So an upload stands on a member's word,
 //! as a pushed version does, and whoever holds only the bucket's key and the
 //! repository's password (a removed computer) can't make one.
@@ -60,7 +60,7 @@ impl Endorsement {
     }
 }
 
-/// A key for one browser session: its seed, which the drive link carries to
+/// A key for one browser session: its seed, which the web link carries to
 /// the browser, and its public half (hex), which a member endorses.
 #[must_use]
 pub fn session_key() -> ([u8; 32], String) {

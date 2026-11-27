@@ -117,16 +117,16 @@ to sync settings first.
   share with hard links (ext4, btrfs, NFS; `no_hard_links` otherwise), in the owner's
   terminal. Another computer joins by running the same with the folder as it sees it,
   and is approved. `unavailable` with "the account's folder isn't there" means the
-  drive isn't plugged in or mounted: nothing to fix in Omacloud. No Omacloud Drive
+  drive isn't plugged in or mounted: nothing to fix in Omacloud. No Omacloud in a browser
   in a browser and no `bucket` commands there.
 - `init --repo <path> --coordinator <directory>` uses plain directories, for
   development and tests only. Point test accounts at `OMACLOUD_CONFIG`, never
   the owner's real `~/.config/omacloud`.
 
-In a browser: Omacloud Drive (omacloud.computer/drive) shows the account's files. The
-owner signs in with `omacloud drive-link` (a code for a phone's camera, good for five
+In a browser: omacloud.computer/files shows the account's files. The
+owner signs in with `omacloud web-link` (a code for a phone's camera, good for five
 minutes) or Open on a Phone in the app; both print a secret, so the owner runs them.
-`omacloud drive-link --close` closes an open link and prints nothing secret. A file
+`omacloud web-link --close` closes an open link and prints nothing secret. A file
 uploaded there reaches a computer within about a minute, if one is on.
 
 In Omarchy's bar a cloud shows how sync stands; `omacloud bar on` and `omacloud bar off`
@@ -138,7 +138,7 @@ With a bucket, also make a new key at the provider, run `bucket set-key`, then d
 the old key once `bucket status` says every computer switched. Each step needs the owner.
 
 The owner must retain the recovery code privately. Commands that print a
-secret (`init` creating an account, `join-code`, `invite`, `drive-code`, `drive-link`, `export`,
+secret (`init` creating an account, `join-code`, `invite`, `web-code`, `web-link`, `export`,
 `recovery split|combine`) refuse with `terminal_required`
 off a terminal: have the owner run them in their own terminal. Never work
 around that refusal (no pseudo-terminals, no `script`), and never run them

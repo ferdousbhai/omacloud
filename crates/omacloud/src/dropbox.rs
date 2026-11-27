@@ -247,7 +247,7 @@ fn exchange(fields: &[(&str, &str)]) -> Result<String> {
 }
 
 /// An address Dropbox serves one file at to anyone, for a few hours or until
-/// the file is deleted: how a drive link's browser reads what was left for
+/// the file is deleted: how a web link's browser reads what was left for
 /// it before it has the token. `path` is from the top of the app's folder.
 pub fn temporary_link(refresh_token: &str, path: &str) -> Result<String> {
     let token = token_request(&[

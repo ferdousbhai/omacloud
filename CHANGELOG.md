@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Omacloud is made for your AI agents. Setting up or joining an account installs the agent
+  skill, which now walks an agent through whole jobs: getting back a file, working out why a
+  computer isn't syncing, moving to a new computer, adding a family member. It's a plugin for
+  Claude Code and Codex too (`/plugin install omacloud --marketplace ferdousbhai/omacloud`).
+- What Claude Code remembers of each project syncs, and so do Antigravity's instructions,
+  skills, workflows, hook scripts and MCP servers.
+- An account can live in a folder on a drive or a NAS: `omacloud init --provider folder --path
+  <folder>`. A drive that isn't plugged in is left alone until it's back.
+- The name Omacloud Drive is gone: your files in a browser are at omacloud.computer/files, the
+  commands are `omacloud web-link` and `omacloud web-code`, and a code starts `omacloud-web-`.
+  The old address, commands and codes no longer work: make a new code with `omacloud web-code`.
+- A computer's name is one line of text: `init` refuses one with a line break in it.
+- docs/format.md says what is in the storage, record by record.
 - The app has the look of the other Omarchy apps and follows your theme as you switch it. It
   no longer needs libadwaita. In a narrow window its pages are icons in the header, in place
   of the bar at the bottom.

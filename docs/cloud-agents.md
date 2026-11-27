@@ -69,7 +69,7 @@ which the app shows: which agent, which file, read or written, when.
 
 - **A connector at omacloud.computer.** It would have to decrypt, which is
   everything Omacloud promises not to do.
-- **Handing an agent a drive link.** It carries the key to the storage and the
+- **Handing an agent a web link.** It carries the key to the storage and the
   password to every file (design.md, In a browser): all or nothing, and the
   agent can't run the page that uses it.
 - **A separate connector for agents on your computer.** They have the files and

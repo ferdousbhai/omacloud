@@ -1,4 +1,4 @@
-// Omacloud Drive in a browser, laid out as iCloud Drive is on the web. Your
+// Omacloud in a browser, laid out as iCloud Drive is on the web. Your
 // files are read here from your own bucket. The bucket's key and the
 // repository's password stay in this page's memory: they go nowhere but into
 // requests to your bucket, and are gone when the tab closes or you lock it.
@@ -58,7 +58,7 @@ let bucket;
 // what a link or a pasted code said, when it names a Dropbox: the form has
 // no fields for one
 let dropbox = null;
-// what lets this session upload, if a drive link brought it (see paste.js)
+// what lets this session upload, if a web link brought it (see paste.js)
 let uploader = null;
 // files sent from here that no version has yet: [{ name, where, size, mtime }]
 let pending = [];
@@ -168,7 +168,7 @@ async function connect(form) {
 	status("Finding your files…");
 	const latest = await newest();
 	if (!latest) throw new Error("Nothing has been synced yet.");
-	trail = [{ name: "Omacloud Drive", tree: latest.tree }];
+	trail = [{ name: "Files", tree: latest.tree }];
 	form.reset();
 	$("pasted").value = "";
 	status("");
@@ -203,7 +203,7 @@ async function refresh() {
 	everything = undefined;
 	deletedFiles = undefined;
 	const names = trail.slice(1).map((step) => step.name);
-	trail = [{ name: "Omacloud Drive", tree: latest.tree }];
+	trail = [{ name: "Files", tree: latest.tree }];
 	for (const name of names) {
 		const next = (await readTree(trail.at(-1).tree)).find((n) => n.name === name && n.type === "dir");
 		if (!next) break;
@@ -212,7 +212,7 @@ async function refresh() {
 	const have = new Set((await allFiles()).map((file) => `${file.where}/${file.name}`));
 	pending = pending.filter((file) => !have.has(`${file.where}/${file.name}`));
 	await sidebar();
-	if ($("drive").hidden) return true;
+	if ($("browser").hidden) return true;
 	await (place ? openPlace(place) : open());
 	return true;
 }
@@ -302,14 +302,14 @@ $("items").addEventListener("drop", (event) => {
 
 // Where signing in lands, as iCloud's site does: what there is to open.
 function home() {
-	$("drive").hidden = true;
+	$("browser").hidden = true;
 	$("home").hidden = false;
 }
 function leaveHome() {
 	$("home").hidden = true;
-	$("drive").hidden = false;
+	$("browser").hidden = false;
 }
-$("home-drive").addEventListener("click", () => (leaveHome(), act(() => ((trail = trail.slice(0, 1)), open()))));
+$("home-files").addEventListener("click", () => (leaveHome(), act(() => ((trail = trail.slice(0, 1)), open()))));
 $("home-photos").addEventListener("click", () => (leaveHome(), act(() => openPlace("photos"))));
 $("home-recents").addEventListener("click", () => (leaveHome(), act(() => openPlace("recents"))));
 $("home-deleted").addEventListener("click", () => (leaveHome(), act(() => openPlace("deleted"))));
@@ -535,7 +535,7 @@ function show() {
 			}
 			const detail = folder ? "" : node.pending ? "Waiting for a computer" : human(node.size || 0);
 			// where a file from elsewhere is, or was
-			const from = place ? node.where || "Omacloud Drive" : "";
+			const from = place ? node.where || "Files" : "";
 			const row = el(
 				"div",
 				{ className: "item", role: "option" },
@@ -643,7 +643,7 @@ async function act(work) {
 	try {
 		await work();
 	} catch (e) {
-		($("drive").hidden ? $("signin-status") : $("status")).textContent = e.message;
+		($("browser").hidden ? $("signin-status") : $("status")).textContent = e.message;
 	}
 }
 
@@ -651,12 +651,12 @@ const fill = (form, found) => {
 	for (const [name, value] of Object.entries(found)) if (form.elements[name]) form.elements[name].value = value || "";
 };
 
-// A drive link: one of the person's computers left the drive code in their
+// A web link: one of the person's computers left the web code in their
 // bucket, sealed, for a few minutes, and the link says where and carries
 // what opens it. Nothing is typed, and the address alone opens nothing later.
 async function follow({ seed, address }) {
 	const status = (words) => ($("signin-status").textContent = words);
-	const again = "Make a new one on your computer: Open on a Phone in Omacloud, or omacloud drive-link.";
+	const again = "Make a new one on your computer: Open on a Phone in Omacloud, or omacloud web-link.";
 	status("Opening your link…");
 	await reader.load("omacloud_web.wasm");
 	let response;
@@ -683,7 +683,7 @@ $("pasted").addEventListener("input", (event) => {
 	const form = $("connect");
 	const status = (words) => ($("signin-status").textContent = words);
 	if (!found) {
-		status(text ? "That doesn't read as a drive code. Paste all of what omacloud drive-code prints, or enter it by hand." : "");
+		status(text ? "That doesn't read as a web code. Paste all of what omacloud web-code prints, or enter it by hand." : "");
 		return;
 	}
 	fill(form, found);

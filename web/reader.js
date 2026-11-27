@@ -40,7 +40,7 @@ export const addIndex = (stored) => Number(words.decode(call("add_index", stored
 export const locate = (id) => json(call("locate", id));
 // a blob's content from its bytes in the pack, checked against its id
 export const blob = (id, stored) => call("blob", id, stored);
-// what a drive link's computer left in the bucket, opened with the link's seed
+// what a web link's computer left in the bucket, opened with the link's seed
 export const unseal = (seed, sealed) => json(call("unseal", seed, sealed));
 // a file for the account's inbox, signed with the session's key and sealed
 // with the repository's (see crates/omacloud-web/src/upload.rs)

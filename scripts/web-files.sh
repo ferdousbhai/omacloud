@@ -56,7 +56,7 @@ on_tty "$OMACLOUD" --config "$work/a.toml" init --folder "$work/A" --provider s3
 # something deleted since, for Recently Deleted
 rm "$work/A/Work/Reports/sales.csv" "$work/A/Photos/forest.png"
 "$OMACLOUD" --config "$work/a.toml" --styled sync >/dev/null 2>&1
-printed=$(on_tty "$OMACLOUD" --config "$work/a.toml" drive-code | grep '^omacloud-drive-')
+printed=$(on_tty "$OMACLOUD" --config "$work/a.toml" web-code | grep '^omacloud-web-')
 
 # a computer of the account, running: what the page uploads, it takes in
 "$OMACLOUD" --config "$work/a.toml" watch --poll 2 >"$work/watch.log" 2>&1 &
@@ -64,16 +64,16 @@ pids+=($!)
 (cd "$work/site" && python3 -m http.server "$port" --bind 127.0.0.1 >/dev/null 2>&1) &
 pids+=($!)
 cat <<END
-Open http://127.0.0.1:$port and paste this, what \`omacloud drive-code\` prints:
+Open http://127.0.0.1:$port and paste this, what \`omacloud web-code\` prints:
 
 $printed
 
-Or follow a drive link, what \`omacloud drive-link\` shows (good for five minutes):
+Or follow a web link, what \`omacloud web-link\` shows (good for five minutes):
 
 END
 # the link's command waits for Enter, so it keeps a terminal of its own going
-OMACLOUD_DRIVE_URL=http://127.0.0.1:$port/ SHELL=/bin/bash script -qefc \
-  "$(printf '%q ' "$OMACLOUD" --config "$work/a.toml" drive-link)" /dev/null < <(sleep 290) | stdbuf -oL tr -d '\r' | grep --line-buffered '#link=' &
+OMACLOUD_WEB_URL=http://127.0.0.1:$port/ SHELL=/bin/bash script -qefc \
+  "$(printf '%q ' "$OMACLOUD" --config "$work/a.toml" web-link)" /dev/null < <(sleep 290) | stdbuf -oL tr -d '\r' | grep --line-buffered '#link=' &
 pids+=($!)
 echo
 echo "(a throwaway account; Ctrl-C ends it)"

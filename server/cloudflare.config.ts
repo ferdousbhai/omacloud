@@ -12,7 +12,7 @@ export default defineConfig({
 			enabled: false,
 		},
 		domains: ["omacloud.computer"],
-		// Omacloud Drive's page (public/drive, put there by build-drive.sh). The
+		// the browser page (public/files, put there by build-files.sh). The
 		// Worker answers first, so the page gets its headers like any other.
 		assets: { runWorkerFirst: true },
 		env: {

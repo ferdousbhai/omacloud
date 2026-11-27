@@ -98,7 +98,7 @@ encrypted there as anywhere else, so a lost drive gives nothing away.
   is.
 - **It's one copy, where you keep it.** A fire or a theft that takes the computers
   takes the drive too; a bucket or Dropbox is somewhere else.
-- **Not there:** Omacloud Drive in a browser, which reads a bucket or a Dropbox
+- **Not there:** Omacloud in a browser, which reads a bucket or a Dropbox
   (`omacloud mount` shows every file on a computer), and a key to change after a
   computer is lost: whoever reaches the folder reaches its encrypted files, so
   `omacloud devices revoke <fingerprint> --rotate` moves to a new encryption key.
@@ -125,7 +125,7 @@ and are tried again.
 
 ## Reading in a browser
 
-Omacloud Drive, at omacloud.computer/drive/ ([web/README.md](../web/README.md)).
+Omacloud in a browser, at omacloud.computer/files/ ([web/README.md](../web/README.md)).
 The page reads your files straight from your storage and decrypts them in the
 browser, so no server of Omacloud's carries them. Dropbox needs nothing for that.
 A bucket needs one rule, set once: let pages from `https://omacloud.computer`

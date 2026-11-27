@@ -73,25 +73,25 @@ oc a sync >/dev/null
 diff -r --no-dereference "$work/A" "$work/B"
 [ ! -e "$work/A/big.bin" ]
 # the code that opens the files in a browser names this bucket and its key
-drive=$(oc_tty a drive-code | grep '^omacloud-drive-')
-python3 - "${drive#omacloud-drive-}" "$S3_BUCKET" "$S3_KEY" <<'PY'
+code=$(oc_tty a web-code | grep '^omacloud-web-')
+python3 - "${code#omacloud-web-}" "$S3_BUCKET" "$S3_KEY" <<'PY'
 import base64, json, sys
 code, bucket, key = sys.argv[1:]
 said = json.loads(base64.urlsafe_b64decode(code + "=" * (-len(code) % 4)))
 assert said["bucket"] == bucket and said["key"] == key and said["password"], said.keys()
 PY
-# a drive link: the drive code waits in the bucket, sealed, at an address that
+# a web link: the web code waits in the bucket, sealed, at an address that
 # needs no key, until the link is closed
-link=$(oc_tty a drive-link --keep | grep -o '#link=.*')
+link=$(oc_tty a web-link --keep | grep -o '#link=.*')
 waits=$(python3 -c 'import base64, sys; a = sys.argv[1].split(".")[1]; print(base64.urlsafe_b64decode(a + "=" * (-len(a) % 4)).decode())' "$link")
 curl -fsS -o "$work/sealed" "$waits"
 [ -s "$work/sealed" ]
 if grep -q "$S3_SECRET" "$work/sealed"; then
   echo "the bucket's secret left unsealed"; exit 1
 fi
-oc a drive-link --close >/dev/null
+oc a web-link --close >/dev/null
 if curl -fsS -o /dev/null "$waits" 2>/dev/null; then
-  echo "a closed drive link still answers"; exit 1
+  echo "a closed web link still answers"; exit 1
 fi
 echo "two computers: ok"
 

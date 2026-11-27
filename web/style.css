@@ -147,12 +147,12 @@ button {
 }
 
 /* the drive */
-#drive {
+#browser {
 	height: 100%;
 	display: grid;
 	grid-template: auto 1fr / 14rem 1fr;
 }
-#drive > header {
+#browser > header {
 	grid-column: 1 / -1;
 	display: flex;
 	align-items: center;
@@ -160,11 +160,11 @@ button {
 	padding: 0.625rem 1rem;
 	border-bottom: 1px solid var(--line);
 }
-#drive > header .mark,
+#browser > header .mark,
 #home > header .mark {
 	width: 1.75rem;
 }
-#drive > header strong,
+#browser > header strong,
 #home > header strong {
 	font-size: 1.0625rem;
 	font-weight: 600;
@@ -592,7 +592,7 @@ svg.line {
 }
 
 @media (max-width: 640px) {
-	#drive {
+	#browser {
 		grid-template: auto auto 1fr / 1fr;
 	}
 	#sidebar {

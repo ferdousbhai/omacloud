@@ -12,7 +12,7 @@ use crate::{Reader, Result};
 /// What a computer's inbox takes: sealed with the repository's key, a
 /// header's length (4 bytes, little endian), the header, and the content.
 /// `seed` is the session's signing key and `endorsement` a member's word for
-/// it, both as the drive link carried them; `mtime` is when the file last
+/// it, both as the web link carried them; `mtime` is when the file last
 /// changed (Unix milliseconds); `nonce` must be random and used once.
 ///
 /// # Errors

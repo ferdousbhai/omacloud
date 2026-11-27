@@ -34,16 +34,16 @@ test("what omacloud export prints is read, however a terminal wrapped the copy",
 	assert.deepEqual(pasted(printed.replaceAll("\\\n", " ")), want);
 });
 
-test("a drive code is read, whole or wrapped", () => {
-	const code = `omacloud-drive-${Buffer.from(JSON.stringify({ v: 1, ...want })).toString("base64url")}`;
+test("a web code is read, whole or wrapped", () => {
+	const code = `omacloud-web-${Buffer.from(JSON.stringify({ v: 1, ...want })).toString("base64url")}`;
 	assert.deepEqual(pasted(code), want);
 	assert.deepEqual(pasted(`  ${code.match(/.{1,40}/g)!.join("\n")}\n`), want);
 	// a damaged one isn't half read
 	assert.equal(pasted(code.slice(0, 60)), null);
-	assert.equal(pasted("omacloud-drive-e30"), null);
+	assert.equal(pasted("omacloud-web-e30"), null);
 });
 
-test("a drive link is read from after the #", () => {
+test("a web link is read from after the #", () => {
 	const b64 = (text: string | Uint8Array) => Buffer.from(text).toString("base64url");
 	const seed = new Uint8Array(32).map((_, i) => i);
 	const address = "https://account.r2.cloudflarestorage.com/files/omacloud-links/ab12?X-Amz-Credential=key%2F20261113%2Fauto&X-Amz-Signature=00ff";
@@ -59,7 +59,7 @@ test("a drive link is read from after the #", () => {
 	assert.equal(linked("#section"), null);
 });
 
-test("what a drive link's code says may carry an upload key", () => {
+test("what a web link's code says may carry an upload key", () => {
 	const said = { v: 1, ...want };
 	assert.deepEqual(account(said), want);
 	const seed = Buffer.alloc(32, 7).toString("base64url");
@@ -73,9 +73,9 @@ test("what a drive link's code says may carry an upload key", () => {
 	assert.deepEqual(account({ ...said, upload: { seed, endorsement } }), want);
 });
 
-test("a drive code for an account in Dropbox names the token, not a bucket", () => {
+test("a web code for an account in Dropbox names the token, not a bucket", () => {
 	const said = { v: 1, endpoint: "", bucket: "", root: "", region: "", key: "", secret: "", password: "pw", dropbox: { app_key: "app", refresh_token: "tok", root: "/Omacloud" } };
-	const code = `omacloud-drive-${Buffer.from(JSON.stringify(said)).toString("base64url")}`;
+	const code = `omacloud-web-${Buffer.from(JSON.stringify(said)).toString("base64url")}`;
 	assert.deepEqual(pasted(code), { dropbox: { appKey: "app", refreshToken: "tok", root: "/Omacloud" }, password: "pw" });
 	// without the token it's neither kind
 	assert.equal(account({ ...said, dropbox: { app_key: "app" } }), null);
