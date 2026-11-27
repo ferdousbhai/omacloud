@@ -120,6 +120,11 @@ impl Failure {
             "no_account" => tr(
                 "There is no Omacloud account in this storage. Check that it's the Dropbox or bucket the code is for.",
             ),
+            "no_hard_links" => tr(
+                "That folder can't keep an account: its drive has no hard links. Use a drive formatted as ext4 or \
+                 btrfs, or a NAS's NFS share.",
+            ),
+            "folder_not_writable" => tr("That folder can't be written to. Check the drive and who may write there."),
             "key_refused" => tr(
                 "Your storage refused the key. Check the key's ID and secret, and that it may read and write the \
                  bucket; on Dropbox, allow Omacloud again.",
@@ -1288,7 +1293,15 @@ fn show_recovery_code(ui: &Rc<Ui>, code: String) {
 }
 
 /// The storage a new account can be on, with its `init` flags.
-const PROVIDERS: [(&str, &str); 3] = [("r2", "--account"), ("hetzner", "--location"), ("s3", "--endpoint")];
+const PROVIDERS: [(&str, &str); 4] = [
+    ("r2", "--account"),
+    ("hetzner", "--location"),
+    ("s3", "--endpoint"),
+    ("folder", "--path"),
+];
+
+/// A folder on a drive or NAS, which takes no bucket and no key.
+const FOLDER: usize = 3;
 
 /// What a provider is called here, and the field that says where its bucket is, in the language of the moment.
 fn provider_words(i: usize) -> (String, String) {
@@ -1296,7 +1309,8 @@ fn provider_words(i: usize) -> (String, String) {
         // names, as they are
         0 => ("Cloudflare R2".to_string(), tr("Cloudflare account ID")),
         1 => ("Hetzner".to_string(), tr("Location (fsn1, nbg1 or hel1)")),
-        _ => (tr("Other S3"), tr("Endpoint (https://...)")),
+        2 => (tr("Other S3"), tr("Endpoint (https://...)")),
+        _ => (tr("A Drive or NAS"), tr("Folder on it (/run/media/...)")),
     }
 }
 
@@ -1457,6 +1471,20 @@ fn bucket_step(ui: &Rc<Ui>, nav: &Nav) -> gtk::Box {
     create.add(&key_id_row.widget);
     let (secret_row, secret) = omui::password_row(&tr("Secret access key"));
     create.add(&secret_row.widget);
+    {
+        // a folder has no bucket and no key
+        let rows = [
+            bucket_row.widget.clone(),
+            key_id_row.widget.clone(),
+            secret_row.widget.clone(),
+        ];
+        provider.connect_selected_notify(move |p| {
+            let bucket = provider_at(p.selected()) != FOLDER;
+            for row in &rows {
+                row.set_visible(bucket);
+            }
+        });
+    }
     let create_button = button(&tr("Create Account"), Some("suggested-action"));
     {
         let ui = ui.clone();
@@ -1466,11 +1494,24 @@ fn bucket_step(ui: &Rc<Ui>, nav: &Nav) -> gtk::Box {
                 bucket.text().trim().to_string(),
                 key_id.text().trim().to_string(),
             );
+            let (name, flag) = PROVIDERS[provider_at(provider.selected())];
+            if provider_at(provider.selected()) == FOLDER {
+                if place.is_empty() {
+                    ui.toast(&tr("Say which folder, on the drive or NAS"));
+                    return;
+                }
+                let mut args: Vec<String> = ["--provider", name, flag, &place].map(str::to_string).to_vec();
+                args.extend(sync_args());
+                let Some(env) = recovery_env(&ui, &rescue) else {
+                    return;
+                };
+                run_init(&ui, args, env, setting_up_text);
+                return;
+            }
             if place.is_empty() || bucket.is_empty() || key_id.is_empty() || secret.text().is_empty() {
                 ui.toast(&tr("Fill in where your bucket is, and its key"));
                 return;
             }
-            let (name, flag) = PROVIDERS[provider_at(provider.selected())];
             let mut args: Vec<String> = [
                 "--provider",
                 name,

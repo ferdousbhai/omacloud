@@ -9,7 +9,8 @@
 - What Claude Code remembers of each project syncs, and so do Antigravity's instructions,
   skills, workflows, hook scripts and MCP servers.
 - An account can live in a folder on a drive or a NAS: `omacloud init --provider folder --path
-  <folder>`. A drive that isn't plugged in is left alone until it's back.
+  <folder>`, or A Drive or NAS under Use My Own Storage in the app. A drive that isn't plugged
+  in is left alone until it's back.
 - The name Omacloud Drive is gone: your files in a browser are at omacloud.computer/files, the
   commands are `omacloud web-link` and `omacloud web-code`, and a code starts `omacloud-web-`.
   The old address, commands and codes no longer work: make a new code with `omacloud web-code`.

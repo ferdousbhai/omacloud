@@ -14,9 +14,23 @@
 {"do":"key","keys":"Return"}
 {"do":"wait","focus":{"role":"list-item","name":"Cloudflare R2"}}
 {"do":"key","keys":"End"}
+{"do":"wait","focus":{"role":"list-item","name":"A Drive or NAS"}}
+{"do":"key","keys":"Return"}
+{"do":"wait","focus":{"role":"combo-box","name":"Provider"}}
+
+# A folder on a drive or NAS takes no bucket and no key.
+{"do":"wait","role":"text-box","name":"Folder on it (/run/media/...)","visible":true}
+{"do":"wait","role":"text-box","name":"Bucket name","visible":false}
+{"do":"wait","role":"text-box","name":"Access key ID","visible":false}
+{"do":"key","keys":"Return"}
+{"do":"wait","focus":{"role":"list-item","name":"Cloudflare R2"}}
+{"do":"key","keys":"End"}
+{"do":"wait","focus":{"role":"list-item","name":"A Drive or NAS"}}
+{"do":"key","keys":"Up"}
 {"do":"wait","focus":{"role":"list-item","name":"Other S3"}}
 {"do":"key","keys":"Return"}
 {"do":"wait","role":"text-box","name":"Cloudflare account ID","visible":false}
+{"do":"wait","role":"text-box","name":"Bucket name","visible":true}
 {"do":"wait","focus":{"role":"combo-box","name":"Provider"}}
 
 # All but the secret typed: still not enough.
