@@ -5,7 +5,8 @@ add) in sync on every Omarchy computer, with Omarchy settings, package lists
 and ssh and gpg keys alongside, earlier versions and deleted files kept
 for 30 days, end to end encrypted.
 This page describes what protects your data and what each party can and
-can't do. The source files named here hold the details.
+can't do. The source files named here hold the details, and
+[format.md](format.md) what is in the storage, record by record.
 
 ## Where it's stored
 

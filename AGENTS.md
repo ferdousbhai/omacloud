@@ -3,7 +3,8 @@
 End-to-end encrypted sync of files, Omarchy settings, package lists and keys
 across Omarchy computers, on plain restic, in each person's own Dropbox or S3 bucket.
 User docs: README.md; storage: docs/providers.md; design and threat model:
-docs/design.md; build, test and release: CONTRIBUTING.md.
+docs/design.md; what's in the storage, record by record: docs/format.md;
+build, test and release: CONTRIBUTING.md.
 
 ## Layout
 
