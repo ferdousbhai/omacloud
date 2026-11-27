@@ -272,4 +272,7 @@ names, settings or keys.
 - Sharing with other people (#8, #15).
 - A phone app (#35); a phone's browser has Omacloud Drive, above. Editing a file in a
   browser: it reads, uploads and puts back, and nothing more.
+- Agents that aren't on one of your computers (claude.ai, one on a phone)
+  reading and writing folders you grant them, answered by a computer of
+  yours: [cloud-agents.md](cloud-agents.md) has the design.
 - An outside review of this design (#18).
