@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.33 (2026-11-27)
 
 - Omacloud is made for your AI agents. Setting up or joining an account installs the agent
   skill, which now walks an agent through whole jobs: getting back a file, working out why a
