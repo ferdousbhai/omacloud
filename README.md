@@ -19,6 +19,21 @@ You pay your provider, if anything; Omacloud runs no storage and charges
 nothing. Your family and friends each get an account of their own, in their own
 Dropbox or a bucket you set up for them ([below](#family-and-friends)).
 
+## Made for your AI agents
+
+Omacloud is AI first: tell the agent you use (Claude Code, Codex, pi,
+opencode, Antigravity) what you want, such as "bring back the draft I deleted
+last week" or "set up my new laptop like this one", and it does it through the
+`omacloud` command ([below](#agent-skill)). What you taught your agents follows
+you too: their instructions, skills and settings, and Claude Code's memory.
+
+Omacloud has no AI of its own and never sees your files: your agents see what
+you let them on your own computer. There's no account with us and no
+analytics. Omacloud talks only to your own storage, and omacloud.computer
+serves the installer and Omacloud Drive's page and nothing your files depend
+on: `omacloud export` gives you the plain restic command that restores
+everything without Omacloud.
+
 ## Install
 
 On Omarchy (x86_64 or aarch64):
