@@ -3,7 +3,7 @@
 
 const PRIVACY = "privacy@omacloud.computer";
 const LEGAL = "legal@omacloud.computer";
-const UPDATED = "13 November 2026";
+const UPDATED = "27 November 2026";
 
 function layout(title: string, body: string): Response {
 	return new Response(
@@ -72,6 +72,15 @@ itself restores everything, and <code>omacloud export</code> prints the command 
 <p>The cost of nobody else holding your keys is that nobody else can reset them. Setup gives you a recovery
 code. Write it down and keep it somewhere that isn't a computer. Lose the code and all your computers, and
 the data is gone. If that worries you, you can split the code among people you trust.</p>
+<h2>Made for your AI agents</h2>
+<p>Omacloud is AI first. Tell the agent you use (Claude Code, Codex, pi, opencode, Antigravity) what you want,
+"bring back the draft I deleted last week" or "set up my new laptop like this one", and it does it through the
+<code>omacloud</code> command. What you taught your agents follows you too: their instructions, skills and
+settings, and what Claude Code remembers.</p>
+<p>Omacloud has no AI of its own. Your agents see what you let them, on your own computer. An agent that isn't on
+your computers, like Claude on your phone, can reach the folders you name through a connector you put in your own
+Cloudflare account. That one is a trade, and only yours to make: that account then holds the keys.
+<a href="https://github.com/ferdousbhai/omacloud/blob/master/docs/cloud-agents.md">Here is what it gives up</a>.</p>
 <h2>In a browser</h2>
 <p><a href="/files/">Omacloud in a browser</a> opens your files on any device. Same rule as everything else: the
 page fetches from your storage and decrypts in the tab, so this site never sees a file or a key.
@@ -79,6 +88,9 @@ To sign in on a phone, press Open on a Phone in the app and point
 the camera at the code. One of your computers leaves the keys in your storage for five minutes, sealed, and
 the code carries what opens them. Nothing passes through here. You can upload from there too: the browser
 encrypts the file, leaves it in your storage, and one of your computers picks it up.</p>
+<p>A phone is for when you're away from your computers, so it can stay signed in: press Stay Signed In once,
+and from then on it opens your files with its fingerprint or face. The keys then rest on the phone, and your
+computers list it, so you can cut off one you lose.</p>
 <h2>Family</h2>
 <p>Each person gets an account of their own, in storage of their own. You can pay for someone's bucket and
 still not be able to read their files, which is how it should be.</p>
@@ -102,7 +114,8 @@ they go to the storage you chose. That provider can't read them. It has its own 
 and you deal with it directly. Nothing of yours comes here.</p>
 <p><a href="/files/">Omacloud in a browser</a> is a page that runs in your browser. What you give it (a link from one of
 your computers, or your bucket's key and your password) stays in that tab. It goes into requests from your browser to your storage and
-is gone when you close the tab. Your files travel between your browser and your storage. This site serves
+is gone when you close the tab, unless you press Stay Signed In: then it's kept in that browser, on that device,
+encrypted, until you press Forget This Device. Your files travel between your browser and your storage. This site serves
 the page and sees none of it.</p>
 <h2>Contact</h2>
 <p><a href="mailto:${PRIVACY}">${PRIVACY}</a></p>`,
@@ -151,10 +164,12 @@ it. Omacloud runs on Omarchy (Arch Linux, x86_64 and aarch64), as a GTK app and 
 
 - [omacloud CLI](${repo}/blob/master/README.md): \`omacloud --help\` lists every command. Piped, every command prints a JSON envelope ({ok, data, summary}; \`--quiet\` for the data alone) on stdout and exits 0; a failure exits 1 with {ok: false, error: {code, kind, message, hint}} on one line of stderr, kind being usage, setup, not_found, unavailable or error; \`omacloud status\` reports state. Commands that print a secret (\`join-code\`, \`invite\`, \`web-code\`, \`web-link\`, \`export\`, \`recovery split\` and \`combine\`, a new account's recovery code) print only to a terminal. Secrets come from environment variables (OMACLOUD_RECOVERY_CODE, OMACLOUD_JOIN_CODE, OMACLOUD_SECRET_ACCESS_KEY) or a prompt, never arguments
 
+- [Agents off a person's computers](${repo}/blob/master/docs/cloud-agents.md): \`omacloud agents connect <folder>\` puts an MCP connector for the folders named into the person's own Cloudflare account (claude.ai, an agent on a phone); what that trades
+
 ## Site
 
 - [Home](${site}/): what Omacloud is and how to install it
-- [Omacloud in a browser](${site}/files/): a person's files in a browser, read from their own bucket or Dropbox and decrypted there; signed in with a link from one of their computers (\`omacloud web-link\`), it uploads too
+- [Omacloud in a browser](${site}/files/): a person's files in a browser, read from their own bucket or Dropbox and decrypted there; signed in with a link from one of their computers (\`omacloud web-link\`), it uploads too, and a phone can stay signed in
 - [Privacy](${site}/privacy): visiting collects nothing; Omacloud has no accounts
 - [Terms](${site}/terms): terms
 

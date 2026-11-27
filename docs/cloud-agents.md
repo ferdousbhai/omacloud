@@ -8,7 +8,7 @@ somewhere else (claude.ai, ChatGPT, one on a phone) has neither. For those
 there's a connector, which nobody has unless they set it up:
 
 ```sh
-omacloud agents connect --folder Documents/Notes
+omacloud agents connect Documents/Notes
 ```
 
 It puts a small program (`connector/`, a Cloudflare Worker) into **your own

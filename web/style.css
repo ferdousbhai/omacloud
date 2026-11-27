@@ -88,6 +88,18 @@ button {
 	border-radius: 1.125rem;
 	text-align: center;
 }
+/* groups of the form's rows, laid out as the rows themselves are */
+#kept,
+#fresh {
+	display: grid;
+	gap: 0.875rem;
+}
+#connect .quiet {
+	background: none;
+	border: 0;
+	color: var(--soft);
+	text-decoration: underline;
+}
 #connect .mark {
 	width: 4rem;
 	justify-self: center;

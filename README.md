@@ -30,7 +30,7 @@ you too: their instructions, skills and settings, and Claude Code's memory.
 
 An agent that isn't on your computers (claude.ai, one on your phone) can
 reach the folders you name too, through a connector you put in your own
-Cloudflare account: `omacloud agents connect --folder Documents/Notes`.
+Cloudflare account: `omacloud agents connect Documents/Notes`.
 It's there only if you set it up, and it's the one thing here that lets
 anything but your computers read your files (that account can, with the
 keys the connector holds): [docs/cloud-agents.md](docs/cloud-agents.md)

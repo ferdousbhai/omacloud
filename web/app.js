@@ -209,6 +209,8 @@ async function stayOffer() {
 	keptHere = await remember.kept();
 	$("home-stay").hidden = !remember.able() || !!keptHere;
 	$("home-forget").hidden = !keptHere;
+	// said once it's open, where a phone's owner will see it
+	if (!$("home-stay").hidden) $("home-status").textContent = "Away from your computers a lot? Stay Signed In keeps this device open to your files, with no new code.";
 }
 // A browser that stays signed in says so in the account's bucket, sealed with
 // the repository's key, so the person's computers can list it; forgetting
@@ -804,6 +806,7 @@ $("home-stay").addEventListener("click", () => act(stay));
 $("home-forget").addEventListener("click", () => act(forget));
 $("kept-open").addEventListener("click", () => act(openKept));
 $("kept-forget").addEventListener("click", () => act(forget));
+$("kept-other").addEventListener("click", () => (($("fresh").hidden = false), ($("kept-other").hidden = true)));
 $("filter").addEventListener("input", show);
 $("filter").placeholder = "Search";
 $("sort").addEventListener("change", (event) => {
@@ -829,7 +832,9 @@ else {
 	// to ask; one this browser holds the key to opens by itself
 	const here = await remember.kept();
 	if (here) {
+		// one thing to press; the codes are a press away
 		$("kept").hidden = false;
+		$("fresh").hidden = true;
 		$("kept-words").textContent =
 			here.lock === "passkey" ? "This device stays signed in. Open your files with its fingerprint or face." : "This device stays signed in.";
 		if (here.lock === "device") act(openKept);

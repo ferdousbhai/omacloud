@@ -132,7 +132,7 @@ stay signed in (Stay Signed In on that page); `omacloud browsers` lists the brow
 that do, and `omacloud browsers remove ID` cuts a lost one off by changing the
 account's keys, as `devices revoke --lost` does: it needs `--yes`, the owner's to give.
 
-Agents off the owner's computers (claude.ai, a phone): `omacloud agents connect --folder
+Agents off the owner's computers (claude.ai, a phone): `omacloud agents connect
 Documents/Notes` (`--read-only` to leave writing out) puts a connector in the owner's own
 Cloudflare account and prints its address and a passphrase, so the owner runs it, in
 their terminal, with their Cloudflare API token (OMACLOUD_CLOUDFLARE_TOKEN or asked for).

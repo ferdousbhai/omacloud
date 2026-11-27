@@ -45,13 +45,13 @@ echo "second draft" >"$work/A/Notes/Shared/plan.md"
 oc sync >/dev/null 2>&1
 
 # a connector is set up from a terminal, for a folder that's there
-refused=$("$OMACLOUD" --config "$work/a.toml" agents connect --folder Notes/Shared 2>&1 || true)
+refused=$("$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared 2>&1 || true)
 grep -q terminal_required <<<"$refused" || fail "the passphrase would print off a terminal: $refused"
 export OMACLOUD_CONNECTOR=$work/bundle OMACLOUD_CONNECTOR_OUT=$work/settings.json
-refused=$(on_tty "$OMACLOUD" --config "$work/a.toml" agents connect --folder Nowhere 2>&1 || true)
+refused=$(on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Nowhere 2>&1 || true)
 grep -q "isn't a folder here" <<<"$refused" || fail "a folder that isn't there was given: $refused"
-shown=$(on_tty "$OMACLOUD" --config "$work/a.toml" agents connect --folder Notes/Shared)
-grep -Eq '^  ([a-z0-9]{4}-){4}[a-z0-9]{4}$' <<<"$shown" || fail "no passphrase shown: $shown"
+shown=$(on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared)
+grep -Eq '^ +([a-z0-9]{4}-){4}[a-z0-9]{4}$' <<<"$shown" || fail "no passphrase shown: $shown"
 oc agents | grep -q "agents .* reads and writes Notes/Shared" || fail "the connector isn't listed: $(oc agents)"
 
 call() { node scripts/connector/run.mjs "$work/bundle" "$work/settings.json" "$@"; }
@@ -93,7 +93,7 @@ call read_file '{"path":"Notes/Shared/plan.md"}' | grep -q "third draft" || fail
 oc versions Notes/Shared/plan.md | grep -c . | grep -q '[3-9]' || fail "the versions before the edit are gone: $(oc versions Notes/Shared/plan.md)"
 
 # a connector set up to read doesn't write
-on_tty "$OMACLOUD" --config "$work/a.toml" agents connect --folder Notes/Shared --read-only >/dev/null
+on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared --read-only >/dev/null
 if call write_file '{"path":"Notes/Shared/plan.md","content":"x"}' >/dev/null; then fail "a read-only connector wrote"; fi
 [ "$(call read_file '{"path":"Notes/Shared/plan.md"}')" = "third draft, by an agent" ] || fail "a read-only connector doesn't read"
 unset OMACLOUD_CONNECTOR_OUT
@@ -115,15 +115,15 @@ printf '\0asm not the reader' >"$work/site/old/omacloud_web.wasm"
 pids+=($!)
 for _ in $(seq 50); do grep -q "port [0-9]" "$work/site-port" 2>/dev/null && break; sleep 0.1; done
 site=http://127.0.0.1:$(sed -n 's/.*port \([0-9]*\).*/\1/p' "$work/site-port" | head -n 1)
-refused=$(OMACLOUD_CLOUDFLARE_TOKEN=token-one OMACLOUD_WEB_URL=$site/old/ on_tty "$OMACLOUD" --config "$work/a.toml" agents connect --folder Notes/Shared 2>&1 || true)
+refused=$(OMACLOUD_CLOUDFLARE_TOKEN=token-one OMACLOUD_WEB_URL=$site/old/ on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared 2>&1 || true)
 grep -q "isn't the reader" <<<"$refused" || fail "a reader that isn't one was taken: $refused"
 [ ! -e "$work/cf/upload.json" ] || fail "something was uploaded without the reader"
 export OMACLOUD_WEB_URL=$site/
-refused=$(OMACLOUD_CLOUDFLARE_TOKEN=wrong on_tty "$OMACLOUD" --config "$work/a.toml" agents connect --folder Notes/Shared 2>&1 || true)
+refused=$(OMACLOUD_CLOUDFLARE_TOKEN=wrong on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared 2>&1 || true)
 grep -q "Cloudflare refused" <<<"$refused" || fail "a wrong token wasn't said: $refused"
 [ ! -e "$work/cf/upload.json" ] || fail "something was uploaded with a wrong token"
 export OMACLOUD_CLOUDFLARE_TOKEN=token-one
-shown=$(on_tty "$OMACLOUD" --config "$work/a.toml" agents connect --folder Notes/Shared --name notes)
+shown=$(on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared --name notes)
 grep -q "https://omacloud-notes.me.workers.dev/mcp" <<<"$shown" || fail "the connector's address isn't shown: $shown"
 python3 - "$work/cf" "$work/bundle" <<'PY'
 import json, os, sys

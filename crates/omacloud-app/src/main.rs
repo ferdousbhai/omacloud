@@ -1994,7 +1994,8 @@ fn show_web_link(ui: &Rc<Ui>) {
         dialog.set_heading_translated("Open on a phone");
         dialog.set_body_translated(
             "Point your phone's camera at this. Your files open in its browser, read straight from your storage. It \
-             works for five minutes, or until you close this.",
+             works for five minutes, or until you close this. To keep the phone signed in for when you're away, \
+             press Stay Signed In there.",
         );
         show_only(&dialog, &picture);
         dialog.add_response("copy", "");

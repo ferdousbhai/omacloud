@@ -430,9 +430,9 @@ enum AgentsCmd {
     /// OMACLOUD_CLOUDFLARE_TOKEN, or is asked for. Connecting again replaces
     /// it, and ends every sign-in to the one before
     Connect {
-        /// A folder agents may reach, like `Documents/Notes` (repeatable);
-        /// nothing outside these is shown or written
-        #[arg(long = "folder", required = true)]
+        /// The folders agents may reach, like `Documents/Notes`; nothing
+        /// outside these is shown or written
+        #[arg(required = true, value_name = "FOLDER")]
         folders: Vec<String>,
         /// Agents read, and write nothing
         #[arg(long)]
@@ -441,6 +441,7 @@ enum AgentsCmd {
         #[arg(long, default_value = "agents")]
         name: String,
         /// Your Cloudflare account id, if the token reaches more than one
+        /// (an account in R2 says it already)
         #[arg(long)]
         account: Option<String>,
         /// How long agents may write before you connect again
@@ -3499,8 +3500,21 @@ fn agents(paths: &Paths, action: AgentsCmd) -> Out {
                 // the reader is fetched last: nothing is asked of anyone until
                 // all that could be refused here has been
                 let modules = connector_modules()?;
+                if std::env::var_os("OMACLOUD_CLOUDFLARE_TOKEN").is_none() {
+                    eprintln!(
+                        "This needs an API token for your Cloudflare account, with the permission Workers Scripts: \
+                         Edit.\nMake one at https://dash.cloudflare.com/profile/api-tokens (Create Token, then Edit \
+                         Cloudflare Workers).\nIt's used now and kept nowhere."
+                    );
+                }
                 let api = cloudflare::Api::new(read_secret("OMACLOUD_CLOUDFLARE_TOKEN", "Cloudflare API token")?)?;
-                let account = api.account(account.as_deref())?;
+                // an account in R2 is in the Cloudflare account its address names
+                let in_r2 = code
+                    .endpoint
+                    .strip_prefix("https://")
+                    .and_then(|host| host.strip_suffix(".r2.cloudflarestorage.com"))
+                    .map(|account| account.trim_end_matches(".eu").to_string());
+                let account = api.account(account.or(in_r2).as_deref())?;
                 (api.deploy(&account, &script, &modules, &settings)?, account)
             };
             let mut known = agents_known(paths);
@@ -3508,9 +3522,10 @@ fn agents(paths: &Paths, action: AgentsCmd) -> Out {
             known.push(json!({ "name": name, "url": url, "account": account, "folders": folders, "write": !read_only, "until": until }));
             fs::write(paths.agents(), Value::Array(known).to_string())?;
             let human = format!(
-                "The connector is in your Cloudflare account. Add it to your agent as a connector, at:\n\n  {url}/mcp\n\nWhen it \
-                 asks, allow it with this passphrase, shown only now:\n\n  {shown}\n\nIt {} {}. It needs Cloudflare's \
-                 Workers Paid plan to open your files. `omacloud agents disconnect{}` takes it out.",
+                "The connector is in your Cloudflare account. It {} {}.\n\n1. In your agent, add a connector with this \
+                 address (in claude.ai: Settings, Connectors, Add custom connector):\n\n     {url}/mcp\n\n2. When it \
+                 asks, allow it with this passphrase, shown only now:\n\n     {shown}\n\nIt needs Cloudflare's Workers \
+                 Paid plan to open your files. `omacloud agents disconnect{}` takes it out.",
                 if read_only { "reads" } else { "reads and writes" },
                 folders.join(", "),
                 if name == "agents" {
