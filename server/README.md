@@ -22,7 +22,7 @@ sealed under a passphrase it never sees. It needs, as secrets of the Worker:
 | `CLOUDFLARE_API_TOKEN` | a token with Workers Scripts: Edit on the account below |
 | `CLOUDFLARE_ACCOUNT` | the id of the account the connectors run in, which needs Workers Paid |
 
-The monthly price's id is in `cloudflare.config.ts` (`STRIPE_PRICE`). Until
+`./set-secret.sh NAME` sets one, asking for it with no echo. The monthly price's id is in `cloudflare.config.ts` (`STRIPE_PRICE`). Until
 all of them and the database are there, `/api/` and `/subscribe/` answer
 404 and the rest of the site works as it did.
 
