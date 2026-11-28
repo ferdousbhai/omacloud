@@ -54,6 +54,16 @@ shown=$(on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared)
 grep -Eq '^ +([a-z0-9]{4}-){4}[a-z0-9]{4}$' <<<"$shown" || fail "no passphrase shown: $shown"
 oc agents | grep -q "agents .* reads and writes Notes/Shared" || fail "the connector isn't listed: $(oc agents)"
 
+# the settings alone open nothing: the keys in them are sealed under the passphrase
+python3 -c 'import json, sys
+settings = json.load(open(sys.argv[1]))
+assert settings["sealed"] and not {"storage", "key", "upload"} & set(settings), "the keys rest sealed"' "$work/settings.json"
+passphrase() { grep -Eo '([a-z0-9]{4}-){4}[a-z0-9]{4}' <<<"$1" | head -n 1; }
+PASSPHRASE=$(passphrase "$shown")
+export PASSPHRASE
+if PASSPHRASE=aaaa-bbbb-cccc-dddd-eeee node scripts/connector/run.mjs "$work/bundle" "$work/settings.json" list_files >/dev/null 2>&1; then
+	fail "another passphrase opened the connector's keys"
+fi
 call() { node scripts/connector/run.mjs "$work/bundle" "$work/settings.json" "$@"; }
 [ "$(call list_files)" = "Notes/" ] || fail "the top lists more than the way to what was given: $(call list_files)"
 [ "$(call list_files '{"path":"Notes"}')" = "Shared/" ] || fail "Notes shows what wasn't given: $(call list_files '{"path":"Notes"}')"
@@ -93,7 +103,7 @@ call read_file '{"path":"Notes/Shared/plan.md"}' | grep -q "third draft" || fail
 oc versions Notes/Shared/plan.md | grep -c . | grep -q '[3-9]' || fail "the versions before the edit are gone: $(oc versions Notes/Shared/plan.md)"
 
 # a connector set up to read doesn't write
-on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared --read-only >/dev/null
+PASSPHRASE=$(passphrase "$(on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared --read-only)")
 if call write_file '{"path":"Notes/Shared/plan.md","content":"x"}' >/dev/null; then fail "a read-only connector wrote"; fi
 [ "$(call read_file '{"path":"Notes/Shared/plan.md"}')" = "third draft, by an agent" ] || fail "a read-only connector doesn't read"
 unset OMACLOUD_CONNECTOR_OUT
@@ -136,8 +146,7 @@ assert meta["main_module"] == "worker.js" and meta["compatibility_date"], meta
 assert binding["type"] == "secret_text" and binding["name"] == "OMACLOUD", binding
 settings = json.loads(binding["text"])
 assert settings["folders"] == ["Notes/Shared"] and settings["write"] is True, settings
-assert settings["upload"]["endorsement"]["agent"] == {"name": "notes", "folders": ["Notes/Shared"]}, settings["upload"]
-assert "password" not in settings["storage"] and settings["key"]["encrypt"], "the key, not the password"
+assert settings["sealed"] and not {"storage", "key", "upload"} & set(settings), "the keys rest sealed"
 assert len(binding["text"]) < 5000, "a secret is at most 5 KB"
 # the passphrase itself is nowhere in what's uploaded
 assert "passphrase" not in settings and len(settings["passphrase_hash"]) == 64

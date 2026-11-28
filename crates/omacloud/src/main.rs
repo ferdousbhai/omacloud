@@ -3478,15 +3478,22 @@ fn agents(paths: &Paths, action: AgentsCmd) -> Out {
             for field in ["v", "password", "browsers", "upload"] {
                 _ = storage.as_object_mut().and_then(|o| o.remove(field));
             }
+            // the keys rest sealed under the passphrase: the settings alone,
+            // wherever they're kept, open nothing (connector/oauth.js)
+            let opener = Sha256::digest(format!("omacloud connector key 1{passphrase}").as_bytes());
+            let sealed = omacloud_web::link::seal(
+                &opener,
+                rand::random(),
+                &serde_json::to_vec(&json!({ "storage": storage, "key": secret.key, "upload": upload }))?,
+            )
+            .map_err(anyhow::Error::msg)?;
             let settings = json!({
-                "v": 1,
+                "v": 2,
                 "version": env!("CARGO_PKG_VERSION"),
                 "name": name,
-                "storage": storage,
-                "key": secret.key,
+                "sealed": URL_SAFE_NO_PAD.encode(sealed),
                 "folders": folders,
                 "write": !read_only,
-                "upload": upload,
                 "secret": hex::encode(rand::random::<[u8; 32]>()),
                 "passphrase_hash": hex::encode(Sha256::digest(passphrase.as_bytes())),
             })

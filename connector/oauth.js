@@ -7,12 +7,21 @@
 // is the passphrase `omacloud agents connect` showed its owner, typed once
 // on the page this serves. Changing the secret (connecting again) ends every
 // sign-in at once.
+//
+// The passphrase also opens the connector's keys: its settings hold the
+// storage's key and the repository's sealed, and what opens them is worked
+// out from the passphrase here and carried by the tokens (`k`), never kept.
+// So whoever holds the settings alone, the account they rest in included,
+// reads nothing.
 
 const encode = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const decode = (words) => Uint8Array.from(atob(words.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
 const utf8 = new TextEncoder();
 const hex = (bytes) => [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
 const now = () => Math.floor(Date.now() / 1000);
+
+// What opens the sealed keys, from the passphrase as typed.
+const opener = async (passphrase) => encode(new Uint8Array(await crypto.subtle.digest("SHA-256", utf8.encode(`omacloud connector key 1${passphrase}`))));
 
 const CODE_VALID = 120;
 const ACCESS_VALID = 3600;
@@ -163,41 +172,45 @@ export async function signin(request, config) {
 		}
 		const shown = { client: client.n, back: back.host, folders: config.folders ?? [], write: !!config.write, fields };
 		if (request.method === "GET") return page(shown);
-		const given = hex(await crypto.subtle.digest("SHA-256", utf8.encode((asked.get("passphrase") ?? "").replace(/[\s-]/g, "").toLowerCase())));
+		const typed = (asked.get("passphrase") ?? "").replace(/[\s-]/g, "").toLowerCase();
+		const given = hex(await crypto.subtle.digest("SHA-256", utf8.encode(typed)));
 		if (!same(given, config.passphrase_hash)) return page({ ...shown, wrong: true });
-		const code = await seal(config.secret, { t: "code", c: fields.client_id, r: fields.redirect_uri, ch: fields.code_challenge, exp: now() + CODE_VALID });
+		const code = await seal(config.secret, { t: "code", c: fields.client_id, r: fields.redirect_uri, ch: fields.code_challenge, k: await opener(typed), exp: now() + CODE_VALID });
 		return send({ code, state: fields.state });
 	}
 	if (url.pathname === "/token" && request.method === "POST") {
 		const asked = new URLSearchParams(await request.text());
-		const tokens = async () =>
+		const tokens = async (k) =>
 			json({
-				access_token: await seal(config.secret, { t: "access", exp: now() + ACCESS_VALID }),
+				access_token: await seal(config.secret, { t: "access", k, exp: now() + ACCESS_VALID }),
 				token_type: "Bearer",
 				expires_in: ACCESS_VALID,
-				refresh_token: await seal(config.secret, { t: "refresh", exp: now() + REFRESH_VALID }),
+				refresh_token: await seal(config.secret, { t: "refresh", k, exp: now() + REFRESH_VALID }),
 			});
 		if (asked.get("grant_type") === "authorization_code") {
 			const code = await unseal(config.secret, asked.get("code"), "code");
 			if (!code || code.c !== asked.get("client_id") || code.r !== asked.get("redirect_uri")) return refuse("invalid_grant", "the code is wrong, used elsewhere or run out");
 			const proof = encode(new Uint8Array(await crypto.subtle.digest("SHA-256", utf8.encode(asked.get("code_verifier") ?? ""))));
 			if (!same(proof, code.ch)) return refuse("invalid_grant", "the code's proof doesn't match");
-			return tokens();
+			return tokens(code.k);
 		}
 		if (asked.get("grant_type") === "refresh_token") {
-			if (!(await unseal(config.secret, asked.get("refresh_token"), "refresh"))) return refuse("invalid_grant", "sign in again");
-			return tokens();
+			const refresh = await unseal(config.secret, asked.get("refresh_token"), "refresh");
+			if (!refresh) return refuse("invalid_grant", "sign in again");
+			return tokens(refresh.k);
 		}
 		return refuse("unsupported_grant_type", "authorization_code or refresh_token");
 	}
 	return null;
 }
 
-// Whether a request to the tools carries a token this connector gave.
-export async function allowed(request, config) {
+// The token a request to the tools carries, if this connector gave it: what
+// it says, `k` (what opens the sealed keys) included; else `null`.
+export async function signed(request, config) {
 	const given = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
-	return !!given && !!(await unseal(config.secret, given, "access"));
+	return given ? unseal(config.secret, given, "access") : null;
 }
+export const allowed = async (request, config) => !!(await signed(request, config));
 
 // What a request without one is told: where to sign in.
 export function unauthorized(request) {

@@ -1,8 +1,9 @@
 // An account's files, read straight from the person's own storage and
 // decrypted here with the reader the browser page uses (crates/omacloud-web).
-// "Here" is a Worker in the person's own Cloudflare account, which holds the
-// storage's key and the repository's key as its secret: see docs/cloud-agents.md
-// for what that trades. Only the folders the person granted are ever shown.
+// "Here" is a Worker whose settings hold the storage's key and the
+// repository's key sealed under the connector's passphrase, opened while an
+// agent that signed in with it is asking: see docs/cloud-agents.md for what
+// that trades. Only the folders the person granted are ever shown.
 
 import * as reader from "../web/reader.js";
 import { Bucket } from "../web/s3.js";
@@ -17,6 +18,15 @@ const TREES_KEPT = 2000;
 const text = new TextDecoder();
 const hex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 const random = (n) => crypto.getRandomValues(new Uint8Array(n));
+
+const decode = (words) => Uint8Array.from(atob(words.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+
+// The settings' sealed part (`storage`, `key`, `upload`), opened with what a
+// signed-in agent's token carries; throws if that isn't what sealed it.
+export async function unlock(config, k, wasm) {
+	await reader.loadModule(wasm);
+	return reader.unseal(decode(String(k ?? "")), decode(config.sealed));
+}
 
 // A refusal to say to the agent as it is.
 export class Refused extends Error {}
@@ -48,8 +58,8 @@ function reach(folders, names) {
 }
 
 export class Files {
-	// `config` is the connector's secret (see `omacloud agents connect`);
-	// `wasm` the reader's module.
+	// `config` is the connector's settings (see `omacloud agents connect`)
+	// with their sealed part opened (`unlock`); `wasm` the reader's module.
 	constructor(config, wasm) {
 		this.config = config;
 		this.wasm = wasm;

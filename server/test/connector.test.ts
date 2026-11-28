@@ -4,7 +4,7 @@ import { test } from "node:test";
 // @ts-ignore: plain JavaScript
 import { answer, unknownVersion } from "../../connector/mcp.js";
 // @ts-ignore: plain JavaScript
-import { allowed, seal, signin, unauthorized, unseal } from "../../connector/oauth.js";
+import { allowed, seal, signed, signin, unauthorized, unseal } from "../../connector/oauth.js";
 // @ts-ignore: plain JavaScript
 import { Refused } from "../../connector/files.js";
 
@@ -78,6 +78,9 @@ test("an agent signs in with the passphrase, and nothing else lets it in", async
 
 	const call = (token?: string) => new Request(`${at}/mcp`, { method: "POST", headers: token ? { authorization: `Bearer ${token}` } : {} });
 	assert.equal(await allowed(call(tokens.access_token), config), true);
+	// the token carries what opens the connector's sealed keys, worked out from the passphrase
+	const opens = b64(await sha("omacloud connector key 1abcdefghijklmnop"));
+	assert.equal((await signed(call(tokens.access_token), config)).k, opens);
 	assert.equal(await allowed(call(), config), false);
 	// a refresh token isn't an access token, and another connector's secret made neither
 	assert.equal(await allowed(call(tokens.refresh_token), config), false);
@@ -85,7 +88,7 @@ test("an agent signs in with the passphrase, and nothing else lets it in", async
 	assert.match(unauthorized(call()).headers.get("www-authenticate"), /resource_metadata="https:\/\/omacloud-agents\.me\.workers\.dev\/\.well-known\/oauth-protected-resource"/);
 
 	const again = await signin(post("/token", String(new URLSearchParams({ grant_type: "refresh_token", refresh_token: tokens.refresh_token }))), config);
-	assert.equal(await allowed(call((await again.json()).access_token), config), true);
+	assert.equal((await signed(call((await again.json()).access_token), config)).k, opens);
 	assert.equal((await signin(post("/token", "grant_type=refresh_token&refresh_token=nope"), config)).status, 400);
 	assert.equal(await signin(new Request(`${at}/mcp`), config), null);
 });
