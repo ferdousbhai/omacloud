@@ -1,12 +1,12 @@
-// omacloud.computer: Omacloud in a browser, the paid tier and the public pages.
+// omacloud.computer: Omacloud in a browser, what the site keeps for accounts that ask (paid.ts), and the public pages.
 
 import { type Paid, d1Store, paid } from "./paid.ts";
 import * as pages from "./pages.ts";
 import { FILES_CSP, secureAsset, secureDocument } from "./security-headers.ts";
 
 // Omacloud in a browser: a page of static files that reads a person's storage from
-// their browser. Nothing of theirs comes here unless they subscribe
-// (paid.ts): the Worker only hands out the page, under a policy that lets it load this site's own code and nothing else.
+// their browser. Nothing of theirs comes here unless they ask (paid.ts: a
+// passkey's sealed note, or a subscription): the Worker only hands out the page, under a policy that lets it load this site's own code and nothing else.
 async function files(req: Request, env: Env): Promise<Response> {
 	const response = await env.ASSETS.fetch(req);
 	if (!response.headers.get("content-type")?.includes("text/html")) return secureAsset(response);
@@ -20,9 +20,10 @@ async function files(req: Request, env: Env): Promise<Response> {
 // Omacloud's mark (contrib/omacloud.svg), for where another site shows it.
 const LOGO = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -10 64 64"><path fill="#0071e3" d="M50 44H16a14 14 0 0 1-2.6-27.8A19 19 0 0 1 50.6 14 15 15 0 0 1 50 44z"/></svg>';
 
-// What the paid tier runs on, once it's all there: a deploy without Stripe's
-// keys or the database serves the free site and nothing else.
-function paidTier(env: Env): Paid | null {
+// What paid.ts runs on (passkeys left with the site, and subscriptions), once
+// it's all there: a deploy without Stripe's keys or the database serves the
+// pages and nothing else.
+function accounts(env: Env): Paid | null {
 	if (!env.DB || !env.STRIPE_SECRET_KEY || !env.STRIPE_WEBHOOK_SECRET || !env.STRIPE_PRICE || !env.PASSKEY_SECRET || !env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT) return null;
 	return {
 		store: d1Store(env.DB),
@@ -45,7 +46,7 @@ export default {
 	async fetch(req, env): Promise<Response> {
 		const url = new URL(req.url);
 		if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/subscribe/")) {
-			const tier = paidTier(env);
+			const tier = accounts(env);
 			try {
 				const answered = tier && (await paid(tier, req));
 				if (answered) return answered;

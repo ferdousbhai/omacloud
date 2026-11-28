@@ -30,7 +30,7 @@ impl Plan {
     fn with(key: String) -> Option<Self> {
         let client = reqwest::blocking::Client::builder()
             .user_agent(concat!("omacloud/", env!("CARGO_PKG_VERSION")))
-            .timeout(Duration::from_secs(90))
+            .timeout(Duration::from_secs(30))
             .build()
             .ok()?;
         Some(Self {
@@ -40,7 +40,7 @@ impl Plan {
         })
     }
 
-    /// The subscription this computer has a key for, if any.
+    /// This computer's key at the site, if it made one.
     pub fn read(path: &Path) -> Option<Self> {
         let key = fs::read_to_string(path).ok()?.trim().to_string();
         (key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit()))
@@ -121,8 +121,9 @@ impl Plan {
         })
     }
 
-    /// Where the subscription stands: `active`, `status`, `until`, and the
-    /// connectors and passkeys it keeps.
+    /// Where the account stands at the site: whether it subscribes
+    /// (`active`, `status`, `until`), its connectors, and how many passkeys
+    /// were left there.
     ///
     /// # Errors
     ///

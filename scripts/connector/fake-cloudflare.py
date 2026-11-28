@@ -5,7 +5,8 @@ makes, for scripts/connector.sh: it writes down what it was sent.
   fake-cloudflare.py <port file> <log folder>
 
 The token it takes is "token-one"; the account "acct"; the workers.dev name "me".
-Its sign-in (/oauth2/auth, /oauth2/token) gives that token to whoever asks.
+Its sign-in (/oauth2/auth, /oauth2/token) gives leave at once, and that token
+for the code only to whoever holds what its challenge was made from.
 """
 import base64, hashlib, json, sys
 from urllib.parse import parse_qs, urlencode, urlparse

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""A stand-in for omacloud.computer's paid tier (server/src/paid.ts), for
+"""A stand-in for what omacloud.computer does for accounts (server/src/paid.ts)
+and for where Cloudflare's sign-in returns (/cloudflare/callback), for
 scripts/connector.sh: it writes down what it was sent.
 
   fake-site.py <port file> <log folder>
@@ -38,7 +39,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if not re.fullmatch(r"Bearer [0-9a-f]{64}", self.headers.get("Authorization") or ""):
-            return self.answer(401, {"error": {"code": "no_key", "message": "this needs a subscription's key"}})
+            return self.answer(401, {"error": {"code": "no_key", "message": "this needs the account's key"}})
         path, method = self.path, self.command
         paid = (log / "paid").exists()
         hosted = sorted(p.stem[len("hosted-"):] for p in log.glob("hosted-*.json"))

@@ -4,7 +4,7 @@ import { test } from "node:test";
 
 import { type Connector, type Paid, type Passkey, type Store, type Subscriber, paid } from "../src/paid.ts";
 
-// The paid tier (src/paid.ts), with a map for the database and stand-ins for Stripe and Cloudflare.
+// What the site does for accounts (src/paid.ts), with a map for the database and stand-ins for Stripe and Cloudflare.
 
 const site = "https://omacloud.computer";
 const sha = async (words: string) => Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(words)));
@@ -82,6 +82,11 @@ test("subscribing goes to Stripe's checkout, and only Stripe says who has paid",
 	assert.equal(checkout.get("subscription_data[metadata][subscriber]"), id);
 	// the payment page itself says who needn't pay
 	assert.match(checkout.get("custom_text[submit][message]") ?? "", /Workers Paid plan\? You don't need this/);
+	// a promotion code is taken, and with nothing to pay no card is asked for
+	assert.equal(checkout.get("allow_promotion_codes"), "true");
+	assert.equal(checkout.get("payment_method_collection"), "if_required");
+	// an address that isn't one is that, subscribed or not
+	assert.equal((await call(p, "/api/nothing", { key })).status, 404);
 
 	assert.deepEqual(await said(await call(p, "/api/subscription", { key })), { active: false, status: "none", until: 0, connectors: [], passkeys: 0 });
 	assert.equal((await call(p, "/api/subscription")).status, 401);

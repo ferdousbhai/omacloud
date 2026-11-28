@@ -5,18 +5,14 @@
 //! theirs with the one permission Workers Scripts: Edit where there's no
 //! browser. Either is used for these calls and kept nowhere.
 
-use std::{
-    io::{BufRead as _, BufReader},
-    net::TcpListener,
-    time::{Duration, Instant},
-};
+use std::{net::TcpListener, time::Duration};
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use crate::{
-    dropbox::{challenge, on_desktop, open_browser, param, random_url_safe, reply},
     fail::{self, CliError},
+    loopback::{Came, challenge, on_desktop, open_browser, random_url_safe, wait_for_code},
 };
 
 /// Omacloud as Cloudflare knows it (Manage Account, OAuth clients, in
@@ -27,15 +23,21 @@ const CLIENT: &str = "6b4a9ea3ec241e507a1bbc6b4e06ebd5";
 /// the older Workers Scripts Write that an API token has.)
 const SCOPE: &str = "workers-scripts.admin";
 
+fn agent() -> Result<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
+        // workers.dev and the API turn away clients that don't say what they are
+        .user_agent(concat!("omacloud/", env!("CARGO_PKG_VERSION")))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .context("making a client for Cloudflare")
+}
+
 /// Leave to edit Workers in an account the person picks, asked of Cloudflare
 /// in their browser: a token for that, good for a short while.
 /// `OMACLOUD_CLOUDFLARE_OAUTH` names a stand-in for Cloudflare's sign-in, and
 /// `OMACLOUD_CLOUDFLARE_CLIENT` another client, both for tests.
-fn allowed_in_browser(client: &str) -> Result<String> {
-    let stand_in = std::env::var("OMACLOUD_CLOUDFLARE_OAUTH").ok();
-    let oauth = stand_in
-        .clone()
-        .unwrap_or_else(|| "https://dash.cloudflare.com/oauth2".into());
+fn allowed_in_browser(client: &str, stand_in: Option<&str>) -> Result<String> {
+    let oauth = stand_in.unwrap_or("https://dash.cloudflare.com/oauth2");
     let listener = TcpListener::bind(("127.0.0.1", 0)).context("listening for Cloudflare's answer")?;
     let port = listener.local_addr()?.port();
     // Cloudflare returns people to an https address: the site's, which sends
@@ -55,17 +57,29 @@ fn allowed_in_browser(client: &str) -> Result<String> {
             ("code_challenge_method", "S256"),
         ],
     )?;
-    eprintln!(
-        "Allow Omacloud to put the connector in your Cloudflare account, in your browser. If it didn't open, go          to:\n\n  {url}\n"
-    );
+    eprintln!("Allow Omacloud in your Cloudflare account, in your browser. If it didn't open, go to:\n\n  {url}\n");
     if stand_in.is_none() {
         open_browser(url.as_str());
     }
-    let code = wait_for_code(&listener, &state)?;
-    let response = reqwest::blocking::Client::builder()
-        .user_agent(concat!("omacloud/", env!("CARGO_PKG_VERSION")))
-        .timeout(Duration::from_secs(60))
-        .build()?
+    let refused = |why: &str| {
+        fail::setup(
+            "cloudflare_refused",
+            format!("Omacloud wasn't allowed in Cloudflare: {why}"),
+        )
+        .hint("try again and press Authorize, or use an API token: put it in OMACLOUD_CLOUDFLARE_TOKEN")
+    };
+    let code = match wait_for_code(
+        &listener,
+        "/callback",
+        &state,
+        ("Omacloud is allowed", "Close this tab and go back to your terminal."),
+        ("Omacloud wasn't allowed", "Nothing was put in your Cloudflare account."),
+    )? {
+        Came::Code(code) => code,
+        Came::Refused(why) => return Err(refused(why.as_deref().unwrap_or("it wasn't allowed")).into()),
+        Came::TimedOut => return Err(refused("nothing came back in ten minutes").into()),
+    };
+    let response = agent()?
         .post(format!("{oauth}/token"))
         .form(&[
             ("grant_type", "authorization_code"),
@@ -95,90 +109,6 @@ fn allowed_in_browser(client: &str) -> Result<String> {
     })
 }
 
-/// `%41` and the like in a part of an address, as what they stand for.
-fn unescaped(part: &str) -> String {
-    let bytes = part.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let hex = (bytes[i] == b'%')
-            .then(|| part.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok()))
-            .flatten();
-        if let Some(byte) = hex {
-            out.push(byte);
-            i += 3;
-        } else {
-            out.push(if bytes[i] == b'+' { b' ' } else { bytes[i] });
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// The code Cloudflare sends the browser back with.
-fn wait_for_code(listener: &TcpListener, state: &str) -> Result<String> {
-    let refused = |why: &str| {
-        fail::setup(
-            "cloudflare_refused",
-            format!("Omacloud wasn't allowed in Cloudflare: {why}"),
-        )
-        .hint("try again and press Allow, or use an API token: put it in OMACLOUD_CLOUDFLARE_TOKEN")
-    };
-    listener.set_nonblocking(true)?;
-    let deadline = Instant::now() + Duration::from_secs(600);
-    loop {
-        let stream = match listener.accept() {
-            Ok((s, _)) => s,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                if Instant::now() > deadline {
-                    return Err(refused("nothing came back in ten minutes").into());
-                }
-                std::thread::sleep(Duration::from_millis(200));
-                continue;
-            }
-            Err(e) => return Err(e).context("waiting for the browser"),
-        };
-        stream.set_nonblocking(false)?;
-        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-        let mut line = String::new();
-        _ = BufReader::new(&stream).read_line(&mut line);
-        // GET /callback?code=...&state=... HTTP/1.1
-        let target = line.split_whitespace().nth(1).unwrap_or_default();
-        let Some(query) = target.strip_prefix("/callback?") else {
-            reply(&stream, "404 Not Found", "Not here", "");
-            continue;
-        };
-        if param(query, "state").map(unescaped).as_deref() != Some(state) {
-            reply(
-                &stream,
-                "400 Bad Request",
-                "That didn't work",
-                "Start again from Omacloud.",
-            );
-            continue;
-        }
-        if let Some(code) = param(query, "code") {
-            reply(
-                &stream,
-                "200 OK",
-                "Omacloud is allowed",
-                "Close this tab and go back to your terminal.",
-            );
-            return Ok(unescaped(code));
-        }
-        reply(
-            &stream,
-            "200 OK",
-            "Omacloud wasn't allowed",
-            "Nothing was put in your Cloudflare account.",
-        );
-        let why = param(query, "error_description")
-            .or_else(|| param(query, "error"))
-            .map_or_else(|| "it wasn't allowed".to_string(), unescaped);
-        return Err(refused(&why).into());
-    }
-}
-
 /// Cloudflare's API, or a stand-in for it (`OMACLOUD_CLOUDFLARE_API`, for tests).
 pub struct Api {
     client: reqwest::blocking::Client,
@@ -200,7 +130,7 @@ fn refused(what: &str, said: &Value, status: reqwest::StatusCode) -> CliError {
         words.join("; ")
     };
     let hint = if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-        "the token needs the permission Workers Scripts: Edit, for this account (Cloudflare dashboard > My Profile > API Tokens)"
+        "pick this account and allow Workers Admin when Cloudflare asks; an API token needs the permission Workers Scripts: Edit for it"
     } else {
         "check the account and the token, and try again"
     };
@@ -219,9 +149,9 @@ impl Api {
     pub fn with_leave() -> Result<Self> {
         let client = std::env::var("OMACLOUD_CLOUDFLARE_CLIENT").unwrap_or_else(|_| CLIENT.to_string());
         let by_token = std::env::var_os("OMACLOUD_CLOUDFLARE_TOKEN").is_some();
-        if !by_token && !client.is_empty() && (on_desktop() || std::env::var_os("OMACLOUD_CLOUDFLARE_OAUTH").is_some())
-        {
-            return Self::new(allowed_in_browser(&client)?);
+        let stand_in = std::env::var("OMACLOUD_CLOUDFLARE_OAUTH").ok();
+        if !by_token && !client.is_empty() && (on_desktop() || stand_in.is_some()) {
+            return Self::new(allowed_in_browser(&client, stand_in.as_deref())?);
         }
         if !by_token {
             eprintln!(
@@ -237,12 +167,7 @@ impl Api {
     ///
     /// If no client can be made.
     pub fn new(token: String) -> Result<Self> {
-        let client = reqwest::blocking::Client::builder()
-            // workers.dev and the API turn away clients that don't say what they are
-            .user_agent(concat!("omacloud/", env!("CARGO_PKG_VERSION")))
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .context("making a client for Cloudflare")?;
+        let client = agent()?;
         let base = std::env::var("OMACLOUD_CLOUDFLARE_API")
             .unwrap_or_else(|_| "https://api.cloudflare.com/client/v4".to_string());
         Ok(Self {
@@ -253,6 +178,12 @@ impl Api {
     }
 
     fn send(&self, what: &str, request: reqwest::blocking::RequestBuilder) -> Result<Value> {
+        self.sent(what, request).map(|(_, said)| said)
+    }
+
+    /// The same, with how Cloudflare answered; a 404 is no failure here,
+    /// for the caller to take as it means.
+    fn sent(&self, what: &str, request: reqwest::blocking::RequestBuilder) -> Result<(reqwest::StatusCode, Value)> {
         let response = request
             .bearer_auth(&self.token)
             .send()
@@ -263,10 +194,13 @@ impl Api {
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or(Value::Null);
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok((status, Value::Null));
+        }
         if !status.is_success() || said["success"] == json!(false) {
             return Err(refused(what, &said, status).into());
         }
-        Ok(said["result"].clone())
+        Ok((status, said["result"].clone()))
     }
 
     /// The account to deploy into: the one given, or the only one the token
@@ -380,9 +314,6 @@ impl Api {
         let request = self
             .client
             .delete(format!("{}/accounts/{account}/workers/scripts/{name}", self.base));
-        match self.send("removing the connector", request) {
-            Err(e) if e.to_string().contains("not found") || e.to_string().contains("does not exist") => Ok(()),
-            other => other.map(|_| ()),
-        }
+        self.sent("removing the connector", request).map(|_| ())
     }
 }

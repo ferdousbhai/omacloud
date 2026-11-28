@@ -23,7 +23,7 @@ test("the pages are served, and nothing else", async () => {
 	const home = await get("/");
 	assert.equal(home.status, 302);
 	assert.equal(home.headers.get("location"), "https://omacloud.computer/files/");
-	// the paid tier isn't there until Stripe's keys and the database are
+	// nothing is kept for anyone, passkeys included, until Stripe's keys and the database are there
 	assert.equal((await get("/api/subscription")).status, 404);
 	assert.equal((await get(`/subscribe/${"a".repeat(64)}`)).status, 404);
 	for (const gone of ["/signin", "/s", "/connector/worker.js"]) assert.equal((await get(gone)).status, 404, gone);

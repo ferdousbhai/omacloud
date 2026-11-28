@@ -1,6 +1,6 @@
 // The public pages of omacloud.computer: privacy, terms and llms.txt. The
 // site opens on Omacloud in a browser (/files), which index.ts serves along
-// with /install.sh and the paid tier (paid.ts).
+// with /install.sh and what the site does for accounts (paid.ts).
 
 const PRIVACY = "privacy@omacloud.computer";
 const LEGAL = "legal@omacloud.computer";
@@ -67,6 +67,9 @@ chose. That provider can't read them. It has its own terms and privacy policy, a
 your computers, or your bucket's key and your password) stays in that tab. It goes into requests from your browser to your storage and
 is gone when you close the tab, unless you press Stay Signed In: then it's kept in that browser, on that device,
 encrypted, until you press Forget This Device. Your files travel between your browser and your storage.</p>
+<p>If you allow Omacloud in your Cloudflare account (<code>omacloud agents connect</code>), Cloudflare sends your
+browser back through this site, which passes it straight on to the command waiting on your computer. Nothing of
+that is kept, and what passes is of use only to that command.</p>
 <h2>A passkey on your other devices</h2>
 <p>Only if you press Use on My Other Devices: this site then keeps the hash of a key your computer made, the
 passkey's public key and what your browser sealed with the passkey, and hands that back to a browser that proves the

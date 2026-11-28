@@ -2,8 +2,11 @@
 
 A Cloudflare Worker: Omacloud in a browser at `/files/` (where `/` sends), a
 page of static files that reads a person's storage from their browser; the
-public pages (privacy, terms, `/llms.txt`, `/health`, and `/install.sh`, a
-redirect to the latest release's installer); and what it does for accounts
+public pages (privacy, terms, `/subscribed`, `/llms.txt`, `/health`,
+`/logo.svg`, and `/install.sh`, a redirect to the latest release's
+installer); `/cloudflare/callback`, where Cloudflare returns someone who
+allowed Omacloud in their account (`omacloud agents connect`), which only
+sends them on to the command waiting on `127.0.0.1` and keeps nothing; and what it does for accounts
 that ask. It keeps no logs (observability is off) and sets no cookies. For
 someone who asked for nothing it holds nothing, and no account depends on it.
 
@@ -27,7 +30,8 @@ all of them and the database are there, `/api/` and `/subscribe/` answer
 404 and the rest of the site works as it did.
 
 - `src/`: the Worker (`index.ts` the paths; `pages.ts` the pages; `paid.ts`
-  and `hosting.ts` the paid tier).
+  what it keeps for accounts, and `hosting.ts` the connectors it runs for
+  subscribers).
 - `cloudflare.config.ts`: the Worker's configuration, for `cf`.
 - `build-files.sh`: puts the browser page (`../web`, and the reader from
   `../crates/omacloud-web` built to WebAssembly) in `public/files`, and the

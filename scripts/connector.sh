@@ -5,7 +5,8 @@
 # storage. It has to list, read and search what it was given and nothing
 # else, read an earlier version, and write a file that a computer's daemon
 # takes in over the one that's there, and turns away outside its folders.
-# Then where it goes: a person's own Cloudflare account, or with a
+# Then where it goes: a person's own Cloudflare account (with a token, or
+# with leave asked in a browser and returned through the site), or with a
 # subscription Omacloud's, each stood in for.
 #
 #   scripts/connector.sh [path/to/omacloud]
@@ -34,6 +35,7 @@ endpoint=http://127.0.0.1:$(cat "$work/port")
 
 on_tty() { SHELL=/bin/bash script -qefc "$(printf '%q ' "$@")" /dev/null </dev/null | tr -d '\r'; }
 oc() { "$OMACLOUD" --config "$work/a.toml" --styled "$@"; }
+connect() { on_tty "$OMACLOUD" --config "$work/a.toml" agents connect "$@"; }
 export OMACLOUD_SECRET_ACCESS_KEY=secret-one
 mkdir -p "$work/A/Notes/Shared" "$work/A/Private"
 echo "first draft" >"$work/A/Notes/Shared/plan.md"
@@ -50,16 +52,20 @@ oc sync >/dev/null 2>&1
 refused=$("$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared 2>&1 || true)
 grep -q terminal_required <<<"$refused" || fail "the passphrase would print off a terminal: $refused"
 export OMACLOUD_CONNECTOR=$work/bundle OMACLOUD_CONNECTOR_OUT=$work/settings.json
-refused=$(on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Nowhere 2>&1 || true)
+refused=$(connect Nowhere 2>&1 || true)
 grep -q "isn't a folder here" <<<"$refused" || fail "a folder that isn't there was given: $refused"
-shown=$(on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared)
+shown=$(connect Notes/Shared)
 grep -Eq '^ +([a-z0-9]{4}-){4}[a-z0-9]{4}$' <<<"$shown" || fail "no passphrase shown: $shown"
 oc agents | grep -q "agents .* reads and writes Notes/Shared" || fail "the connector isn't listed: $(oc agents)"
 
-# the settings alone open nothing: the keys in them are sealed under the passphrase
-python3 -c 'import json, sys
+# the settings alone open nothing: the keys in them are sealed under the
+# passphrase, which isn't among them
+sealed_only() {
+	python3 -c 'import json, sys
 settings = json.load(open(sys.argv[1]))
-assert settings["sealed"] and not {"storage", "key", "upload"} & set(settings), "the keys rest sealed"' "$work/settings.json"
+assert settings["sealed"] and not {"storage", "key", "upload", "passphrase"} & set(settings), "only sealed keys"' "$1"
+}
+sealed_only "$work/settings.json"
 passphrase() { grep -Eo '([a-z0-9]{4}-){4}[a-z0-9]{4}' <<<"$1" | head -n 1; }
 PASSPHRASE=$(passphrase "$shown")
 export PASSPHRASE
@@ -105,7 +111,7 @@ call read_file '{"path":"Notes/Shared/plan.md"}' | grep -q "third draft" || fail
 oc versions Notes/Shared/plan.md | grep -c . | grep -q '[3-9]' || fail "the versions before the edit are gone: $(oc versions Notes/Shared/plan.md)"
 
 # a connector set up to read doesn't write
-PASSPHRASE=$(passphrase "$(on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared --read-only)")
+PASSPHRASE=$(passphrase "$(connect Notes/Shared --read-only)")
 if call write_file '{"path":"Notes/Shared/plan.md","content":"x"}' >/dev/null; then fail "a read-only connector wrote"; fi
 [ "$(call read_file '{"path":"Notes/Shared/plan.md"}')" = "third draft, by an agent" ] || fail "a read-only connector doesn't read"
 unset OMACLOUD_CONNECTOR_OUT
@@ -127,15 +133,15 @@ printf '\0asm not the reader' >"$work/site/old/omacloud_web.wasm"
 pids+=($!)
 for _ in $(seq 50); do grep -q "port [0-9]" "$work/site-port" 2>/dev/null && break; sleep 0.1; done
 site=http://127.0.0.1:$(sed -n 's/.*port \([0-9]*\).*/\1/p' "$work/site-port" | head -n 1)
-refused=$(OMACLOUD_CLOUDFLARE_TOKEN=token-one OMACLOUD_WEB_URL=$site/old/ on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared 2>&1 || true)
+refused=$(OMACLOUD_CLOUDFLARE_TOKEN=token-one OMACLOUD_WEB_URL=$site/old/ connect Notes/Shared 2>&1 || true)
 grep -q "isn't the reader" <<<"$refused" || fail "a reader that isn't one was taken: $refused"
 [ ! -e "$work/cf/upload.json" ] || fail "something was uploaded without the reader"
 export OMACLOUD_WEB_URL=$site/
-refused=$(OMACLOUD_CLOUDFLARE_TOKEN=wrong on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared 2>&1 || true)
+refused=$(OMACLOUD_CLOUDFLARE_TOKEN=wrong connect Notes/Shared 2>&1 || true)
 grep -q "Cloudflare refused" <<<"$refused" || fail "a wrong token wasn't said: $refused"
 [ ! -e "$work/cf/upload.json" ] || fail "something was uploaded with a wrong token"
 export OMACLOUD_CLOUDFLARE_TOKEN=token-one
-shown=$(on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared --name notes)
+shown=$(connect Notes/Shared --name notes)
 grep -q "https://omacloud-notes.me.workers.dev/mcp" <<<"$shown" || fail "the connector's address isn't shown: $shown"
 python3 - "$work/cf" "$work/bundle" <<'PY'
 import json, os, sys
@@ -171,27 +177,27 @@ pids+=($!)
 for _ in $(seq 50); do [ -s "$work/site2-port" ] && break; sleep 0.1; done
 OMACLOUD_SITE=http://127.0.0.1:$(cat "$work/site2-port")
 export OMACLOUD_SITE
+# nobody who never ran `subscribe` has the site asked about them
+oc subscription | grep -q "No subscription, and you may not need one" || fail "a subscription nobody started was looked up: $(oc subscription)"
 oc subscribe | grep -Eq "^ +$OMACLOUD_SITE/subscribe/[0-9a-f]{64}$" || fail "no address to subscribe at: $(oc subscribe)"
 oc subscription | grep -q "Not paid for yet" || fail "an unpaid subscription isn't said: $(oc subscription)"
 # not paid for: it still goes to the person's own Cloudflare account
 rm -f "$work/cf/upload.json"
-on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared --name mine | grep -q "in your Cloudflare account" || fail "an unpaid subscription was used"
+connect Notes/Shared --name mine | grep -q "in your Cloudflare account" || fail "an unpaid subscription was used"
 [ -e "$work/cf/upload.json" ] || fail "nothing went to the person's own Cloudflare account"
 touch "$work/paid-site/paid"
 rm -f "$work/cf/upload.json"
-shown=$(on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared --name hosted)
+shown=$(connect Notes/Shared --name hosted)
 grep -q "running at Omacloud" <<<"$shown" || fail "a paid subscription wasn't used: $shown"
 grep -q "https://oc-test-hosted.omacloud.workers.dev/mcp" <<<"$shown" || fail "the hosted connector's address isn't shown: $shown"
 [ ! -e "$work/cf/upload.json" ] || fail "a hosted connector also went to Cloudflare"
-python3 -c 'import json, sys
-settings = json.load(open(sys.argv[1]))
-assert settings["sealed"] and not {"storage", "key", "upload", "passphrase"} & set(settings), "the site is sent only sealed keys"' "$work/paid-site/hosted-hosted.json"
+sealed_only "$work/paid-site/hosted-hosted.json"
 # and those settings are a working connector, for the passphrase shown
 PASSPHRASE=$(passphrase "$shown") node scripts/connector/run.mjs "$work/bundle" "$work/paid-site/hosted-hosted.json" list_files '{"path":"Notes/Shared"}' | grep -q '^plan.md ' \
 	|| fail "the hosted connector's settings don't open the folder"
 oc subscription | grep -q "^hosted  https://oc-test-hosted.omacloud.workers.dev/mcp" || fail "the subscription doesn't list its connector: $(oc subscription)"
 oc subscription manage | grep -q "https://billing.stripe.com/p/test" || fail "no address to manage the subscription at"
-on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared --name own --own-cloudflare | grep -q "in your Cloudflare account" || fail "--own-cloudflare went to Omacloud"
+connect Notes/Shared --name own --own-cloudflare | grep -q "in your Cloudflare account" || fail "--own-cloudflare went to Omacloud"
 oc agents disconnect hosted >/dev/null
 [ "$(cat "$work/paid-site/removed")" = hosted ] || fail "the hosted connector wasn't taken down"
 

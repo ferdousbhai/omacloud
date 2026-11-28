@@ -222,7 +222,9 @@ async function stayOffer() {
 // writes over that with a note that it's gone, which they clear away.
 async function record(kept, gone) {
 	if (!current?.browsers) return;
-	const said = { v: 1, name: kept.name, lock: kept.lock, at: Math.floor(Date.now() / 1000), ...(gone ? { gone: true } : {}) };
+	// `anywhere`: its passkey's note is with this site too, which a computer
+	// changing the account's keys then has dropped
+	const said = { v: 1, name: kept.name, lock: kept.lock, at: Math.floor(Date.now() / 1000), ...(kept.anywhere ? { anywhere: true } : {}), ...(gone ? { gone: true } : {}) };
 	const sealed = reader.seal(crypto.getRandomValues(new Uint8Array(16)), new TextEncoder().encode(JSON.stringify(said)));
 	await bucket.put(`${current.browsers}/${kept.id}`, sealed);
 }
@@ -238,9 +240,10 @@ async function stay() {
 }
 // This device's passkey for the person's other devices too: what it sealed
 // goes to this site, which can't open it (remember.js, `share`).
-async function anywhere() {
+async function share() {
 	await remember.share(current?.plan);
 	await stayOffer();
+	await record(keptHere, false);
 	$("home-status").textContent = "Done. On your other devices, Sign In With a Passkey at omacloud.computer opens your files. This site keeps what the passkey sealed, and can't open it.";
 }
 // Stop: the note that it's gone needs the account open, so on the sign-in
@@ -252,6 +255,9 @@ async function forget() {
 		if (!current) await unlockKept();
 		await record(kept, true);
 	} catch {}
+	// what this site keeps for its passkey goes too, which takes the account
+	// open: without it nothing here could ever ask for that again
+	if (kept.anywhere && !current?.plan) throw new Error("Open your files here first, then press Forget This Device: its passkey's note at omacloud.computer has to be removed too.");
 	await remember.forget(current?.plan);
 	if ($("signin").hidden) {
 		await stayOffer();
@@ -273,7 +279,7 @@ async function unlockKept() {
 	await unlock($("connect"));
 }
 // A passkey of the person's, on a device that was never given a code: what
-// this site keeps for it, opened here (remember.js). For subscribers.
+// this site keeps for it, opened here (remember.js).
 async function openAnywhere() {
 	take(await remember.anywhere());
 	await connect($("connect"));
@@ -818,7 +824,7 @@ $("lock").addEventListener("click", () => location.reload());
 $("home-lock").addEventListener("click", () => location.reload());
 $("home-stay").addEventListener("click", () => act(stay));
 $("home-forget").addEventListener("click", () => act(forget));
-$("home-anywhere").addEventListener("click", () => act(anywhere));
+$("home-anywhere").addEventListener("click", () => act(share));
 $("kept-open").addEventListener("click", () => act(openKept));
 $("kept-forget").addEventListener("click", () => act(forget));
 $("passkey").hidden = !remember.anywhereAble();

@@ -42,8 +42,8 @@ runs the same Worker, one per connector, in Omacloud's Cloudflare account
 subscription ends, the Worker is deleted.
 
 The two cost the same, $5 a month, to Cloudflare or to Omacloud: the
-subscription is for not having a Cloudflare account, a plan and a token to
-look after. With Workers Paid already, your own account is the one to use.
+subscription is for not having a Cloudflare account and a plan to look
+after. With Workers Paid already, your own account is the one to use.
 
 ## What it trades
 

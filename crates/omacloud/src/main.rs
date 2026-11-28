@@ -21,6 +21,7 @@ mod cloudflare;
 mod doorbell;
 mod dropbox;
 mod fail;
+mod loopback;
 mod mount;
 mod output;
 mod plan;
@@ -1089,6 +1090,12 @@ impl Paths {
     /// kept there and a subscription go by. Made when first needed.
     fn subscription(&self) -> PathBuf {
         self.data.join("subscription.key")
+    }
+    /// There once `omacloud subscribe` was run here: the key above is in
+    /// every web link, so it alone doesn't say anyone asked the site for
+    /// anything, and nobody who didn't has the site asked about them.
+    fn subscribing(&self) -> PathBuf {
+        self.data.join("subscribing")
     }
     /// The browsers that stay signed in, as last listed: what `status` shows
     /// without asking the storage each time.
@@ -2603,6 +2610,7 @@ fn run(cli: Cli) -> Out {
         Cmd::Agents { action } => agents(&paths, action.unwrap_or(AgentsCmd::List)),
         Cmd::Subscribe => {
             let plan = plan::Plan::make(&paths.subscription())?;
+            fs::write(paths.subscribing(), "")?;
             if plan.active() {
                 return Ok(Response::new(json!({ "active": true }), "already subscribed")
                     .human("You're subscribed already. `omacloud subscription` shows where it stands."));
@@ -2620,7 +2628,17 @@ fn run(cli: Cli) -> Out {
             )
         }
         Cmd::Subscription { action } => {
-            let plan = plan::Plan::make(&paths.subscription())?;
+            // nobody who never ran `subscribe` has one, and the site isn't asked
+            let plan = plan::Plan::read(&paths.subscription()).filter(|_| paths.subscribing().exists());
+            let Some(plan) = plan else {
+                return Ok(
+                    Response::new(json!({ "active": false, "status": "none" }), "not subscribed").human(
+                        "No subscription, and you may not need one: a connector goes in your own Cloudflare account \
+                     free (`omacloud agents connect`), and a passkey on your other devices is free. `omacloud \
+                     subscribe` has Omacloud run the connector.",
+                    ),
+                );
+            };
             match action {
                 Some(SubscriptionCmd::Manage) => {
                     let url = plan.portal()?;
@@ -3016,8 +3034,10 @@ fn run(cli: Cli) -> Out {
                 "rotating the repository key",
                 "move to a new repository key? This uploads everything again and deletes the old repository",
             )?;
-            let r = engine(&paths, &config)?.rotate()?;
-            forget_browsers(&paths, &config);
+            let mut e = engine(&paths, &config)?;
+            let with_site = left_with_site(&paths, &mut e, &config);
+            let r = e.rotate()?;
+            forget_browsers(&paths, &config, with_site);
             let summary = format!(
                 "moved to repository epoch {} ({} snapshots copied)",
                 r.epoch, r.snapshots
@@ -3327,8 +3347,9 @@ fn devices(paths: &Paths, action: DevicesCmd) -> Out {
             say!(out, "removed {name} ({}). It can't push anymore.", fingerprint(&key));
             let mut rotated = Value::Null;
             if rotate || lost {
+                let with_site = left_with_site(paths, &mut e, &config);
                 let r = e.rotate()?;
-                forget_browsers(paths, &config);
+                forget_browsers(paths, &config, with_site);
                 say!(
                     out,
                     "moved to repository epoch {} ({} snapshots copied); {name} can't read it",
@@ -3619,10 +3640,14 @@ fn agents(paths: &Paths, action: AgentsCmd) -> Out {
             .to_string();
             let script = format!("omacloud-{name}");
             // with a subscription Omacloud runs it, and the settings it's sent
-            // hold no key it can open. Most people have none, so a site that
-            // can't say is said and passed over, not a reason to stop.
+            // hold no key it can open. Only someone who ran `subscribe` here
+            // has the site asked; if it can't say, that's said and passed over.
             let subscribed = match plan::Plan::read(&paths.subscription()) {
-                Some(plan) if !own_cloudflare && std::env::var_os("OMACLOUD_CONNECTOR_OUT").is_none() => {
+                Some(plan)
+                    if !own_cloudflare
+                        && paths.subscribing().exists()
+                        && std::env::var_os("OMACLOUD_CONNECTOR_OUT").is_none() =>
+                {
                     match plan.status() {
                         Ok(said) => (said["active"] == json!(true)).then_some(plan),
                         Err(e) => {
@@ -3723,7 +3748,17 @@ fn agents(paths: &Paths, action: AgentsCmd) -> Out {
 /// After the account moved to a new repository key: no browser that stayed
 /// signed in opens anything, so their notes go. Best effort, as the key has
 /// changed either way; an account in a folder has none.
-fn forget_browsers(paths: &Paths, config: &Config) {
+/// Whether a browser that stays signed in left its passkey's note with
+/// omacloud.computer (Use on My Other Devices): its note here says so. Asked
+/// before the keys change, while the notes still open.
+fn left_with_site(paths: &Paths, e: &mut Engine, config: &Config) -> bool {
+    browsers_now(paths, e, config).is_ok_and(|(_, found)| found.iter().any(|(_, note)| note.anywhere))
+}
+
+/// After the keys changed: every browser's are old. `with_site` (asked
+/// before, `left_with_site`) says the site holds a passkey's note to drop
+/// too; nobody else's computer speaks to the site here.
+fn forget_browsers(paths: &Paths, config: &Config, with_site: bool) {
     if let Ok(notes) = omacloud_core::Browsers::beside(&config.repo) {
         match notes.clear() {
             Ok(()) => _ = fs::write(paths.browsers(), "[]"),
@@ -3731,7 +3766,8 @@ fn forget_browsers(paths: &Paths, config: &Config) {
         }
     }
     // what a passkey sealed at omacloud.computer opens nothing now either
-    if let Some(plan) = plan::Plan::read(&paths.subscription())
+    if with_site
+        && let Some(plan) = plan::Plan::read(&paths.subscription())
         && let Err(e) = plan.forget_passkeys()
     {
         warn!("forgetting the passkeys kept at omacloud.computer: {e:#}");
@@ -3749,6 +3785,9 @@ struct BrowserNote {
     at: u64,
     #[serde(default)]
     gone: bool,
+    /// Its passkey's note was left with omacloud.computer too.
+    #[serde(default)]
+    anywhere: bool,
 }
 
 /// The browsers that stay signed in, as (id, note). A note that says its
@@ -3857,7 +3896,7 @@ fn browsers(paths: &Paths, action: BrowsersCmd) -> Out {
             let full = full.clone();
             let r = e.rotate()?;
             // every browser's keys are old now, this one's among them
-            forget_browsers(paths, &config);
+            forget_browsers(paths, &config, found.iter().any(|(_, n)| n.anywhere));
             let mut out = String::new();
             say!(
                 out,

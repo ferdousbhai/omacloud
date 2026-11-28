@@ -2,6 +2,14 @@
 
 ## 0.0.36 (2026-11-28)
 
+- A computer speaks to omacloud.computer only for someone who asked: 0.0.35 asked it whether you
+  subscribe on every `agents connect`, and to forget passkeys on every change of keys, once a
+  web link had ever been made. Now only after `omacloud subscribe`, and only when a browser left
+  a passkey with the site.
+- Forget This Device no longer leaves a passkey's note at omacloud.computer behind when the
+  device can't be opened first: it says to open it, then forget.
+- A promotion code can be entered when subscribing.
+
 - `omacloud agents connect` no longer needs an API token for your own Cloudflare account: it
   opens Cloudflare in your browser, you pick the account and press Authorize. Cloudflare's
   screen says Workers Admin, the narrowest it offers that can put a Worker up; Omacloud touches

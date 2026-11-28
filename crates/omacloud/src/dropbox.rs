@@ -6,17 +6,14 @@
 //! shows the code and it's pasted. Either way the code is worthless without
 //! the verifier, which never leaves this process.
 
-use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpListener, TcpStream};
-use std::time::{Duration, Instant};
+use std::net::TcpListener;
+use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand::RngCore;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 
 use crate::fail;
+use crate::loopback::{Came, challenge, on_desktop, open_browser, random_url_safe, wait_for_code};
 
 pub const OLD_TOKEN_FILE: &str = "dropbox-old-token";
 
@@ -40,69 +37,10 @@ fn agent() -> Result<reqwest::blocking::Client> {
         .build()?)
 }
 
-pub(crate) fn random_url_safe(bytes: usize) -> String {
-    let mut b = vec![0u8; bytes];
-    rand::rngs::OsRng.fill_bytes(&mut b);
-    URL_SAFE_NO_PAD.encode(b)
-}
-
-/// What a browser is sent to: no secret of this process goes with it.
-pub(crate) fn open_browser(url: &str) {
-    let mut open = std::process::Command::new("xdg-open");
-    for var in [
-        "OMACLOUD_RECOVERY_CODE",
-        "OMACLOUD_JOIN_CODE",
-        "OMACLOUD_SECRET_ACCESS_KEY",
-        "OMACLOUD_DROPBOX_AUTH_CODE",
-        "OMACLOUD_DROPBOX_REFRESH_TOKEN",
-    ] {
-        open.env_remove(var);
-    }
-    _ = open
-        .arg(url)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-}
-
-pub(crate) fn param<'a>(query: &'a str, name: &str) -> Option<&'a str> {
-    query
-        .split('&')
-        .filter_map(|p| p.split_once('='))
-        .find(|(k, _)| *k == name)
-        .map(|(_, v)| v)
-}
-
-pub(crate) fn reply(mut stream: &TcpStream, status: &str, title: &str, text: &str) {
-    let body = format!(
-        "<!doctype html><meta charset=utf-8><title>Omacloud</title>\
-         <body style=\"font:16px system-ui;max-width:32em;margin:4em auto;padding:0 1em\">\
-         <h1>{title}</h1><p>{text}</p>"
-    );
-    _ = write!(
-        stream,
-        "HTTP/1.1 {status}\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\n\
-         connection: close\r\n\r\n{body}",
-        body.len()
-    );
-}
-
 fn authorize_url(extra: &str) -> String {
     format!(
         "https://www.dropbox.com/oauth2/authorize?client_id={APP_KEY}&response_type=code&token_access_type=offline{extra}"
     )
-}
-
-/// A desktop session, where a browser here can reach this computer's
-/// loopback port.
-pub(crate) fn on_desktop() -> bool {
-    std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some()
-}
-
-/// PKCE's S256 challenge for a verifier.
-pub(crate) fn challenge(verifier: &str) -> String {
-    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
 /// Authorize Omacloud's app and get an offline refresh token.
@@ -130,67 +68,31 @@ pub fn authorize() -> Result<String> {
     let url = authorize_url(&format!("{pkce}&redirect_uri={redirect}&state={state}"));
     eprintln!("Allow Omacloud in Dropbox in your browser. If it didn't open, go to:\n\n  {url}\n");
     open_browser(&url);
-    let code = wait_for_code(&listener, &state)?;
+    let not_allowed = |what: &str, hint: &str| fail::setup("dropbox_not_allowed", what).hint(hint);
+    let code = match wait_for_code(
+        &listener,
+        REDIRECT_PATH,
+        &state,
+        ("Dropbox is connected", "Close this tab and go back to Omacloud."),
+        ("Dropbox isn't connected", "Omacloud wasn't allowed."),
+    )? {
+        Came::Code(code) => code,
+        Came::Refused(_) => {
+            return Err(not_allowed("Omacloud wasn't allowed in Dropbox", "try again, and click Allow").into());
+        }
+        Came::TimedOut => {
+            return Err(not_allowed(
+                "Dropbox wasn't allowed after ten minutes",
+                "try again, and click Allow in the browser",
+            )
+            .into());
+        }
+    };
     exchange(&[
         ("code", &code),
         ("code_verifier", &verifier),
         ("redirect_uri", &redirect),
     ])
-}
-
-/// The code Dropbox sends the browser back with.
-fn wait_for_code(listener: &TcpListener, state: &str) -> Result<String> {
-    listener.set_nonblocking(true)?;
-    let deadline = Instant::now() + Duration::from_secs(600);
-    loop {
-        let stream = match listener.accept() {
-            Ok((s, _)) => s,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                if Instant::now() > deadline {
-                    return Err(
-                        fail::setup("dropbox_not_allowed", "Dropbox wasn't allowed after ten minutes")
-                            .hint("try again, and click Allow in the browser")
-                            .into(),
-                    );
-                }
-                std::thread::sleep(Duration::from_millis(200));
-                continue;
-            }
-            Err(e) => return Err(e).context("waiting for the browser"),
-        };
-        stream.set_nonblocking(false)?;
-        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-        let mut line = String::new();
-        _ = BufReader::new(&stream).read_line(&mut line);
-        // GET /dropbox?code=...&state=... HTTP/1.1
-        let target = line.split_whitespace().nth(1).unwrap_or_default();
-        let Some(query) = target.strip_prefix(REDIRECT_PATH).and_then(|q| q.strip_prefix('?')) else {
-            reply(&stream, "404 Not Found", "Not here", "");
-            continue;
-        };
-        if param(query, "state") != Some(state) {
-            reply(
-                &stream,
-                "400 Bad Request",
-                "That didn't work",
-                "Start again from Omacloud.",
-            );
-            continue;
-        }
-        if let Some(code) = param(query, "code") {
-            reply(
-                &stream,
-                "200 OK",
-                "Dropbox is connected",
-                "Close this tab and go back to Omacloud.",
-            );
-            return Ok(code.to_string());
-        }
-        reply(&stream, "200 OK", "Dropbox isn't connected", "Omacloud wasn't allowed.");
-        return Err(fail::setup("dropbox_not_allowed", "Omacloud wasn't allowed in Dropbox")
-            .hint("try again, and click Allow")
-            .into());
-    }
 }
 
 /// A request to Dropbox's token service. One turned down as too fast wasn't

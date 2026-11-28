@@ -89,7 +89,7 @@ test("anything else isn't taken for it", () => {
 	assert.equal(pasted("restic -r s3:https://host.example restore latest"), null);
 });
 
-test("a subscription's key comes through only as one", () => {
+test("the account's key at the site comes through only as one", () => {
 	const plan = "ab".repeat(32);
 	assert.equal(account({ ...want, plan }).plan, plan);
 	assert.equal("plan" in account({ ...want, plan: "not a key" }), false);

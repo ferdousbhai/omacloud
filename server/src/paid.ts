@@ -203,7 +203,7 @@ export async function proves(p: Paid, key: Passkey, proof: { authenticator_data:
 
 const b64url = (v: unknown, most: number): v is string => typeof v === "string" && v.length > 0 && v.length <= most && /^[A-Za-z0-9_-]+$/.test(v);
 
-// The paid tier's addresses; `null` if the request isn't for one of them.
+// What the site does for an account, by address; `null` if the request isn't for one of them.
 export async function paid(p: Paid, req: Request): Promise<Response | null> {
 	const url = new URL(req.url);
 	const path = url.pathname;
@@ -221,6 +221,10 @@ export async function paid(p: Paid, req: Request): Promise<Response | null> {
 			cancel_url: `${p.site}/`,
 			// said where the paying is done: nobody should pay who needn't
 			"custom_text[submit][message]": NOT_NEEDED,
+			// a code of Stripe's making (Product catalog, Coupons) takes the
+			// price off, and then no card is asked for
+			allow_promotion_codes: "true",
+			payment_method_collection: "if_required",
 		});
 		return Response.redirect(String(session.url), 303);
 	}
@@ -241,7 +245,7 @@ export async function paid(p: Paid, req: Request): Promise<Response | null> {
 	}
 
 	const id = await who(req);
-	if (!id) return refuse(401, "no_key", "this needs a subscription's key");
+	if (!id) return refuse(401, "no_key", "this needs the account's key");
 	const subscriber = await p.store.subscriber(id);
 	if (path === "/api/subscription" && req.method === "GET") {
 		return json({
@@ -283,9 +287,9 @@ export async function paid(p: Paid, req: Request): Promise<Response | null> {
 		await p.store.putPasskey({ credential: asked.credential, subscriber: id, public_key: asked.public_key, alg: asked.alg, sealed: asked.sealed });
 		return json({ kept: true });
 	}
-	if (!active(subscriber)) return refuse(402, "not_subscribed", "this needs a subscription: `omacloud subscribe`");
 
 	if (connector && req.method === "PUT") {
+		if (!active(subscriber)) return refuse(402, "not_subscribed", "this needs a subscription: `omacloud subscribe`");
 		const settings = await req.text();
 		let said: Record<string, unknown>;
 		try {
