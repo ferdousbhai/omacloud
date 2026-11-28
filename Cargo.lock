@@ -2512,7 +2512,7 @@ dependencies = [
 
 [[package]]
 name = "omacloud"
-version = "0.0.33"
+version = "0.0.34"
 dependencies = [
  "anyhow",
  "base64",
@@ -2537,7 +2537,7 @@ dependencies = [
 
 [[package]]
 name = "omacloud-app"
-version = "0.0.33"
+version = "0.0.34"
 dependencies = [
  "libc",
  "omui",
@@ -2547,7 +2547,7 @@ dependencies = [
 
 [[package]]
 name = "omacloud-core"
-version = "0.0.33"
+version = "0.0.34"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2577,7 +2577,7 @@ dependencies = [
 
 [[package]]
 name = "omacloud-web"
-version = "0.0.33"
+version = "0.0.34"
 dependencies = [
  "aes256ctr_poly1305aes",
  "base64",

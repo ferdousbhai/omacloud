@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.34 (2026-11-28)
 
 - A subscription, $5 a month: `omacloud subscribe`. With it Omacloud runs your connector for
   agents (`omacloud agents connect Documents/Notes` needs no Cloudflare account), and a passkey
