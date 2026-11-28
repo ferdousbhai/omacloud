@@ -1,5 +1,6 @@
 #!/bin/bash
-# Every check a change must pass, run on this machine. .githooks/pre-push runs it before a push
+# Every check a change must pass, run on this machine: lint, the tests and the app's QA one after another, then the end
+# to end checks side by side. .githooks/pre-push runs it before a push
 # (NO_CHECK=1 skips it); enable the hook once per clone with `git config core.hooksPath .githooks`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -28,39 +29,55 @@ for script in crates/omacloud-app/dev/qa/*.jsonl; do
   fi
 done
 
-step "the bar widget, linted and run on the daemon's line (needs quickshell and qmllint)"
-scripts/bar-widget.sh
-
 cargo build --locked -q -p omacloud
 # A check that is skipped where its tool is missing proves nothing when it passes, so without restic this fails:
 # NO_RESTIC=1 says the restore was left out on purpose, on a machine that has none. CI installs restic.
 if [[ ${NO_RESTIC:-} == 1 ]]; then
   echo "note: skipping the plain-restic restore (NO_RESTIC=1)" >&2
 else
-  step "restore with plain restic"
   command -v "${RESTIC:-restic}" >/dev/null \
     || { echo "restic is required (Arch: restic); NO_RESTIC=1 leaves the restore out" >&2; exit 1; }
-  scripts/restic-compat.sh target/debug/omacloud
 fi
 
-step "an account in a bucket"
-scripts/s3-sync.sh target/debug/omacloud
+packaging() {
+  # bash -n reads one script (the rest are its arguments), so one at a time
+  for f in install.sh pkgbuild/PKGBUILD packaging/omarchy-pkgs/omacloud/PKGBUILD scripts/*.sh .githooks/pre-push \
+    server/deploy.sh server/build-files.sh server/set-secret.sh; do
+    bash -n "$f"
+  done
+  for t in scripts/tests/*.py; do python3 "$t"; done
+}
+server() { cd server && { [[ -d node_modules ]] || npm ci; } && npm run check; }
 
-step "daemons keeping up with changing files and choices"
-scripts/s3-choices.sh target/debug/omacloud
-
-step "the connector for agents, on stand-ins for the storage and for Cloudflare (needs node and Rust's wasm32 target)"
-scripts/connector.sh target/debug/omacloud
-
-step "server"
-(cd server && { [[ -d node_modules ]] || npm ci; } && npm run check)
-
-step "packaging"
-# bash -n reads one script (the rest are its arguments), so one at a time
-for f in install.sh pkgbuild/PKGBUILD packaging/omarchy-pkgs/omacloud/PKGBUILD scripts/*.sh .githooks/pre-push \
-  server/deploy.sh server/build-files.sh server/set-secret.sh; do
-  bash -n "$f"
+# The rest stand alone, each with folders and ports of its own, and most of their time is waiting on daemons: side by
+# side they take as long as the slowest. Each one's output is shown whole, in this order, when it's done.
+logs=$(mktemp -d)
+trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "${logs:?}"' EXIT
+names=() pids=()
+beside() {
+  local name=$1
+  shift
+  ( "$@" ) >"$logs/${#names[@]}" 2>&1 &
+  names+=("$name") pids+=($!)
+}
+beside "the bar widget, linted and run on the daemon's line (needs quickshell and qmllint)" scripts/bar-widget.sh
+[[ ${NO_RESTIC:-} == 1 ]] || beside "restore with plain restic" scripts/restic-compat.sh target/debug/omacloud
+beside "an account in a bucket" scripts/s3-sync.sh target/debug/omacloud
+beside "daemons keeping up with changing files and choices" scripts/s3-choices.sh target/debug/omacloud
+beside "the connector for agents, on stand-ins for the storage and for Cloudflare (needs node and Rust's wasm32 target)" \
+  scripts/connector.sh target/debug/omacloud
+beside "server" server
+beside "packaging" packaging
+failed=0
+for i in "${!names[@]}"; do
+  wait "${pids[$i]}" && ok=1 || ok=0
+  step "${names[$i]}"
+  cat "$logs/$i"
+  if [[ $ok == 0 ]]; then
+    echo "FAILED: ${names[$i]}" >&2
+    failed=1
+  fi
 done
-for t in scripts/tests/*.py; do python3 "$t"; done
+[[ $failed == 0 ]] || exit 1
 
 printf '\nAll checks passed.\n'

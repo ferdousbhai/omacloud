@@ -523,6 +523,17 @@ fn rotation_locks_out_removed_devices_and_keeps_history() -> Result<()> {
     Ok(())
 }
 
+/// Sync until nothing waits to be pushed, as the daemon does: a sync that
+/// keeps losing the race to push returns with its changes still queued, and
+/// only once they're pushed is what was on disk in a snapshot.
+fn settle(e: &mut Engine) -> Result<()> {
+    e.sync()?;
+    while e.has_pending() {
+        e.sync()?;
+    }
+    Ok(())
+}
+
 /// Two devices edit and delete the same few files at once, syncing every few
 /// edits. They must converge, and whatever was on disk when a sync started
 /// must be in some snapshot (as the file or a conflict copy).
@@ -562,12 +573,12 @@ fn concurrent_devices_converge_without_losing_writes() -> Result<()> {
                         if round % 5 == 4 {
                             written.extend(std::mem::take(&mut on_disk).into_values());
                             e.notice(std::mem::take(&mut changed));
-                            e.sync()?;
+                            settle(e)?;
                         }
                     }
                     written.extend(on_disk.into_values());
                     e.notice(changed);
-                    e.sync()?;
+                    settle(e)?;
                     Ok(written)
                 })
             })

@@ -44,3 +44,11 @@ rustic_core = { path = "vendor/rustic_core" }
 rustic_backend = { path = "vendor/rustic_backend" }
 # create-only writes, and a refresh token without an app secret, see vendor/opendal-service-dropbox/OMACLOUD.md
 opendal-service-dropbox = { path = "vendor/opendal-service-dropbox" }
+
+# A debug build spends its time in other people's ciphers, hashing and
+# compression, which unoptimised run many times slower: a repository's key
+# alone took a test thirteen seconds. Optimised, the tests and the checks
+# that run a debug `omacloud` are several times faster; this workspace's own
+# code stays as a debugger wants it.
+[profile.dev.package."*"]
+opt-level = 2
