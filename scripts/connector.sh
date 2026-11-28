@@ -5,6 +5,8 @@
 # storage. It has to list, read and search what it was given and nothing
 # else, read an earlier version, and write a file that a computer's daemon
 # takes in over the one that's there, and turns away outside its folders.
+# Then where it goes: a person's own Cloudflare account, or with a
+# subscription Omacloud's, each stood in for.
 #
 #   scripts/connector.sh [path/to/omacloud]
 #
@@ -161,4 +163,37 @@ oc agents | grep -q "^notes  https://omacloud-notes.me.workers.dev/mcp" || fail 
 oc agents disconnect notes >/dev/null
 [ "$(cat "$work/cf/deleted")" = omacloud-notes ] || fail "the connector wasn't deleted"
 if oc agents | grep -q "^notes "; then fail "a removed connector is still listed"; fi
+
+# with a subscription, Omacloud runs the connector: a stand-in for the site
+# sees settings whose keys are sealed, and nothing goes to Cloudflare
+python3 scripts/connector/fake-site.py "$work/site2-port" "$work/paid-site" &
+pids+=($!)
+for _ in $(seq 50); do [ -s "$work/site2-port" ] && break; sleep 0.1; done
+OMACLOUD_SITE=http://127.0.0.1:$(cat "$work/site2-port")
+export OMACLOUD_SITE
+refused=$(oc subscription 2>&1 || true)
+grep -q "started no subscription" <<<"$refused" || fail "a subscription nobody started was shown: $refused"
+oc subscribe | grep -Eq "^ +$OMACLOUD_SITE/subscribe/[0-9a-f]{64}$" || fail "no address to subscribe at: $(oc subscribe)"
+oc subscription | grep -q "Not paid for yet" || fail "an unpaid subscription isn't said: $(oc subscription)"
+# not paid for: it still goes to the person's own Cloudflare account
+rm -f "$work/cf/upload.json"
+on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared --name mine | grep -q "in your Cloudflare account" || fail "an unpaid subscription was used"
+[ -e "$work/cf/upload.json" ] || fail "nothing went to the person's own Cloudflare account"
+touch "$work/paid-site/paid"
+rm -f "$work/cf/upload.json"
+shown=$(on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared --name hosted)
+grep -q "running at Omacloud" <<<"$shown" || fail "a paid subscription wasn't used: $shown"
+grep -q "https://oc-test-hosted.omacloud.workers.dev/mcp" <<<"$shown" || fail "the hosted connector's address isn't shown: $shown"
+[ ! -e "$work/cf/upload.json" ] || fail "a hosted connector also went to Cloudflare"
+python3 -c 'import json, sys
+settings = json.load(open(sys.argv[1]))
+assert settings["sealed"] and not {"storage", "key", "upload", "passphrase"} & set(settings), "the site is sent only sealed keys"' "$work/paid-site/hosted-hosted.json"
+# and those settings are a working connector, for the passphrase shown
+PASSPHRASE=$(passphrase "$shown") node scripts/connector/run.mjs "$work/bundle" "$work/paid-site/hosted-hosted.json" list_files '{"path":"Notes/Shared"}' | grep -q '^plan.md ' \
+	|| fail "the hosted connector's settings don't open the folder"
+oc subscription | grep -q "^hosted  https://oc-test-hosted.omacloud.workers.dev/mcp" || fail "the subscription doesn't list its connector: $(oc subscription)"
+oc subscription manage | grep -q "https://billing.stripe.com/p/test" || fail "no address to manage the subscription at"
+on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared --name own --own-cloudflare | grep -q "in your Cloudflare account" || fail "--own-cloudflare went to Omacloud"
+oc agents disconnect hosted >/dev/null
+[ "$(cat "$work/paid-site/removed")" = hosted ] || fail "the hosted connector wasn't taken down"
 echo "connector: passed"
