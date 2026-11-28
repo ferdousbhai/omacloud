@@ -23,7 +23,9 @@ disconnect` takes it out again.
 
 **In your own account** it needs your leave and Cloudflare's Workers Paid
 plan. The command opens Cloudflare in your browser, where you pick the
-account and allow Omacloud to edit Workers there, and nothing else
+account and allow Omacloud Workers Admin there, the narrowest leave
+Cloudflare offers an app that can put a Worker up. It covers every Worker in
+that account; Omacloud touches only its own connector
 (`cloudflare.rs`; Cloudflare sends you back through omacloud.computer, which
 passes on a code only the waiting command can use). The leave is used for
 the upload and kept nowhere; Cloudflare lists it under your profile, to

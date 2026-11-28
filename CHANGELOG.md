@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.0.36 (2026-11-28)
 
 - `omacloud agents connect` no longer needs an API token for your own Cloudflare account: it
-  opens Cloudflare in your browser, you pick the account and press Allow. A token still works
-  where there's no browser (`OMACLOUD_CLOUDFLARE_TOKEN`).
+  opens Cloudflare in your browser, you pick the account and press Authorize. Cloudflare's
+  screen says Workers Admin, the narrowest it offers that can put a Worker up; Omacloud touches
+  only its own connector and keeps nothing. A token, which can be narrower, still works
+  (`OMACLOUD_CLOUDFLARE_TOKEN`), and is what a computer with no browser uses.
 
 ## 0.0.35 (2026-11-28)
 

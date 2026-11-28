@@ -21,10 +21,11 @@ use crate::{
 
 /// Omacloud as Cloudflare knows it (Manage Account, OAuth clients, in
 /// SummonGhost's account): a public client, so there's no secret to keep.
-/// Empty until one is registered, and then only a token works.
-const CLIENT: &str = "";
-/// The one thing asked for: uploading and removing Workers.
-const SCOPE: &str = "workers-scripts.edit";
+const CLIENT: &str = "6b4a9ea3ec241e507a1bbc6b4e06ebd5";
+/// The one thing asked for: putting up and removing Workers. (Workers
+/// Admin: Workers Editor can't upload one, and new clients can't ask for
+/// the older Workers Scripts Write that an API token has.)
+const SCOPE: &str = "workers-scripts.admin";
 
 /// Leave to edit Workers in an account the person picks, asked of Cloudflare
 /// in their browser: a token for that, good for a short while.

@@ -209,7 +209,7 @@ pids+=("$asking")
 for _ in $(seq 100); do grep -q "oauth2/auth?" "$work/asked.out" 2>/dev/null && break; sleep 0.1; done
 address=$(tr -d '\r' <"$work/asked.out" | grep -o "http://127.0.0.1:[0-9]*/oauth2/auth?[^ ]*" | head -n 1 || true)
 [ -n "$address" ] || fail "no address to allow Omacloud at: $(cat "$work/asked.out")"
-grep -q "scope=workers-scripts.edit" <<<"$address" || fail "more than editing Workers was asked for: $address"
+grep -q "scope=workers-scripts.admin" <<<"$address" || fail "more than editing Workers was asked for: $address"
 curl -fsSL "$address" | grep -q "Omacloud is allowed" || fail "the sign-in didn't come back to the command"
 wait "$asking" || fail "the command didn't finish once allowed: $(cat "$work/asked.out")"
 grep -q "https://omacloud-asked.me.workers.dev/mcp" "$work/asked.out" || fail "the connector isn't up after the sign-in: $(cat "$work/asked.out")"
