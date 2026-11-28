@@ -171,8 +171,6 @@ pids+=($!)
 for _ in $(seq 50); do [ -s "$work/site2-port" ] && break; sleep 0.1; done
 OMACLOUD_SITE=http://127.0.0.1:$(cat "$work/site2-port")
 export OMACLOUD_SITE
-refused=$(oc subscription 2>&1 || true)
-grep -q "started no subscription" <<<"$refused" || fail "a subscription nobody started was shown: $refused"
 oc subscribe | grep -Eq "^ +$OMACLOUD_SITE/subscribe/[0-9a-f]{64}$" || fail "no address to subscribe at: $(oc subscribe)"
 oc subscription | grep -q "Not paid for yet" || fail "an unpaid subscription isn't said: $(oc subscription)"
 # not paid for: it still goes to the person's own Cloudflare account

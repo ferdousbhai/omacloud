@@ -58,7 +58,7 @@ export const privacy = () =>
 		"Privacy · Omacloud",
 		`<h1>Privacy</h1>
 <p class="lead">Updated ${UPDATED}.</p>
-<p>Short version: without a subscription this site knows nothing about you. No cookies, no accounts, no logs,
+<p>Short version: unless you ask it to keep something, this site knows nothing about you. No cookies, no accounts, no logs,
 no analytics. Cloudflare delivers the pages and sees your IP address to do that. That is all.</p>
 <p>Omacloud itself runs no storage. Your files, their names, your settings and your keys are encrypted on your
 computer, with keys that stay on your computers and in your recovery code, before they go to the storage you
@@ -67,6 +67,10 @@ chose. That provider can't read them. It has its own terms and privacy policy, a
 your computers, or your bucket's key and your password) stays in that tab. It goes into requests from your browser to your storage and
 is gone when you close the tab, unless you press Stay Signed In: then it's kept in that browser, on that device,
 encrypted, until you press Forget This Device. Your files travel between your browser and your storage.</p>
+<h2>A passkey on your other devices</h2>
+<p>Only if you press Use on My Other Devices: this site then keeps the hash of a key your computer made, the
+passkey's public key and what your browser sealed with the passkey, and hands that back to a browser that proves the
+passkey. It can't open it. It's free, and Forget This Device deletes it.</p>
 <h2>With a subscription</h2>
 <p>A subscription is a key your computer makes. This site keeps its hash, Stripe's ids for the customer and the
 subscription, and whether it's paid for. It keeps no name, email or card: Stripe takes the payment and holds those,
@@ -75,10 +79,7 @@ under <a href="https://stripe.com/privacy">its own policy</a>.</p>
 and files sealed under the connector's passphrase, which is shown on your computer and never sent here. They're
 opened when an agent you gave the passphrase to asks, and held in the running connector's memory from then on; what
 the agent reads passes through that connector to it. Nothing it reads is logged or kept.</p>
-<p>A passkey that opens your files on any device: this site keeps the passkey's public key and what your browser
-sealed with the passkey, and hands that back to a browser that proves the passkey. It can't open it.</p>
-<p>End the subscription, or run <code>omacloud agents disconnect</code> or press Forget This Device, and the
-connector and the sealed notes are deleted.</p>
+<p>End the subscription, or run <code>omacloud agents disconnect</code>, and the connector is deleted.</p>
 <h2>Contact</h2>
 <p><a href="mailto:${PRIVACY}">${PRIVACY}</a></p>`,
 	);
@@ -98,8 +99,9 @@ computers, nobody can get your files back, and that includes me. Keep the code s
 <h2>The subscription</h2>
 <p>Omacloud is a product of SummonGhost, Inc., which sells the subscription. It is $5 a month, charged by Stripe until you end it, which you can do at any time:
 <code>omacloud subscription manage</code>. It then runs to the end of the month you paid for. For it Omacloud runs
-your connector for agents and keeps what lets a passkey open your files in a browser. When it ends, both are
-deleted; your files, in your own storage, are untouched. The service comes as it is, and may be unavailable at
+your connector for agents, which costs the same as running it yourself on Cloudflare's Workers Paid plan: with that
+plan you don't need the subscription. When it ends, the connector is deleted; your files, in your own storage, are
+untouched. The service comes as it is, and may be unavailable at
 times. It isn't a backup of anything.</p>
 <h2>Contact</h2>
 <p><a href="mailto:${LEGAL}">${LEGAL}</a></p>`,
@@ -137,8 +139,8 @@ it. Omacloud runs on Omarchy (Arch Linux, x86_64 and aarch64), as a GTK app and 
 
 ## Site
 
-- [Omacloud in a browser](${site}/files/): where the site opens. A person's files in a browser, read from their own bucket or Dropbox and decrypted there; signed in with a link from one of their computers (\`omacloud web-link\`), it uploads too, and a phone can stay signed in; with a subscription a passkey signs in on any device
-- [Privacy](${site}/privacy): visiting collects nothing; what a subscription keeps
+- [Omacloud in a browser](${site}/files/): where the site opens. A person's files in a browser, read from their own bucket or Dropbox and decrypted there; signed in with a link from one of their computers (\`omacloud web-link\`), it uploads too, and a phone can stay signed in; a passkey left with the site signs in on any device
+- [Privacy](${site}/privacy): visiting collects nothing; what a passkey left here and a subscription keep
 - [Terms](${site}/terms): terms
 
 ## Optional

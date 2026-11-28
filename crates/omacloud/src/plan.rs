@@ -1,6 +1,7 @@
-//! The paid tier (`server/src/paid.ts`), from a computer's side. A
-//! subscription is a key this computer made and keeps; omacloud.computer
-//! knows only its hash, and that Stripe says it's paid for. No sign-in, no
+//! What omacloud.computer does for an account (`server/src/paid.ts`), from a
+//! computer's side. The account there is a key this computer made and
+//! keeps; the site knows only its hash, what passkeys were left with it, and
+//! whether Stripe says a subscription is paid for. No sign-in, no
 //! email: the key in a request is the whole of it. `OMACLOUD_SITE` names
 //! another copy of the site, for trying one.
 

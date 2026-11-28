@@ -7,10 +7,11 @@
 //
 // Nothing is kept unless asked for, and `forget` removes all of it.
 //
-// With a subscription the same passkey opens the account on the person's
-// other devices too: what it sealed is also kept at this site, which hands
-// it back to whoever proves the passkey (server/src/paid.ts) and can't open
-// it. The passkey is one the device's password manager carries along.
+// The same passkey can open the account on the person's other devices too,
+// if they choose (`share`): what it sealed is then also kept at this site,
+// which hands it back to whoever proves the passkey (server/src/paid.ts) and
+// can't open it. The passkey is one the device's password manager carries
+// along. Until they choose that, nothing leaves this browser.
 
 import { bytesOf } from "./paste.js";
 
@@ -92,13 +93,15 @@ async function ask(credential, salt) {
 }
 
 // What's kept here, without opening it: `null`, or its id (the name of its
-// record in the storage), how it's locked ("passkey" or "device") and what
-// this device was called.
+// record in the storage), how it's locked ("passkey" or "device"), what this
+// device was called, and whether its passkey opens the account elsewhere.
 export async function kept() {
 	if (!able()) return null;
 	try {
 		const record = await store("readonly", (s) => s.get(RECORD));
-		return record ? { id: record.id, lock: record.lock, name: record.name } : null;
+		if (!record) return null;
+		// `shareable`: its passkey could open the account elsewhere, and doesn't yet
+		return { id: record.id, lock: record.lock, name: record.name, anywhere: !!record.anywhere, shareable: !!record.publicKey && !record.anywhere };
 	} catch {
 		return null;
 	}
@@ -139,25 +142,26 @@ export async function keep(account, name) {
 		Object.assign(record, { lock: "device", key });
 	}
 	record.sealed = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, words));
-	if (account.plan && made) {
-		// kept at this site too, for the person's other devices; if that
-		// fails this device still stays signed in
-		try {
-			const kept = await site("/api/passkeys", {
-				method: "POST",
-				headers: { authorization: `Bearer ${account.plan}`, "content-type": "application/json" },
-				body: JSON.stringify({
-					credential: b64(made.rawId),
-					public_key: b64(made.response.getPublicKey()),
-					alg: made.response.getPublicKeyAlgorithm(),
-					sealed: b64(new Uint8Array([...iv, ...record.sealed])),
-				}),
-			});
-			record.anywhere = kept.ok;
-		} catch {}
-	}
+	// what `share` would need, should the person choose it
+	if (account.plan && made) Object.assign(record, { publicKey: new Uint8Array(made.response.getPublicKey()), alg: made.response.getPublicKeyAlgorithm() });
 	await store("readwrite", (s) => s.put(record, RECORD));
-	return { id, lock: record.lock, name, anywhere: !!record.anywhere };
+	return { id, lock: record.lock, name };
+}
+
+// Leave what this device's passkey sealed with the site too, so the passkey
+// opens the account on the person's other devices. `key` is the account's
+// key at the site (a web link brings it). Their choice, and only then.
+export async function share(key) {
+	const record = await store("readonly", (s) => s.get(RECORD));
+	if (!record?.publicKey || !key) throw new Error("This device's passkey can't be used elsewhere. Open it with a new link from a computer, then Stay Signed In.");
+	const kept = await site("/api/passkeys", {
+		method: "POST",
+		headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+		body: JSON.stringify({ credential: b64(record.credential), public_key: b64(record.publicKey), alg: record.alg, sealed: b64(new Uint8Array([...record.iv, ...record.sealed])) }),
+	});
+	if (!kept.ok) throw new Error("omacloud.computer didn't take it. Try again in a while.");
+	record.anywhere = true;
+	await store("readwrite", (s) => s.put(record, RECORD));
 }
 
 // The account kept here, opened: with a passkey, that asks for the
@@ -198,7 +202,6 @@ export async function anywhere() {
 			signature: b64(got.response.signature),
 		}),
 	});
-	if (opened.status === 402) throw new Error("This account's subscription has ended. Use a code from one of your computers.");
 	if (!opened.ok) throw new Error("That passkey doesn't open an account here. Use a code from one of your computers.");
 	const sealed = bytesOf((await opened.json()).sealed);
 	const key = await fromPasskey(new Uint8Array(secret));
@@ -206,8 +209,8 @@ export async function anywhere() {
 	return JSON.parse(new TextDecoder().decode(words));
 }
 
-// Forget what's kept here, and with `plan` (the subscription's key) what
-// this site keeps for the same passkey. (The passkey itself stays in the
+// Forget what's kept here, and with `plan` (the account's key at the site)
+// what this site keeps for the same passkey. (The passkey itself stays in the
 // device's passwords, opening nothing; the device's settings remove it.)
 export async function forget(plan) {
 	if (!able()) return;

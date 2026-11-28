@@ -1,10 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.0.35 (2026-11-28)
 
 - `omacloud subscribe` says first who doesn't need it: with Cloudflare's Workers Paid plan a
   connector goes in your own account, free. The subscription costs what that plan does, and is
-  for not having a Cloudflare account to look after.
+  for not having a Cloudflare account to look after. The payment page says so too.
+- Signing in with a passkey on any device is free, and no longer part of the subscription. It's
+  a choice on the device: once it stays signed in, press Use on My Other Devices. Only then does
+  omacloud.computer keep what the passkey sealed. A device that stayed signed in under 0.0.34
+  did this without being asked: Forget This Device, then Stay Signed In again, undoes it.
 
 ## 0.0.34 (2026-11-28)
 

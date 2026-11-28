@@ -2,7 +2,7 @@
 
 A static page that reads an account's files straight from the person's own
 storage, a bucket or Dropbox, and decrypts them in the browser. No server of
-Omacloud's sees a file or a key it can open; with a subscription the site
+Omacloud's sees a file or a key it can open; if the person chooses, the site
 keeps what a passkey sealed (`server/src/paid.ts`).
 
 - `index.html`, `style.css`, `app.js`: the page, laid out as iCloud is on the
@@ -45,10 +45,10 @@ encrypted under a key from a passkey where the browser can (WebAuthn's `prf`
 extension), else under one the browser holds and won't export. The page leaves a
 sealed note beside the repository (`omacloud-browsers/`) so the person's
 computers can list the browser, and writes over it when told to forget.
-With a subscription, a passkey made that way opens the account on other
-devices too: the page leaves what it sealed with the site (`/api/passkeys`),
-and `anywhere()` in `remember.js` gets it back for a browser that proves the
-passkey.
+A passkey made that way can open the account on other devices too, when the
+person presses Use on My Other Devices: `share()` in `remember.js` leaves
+what it sealed with the site (`/api/passkeys`), and `anywhere()` gets it
+back for a browser that proves the passkey. Free, and never done unasked.
 
 The bucket must allow the page's origin to read it (a CORS rule allowing `GET`
 from that origin, and `PUT` to upload); nothing else about the bucket changes.

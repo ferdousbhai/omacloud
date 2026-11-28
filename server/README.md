@@ -3,14 +3,14 @@
 A Cloudflare Worker: Omacloud in a browser at `/files/` (where `/` sends), a
 page of static files that reads a person's storage from their browser; the
 public pages (privacy, terms, `/llms.txt`, `/health`, and `/install.sh`, a
-redirect to the latest release's installer); and the paid tier. It keeps no
-logs (observability is off) and sets no cookies. Without a subscription it
-holds nothing of anybody's, and no account depends on it.
+redirect to the latest release's installer); and what it does for accounts
+that ask. It keeps no logs (observability is off) and sets no cookies. For
+someone who asked for nothing it holds nothing, and no account depends on it.
 
-The paid tier (`src/paid.ts`) is the one place it keeps anything, in D1: the
-hash of each subscription's key with Stripe's ids and standing, the names of
-subscribers' connectors for agents, and their passkeys' public keys with what
-each sealed. It runs each subscriber's connector as a Worker of its own in
+`src/paid.ts` is the one place it keeps anything, in D1. Free, for anyone
+who chooses it in the page: a passkey's public key with what it sealed, under
+the hash of a key their computer made. For subscribers: Stripe's ids and
+standing, and the names of their connectors for agents. It runs each subscriber's connector as a Worker of its own in
 this Cloudflare account (`src/hosting.ts`), with settings whose keys are
 sealed under a passphrase it never sees. It needs, as secrets of the Worker:
 

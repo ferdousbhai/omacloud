@@ -183,19 +183,8 @@ button {
 }
 #passkey,
 #kept-forget {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 0.75rem;
 	padding: 0 1rem;
 	border: 1.5px solid var(--line);
-}
-.tag {
-	padding: 0.15rem 0.6rem;
-	border-radius: 999px;
-	background: var(--ink);
-	color: var(--ground);
-	font-size: 0.8125rem;
 }
 #install {
 	gap: 0.5rem;

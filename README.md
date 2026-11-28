@@ -37,23 +37,21 @@ them. It runs in your own Cloudflare account, or with a
 subscription at Omacloud: [docs/cloud-agents.md](docs/cloud-agents.md) says
 what it trades.
 
-Omacloud is free, and has no AI of its own. Without a subscription there's
-no account with us, no analytics, and nothing of yours reaches a server of
+Omacloud is free, and has no AI of its own. There's no account with us and
+no analytics, and unless you ask for it nothing of yours reaches a server of
 ours: Omacloud talks only to your own storage, and omacloud.computer serves
 the installer and the browser page. `omacloud export` gives you the plain
 restic command that restores everything without Omacloud.
 
-A subscription ($5 a month, `omacloud subscribe`) is for two things that
-need a server: Omacloud runs your connector for agents, so you need no
-Cloudflare account, and a passkey opens your files in a browser on any
-device, with no code from a computer. A connector needs Cloudflare's
-Workers Paid plan, which costs the same: if you have that already, put the
-connector in your own account, free, and skip the subscription. You can end
-it any time, and `omacloud agents connect --own-cloudflare` moves a
-connector to your own account. The connector's keys rest sealed
-under its passphrase, and what a passkey opens is sealed with the passkey,
-so what Omacloud keeps it can't read by itself. `omacloud subscription`
-shows where it stands, and `omacloud subscription manage` ends it.
+A subscription ($5 a month, `omacloud subscribe`) is for one thing:
+Omacloud runs your connector for agents, so you need no Cloudflare account.
+A connector needs Cloudflare's Workers Paid plan, which costs the same: if
+you have that already, put the connector in your own account, free, and
+skip the subscription. You can end it any time, and `omacloud agents
+connect --own-cloudflare` moves a connector to your own account. The
+connector's keys rest sealed under its passphrase, so what Omacloud keeps it
+can't read by itself. `omacloud subscription` shows where it stands, and
+`omacloud subscription manage` ends it.
 
 ## Install
 
@@ -380,11 +378,11 @@ with a new code from a computer. Your computers list the browsers that stay sign
 (Devices in the app, or `omacloud browsers`). Forget This Device on the phone ends it; for a
 lost phone, Remove there (`omacloud browsers remove`) changes your keys, as for a lost computer.
 
-With a subscription, the passkey a device makes when it stays signed in opens your files on your
-other devices too: Sign In With a Passkey at omacloud.computer, with nothing from a computer. For
-that the site keeps what the passkey sealed, which it can't open, and gives it to a browser that
-proves the passkey. The link the device was first opened with has to come from the computer that
-subscribed.
+The passkey a device makes when it stays signed in can open your files on your other devices too,
+free: press Use on My Other Devices there, then Sign In With a Passkey at omacloud.computer on the
+others, with nothing from a computer. Only if you press it: omacloud.computer then keeps what the
+passkey sealed, which it can't open, and gives it to a browser that proves the passkey. It's the one
+thing Omacloud's own server keeps for someone who doesn't subscribe, and Forget This Device removes it.
 
 Leaving needs nothing from Omacloud: `omacloud export` prints the command that
 has plain restic or rustic restore everything from your storage, with the

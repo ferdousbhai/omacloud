@@ -133,7 +133,7 @@ async function readFile(node, progress) {
 // keeps. And where the account's bucket lists the browsers that do.
 let current;
 let browsers = "";
-// the key of the account's subscription, if a link or what's kept brought one
+// the account's key at this site, if a link or what's kept brought one
 let plan = "";
 
 // The storage and the repository's key, from what the form holds: enough to
@@ -212,6 +212,8 @@ async function stayOffer() {
 	keptHere = await remember.kept();
 	$("home-stay").hidden = !remember.able() || !!keptHere;
 	$("home-forget").hidden = !keptHere;
+	// offered, never done unasked: it's the one thing here that leaves a note at this site
+	$("home-anywhere").hidden = !(keptHere?.shareable && current?.plan);
 	// said once it's open, where a phone's owner will see it
 	if (!$("home-stay").hidden) $("home-status").textContent = "Away from your computers a lot? Stay Signed In keeps this device open to your files, with no new code.";
 }
@@ -229,11 +231,17 @@ async function stay() {
 	const kept = await remember.keep(current, remember.deviceName());
 	await record(kept, false);
 	await stayOffer();
-	$("home-status").textContent = kept.anywhere
-		? "This device stays signed in, and its passkey opens your files on your other devices too."
-		: kept.lock === "passkey"
+	$("home-status").textContent =
+		kept.lock === "passkey"
 			? "This device stays signed in. Opening your files here asks for its fingerprint or face."
 			: "This device stays signed in. Anyone who can unlock it can open your files here.";
+}
+// This device's passkey for the person's other devices too: what it sealed
+// goes to this site, which can't open it (remember.js, `share`).
+async function anywhere() {
+	await remember.share(current?.plan);
+	await stayOffer();
+	$("home-status").textContent = "Done. On your other devices, Sign In With a Passkey at omacloud.computer opens your files. This site keeps what the passkey sealed, and can't open it.";
 }
 // Stop: the note that it's gone needs the account open, so on the sign-in
 // page it's opened first, as far as that takes; either way nothing stays here.
@@ -810,6 +818,7 @@ $("lock").addEventListener("click", () => location.reload());
 $("home-lock").addEventListener("click", () => location.reload());
 $("home-stay").addEventListener("click", () => act(stay));
 $("home-forget").addEventListener("click", () => act(forget));
+$("home-anywhere").addEventListener("click", () => act(anywhere));
 $("kept-open").addEventListener("click", () => act(openKept));
 $("kept-forget").addEventListener("click", () => act(forget));
 $("passkey").hidden = !remember.anywhereAble();

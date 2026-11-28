@@ -80,6 +80,8 @@ test("subscribing goes to Stripe's checkout, and only Stripe says who has paid",
 	assert.equal(checkout.get("client_reference_id"), id);
 	assert.equal(checkout.get("line_items[0][price]"), "price_one");
 	assert.equal(checkout.get("subscription_data[metadata][subscriber]"), id);
+	// the payment page itself says who needn't pay
+	assert.match(checkout.get("custom_text[submit][message]") ?? "", /Workers Paid plan\? You don't need this/);
 
 	assert.deepEqual(await said(await call(p, "/api/subscription", { key })), { active: false, status: "none", until: 0, connectors: [], passkeys: 0 });
 	assert.equal((await call(p, "/api/subscription")).status, 401);
@@ -154,17 +156,15 @@ async function passkey() {
 	return { public_key, prove };
 }
 
-test("a passkey gets back what it sealed, and nothing else does", async () => {
+test("a passkey gets back what it sealed, and nothing else does; it needs no subscription", async () => {
 	const { p } = tier();
 	const mine = await passkey();
 	const keep = (k = key) =>
 		call(p, "/api/passkeys", { method: "POST", key: k, body: JSON.stringify({ credential: "cred-one", public_key: mine.public_key, alg: -7, sealed: "c2VhbGVkLW5vdGU" }) });
-	assert.equal((await keep()).status, 402);
-	await subscribe(p);
 	assert.equal((await keep()).status, 200);
-	// nobody else takes over a passkey that's kept
-	await p.store.putSubscriber({ id: (await sha("b".repeat(64))).toString("hex"), customer: "c2", subscription: "sub_2", status: "active", until: 0 });
+	// nobody else takes over a passkey that's kept, and it needs a key to keep one
 	assert.equal((await keep("b".repeat(64))).status, 409);
+	assert.equal((await call(p, "/api/passkeys", { method: "POST", body: "{}" })).status, 401);
 
 	const challenge = async () => (await said(await call(p, "/api/passkeys/challenge", { method: "POST" }))).challenge as string;
 	const open = (proof: object) => call(p, "/api/passkeys/open", { method: "POST", body: JSON.stringify(proof) });
@@ -181,10 +181,13 @@ test("a passkey gets back what it sealed, and nothing else does", async () => {
 	const later: Paid = { ...p, now: () => p.now() + 600 };
 	assert.equal((await paid(later, new Request(`${site}/api/passkeys/open`, { method: "POST", body: JSON.stringify(await mine.prove(old)) })))?.status, 403);
 
-	// its owner forgets it; or the subscription ends, and so does it
+	// a subscription coming and going leaves it be; its owner forgets it
+	await subscribe(p);
+	await fromStripe(p, "customer.subscription.deleted", { id: "sub_1", status: "canceled" });
+	assert.equal((await open(await mine.prove(await challenge()))).status, 200);
 	assert.equal((await call(p, "/api/passkeys/cred-one", { method: "DELETE", key })).status, 200);
 	assert.equal((await open(await mine.prove(await challenge()))).status, 403);
-	await keep();
-	await fromStripe(p, "customer.subscription.deleted", { id: "sub_1", status: "canceled" });
-	assert.equal((await open(await mine.prove(await challenge()))).status, 403);
+	// only so many are kept for one account
+	for (const n of [1, 2, 3, 4, 5]) await p.store.putPasskey({ credential: `c${n}`, subscriber: id, public_key: mine.public_key, alg: -7, sealed: "eA" });
+	assert.equal((await keep()).status, 409);
 });

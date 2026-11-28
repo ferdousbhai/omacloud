@@ -191,9 +191,8 @@ enum Cmd {
         action: Option<AgentsCmd>,
     },
     /// Start a subscription ($5 a month, what Cloudflare charges for the
-    /// plan a connector needs): Omacloud runs your connector for agents, and
-    /// a passkey opens your files in a browser on any device. With Workers
-    /// Paid of your own you don't need it for a connector. Shows the address
+    /// plan a connector needs): Omacloud runs your connector for agents.
+    /// With Workers Paid of your own you don't need it. Shows the address
     /// where you pay; no account, no email kept here
     Subscribe,
     /// Where your subscription stands; `manage` changes the card or ends it
@@ -1085,7 +1084,8 @@ impl Paths {
     fn agents(&self) -> PathBuf {
         self.data.join("agents.json")
     }
-    /// This computer's key to a subscription (`plan.rs`), if it started one.
+    /// This computer's key at omacloud.computer (`plan.rs`): what a passkey
+    /// kept there and a subscription go by. Made when first needed.
     fn subscription(&self) -> PathBuf {
         self.data.join("subscription.key")
     }
@@ -1290,8 +1290,9 @@ struct WebCode {
     /// files to read.
     #[serde(skip_serializing_if = "Option::is_none")]
     upload: Option<UploadKey>,
-    /// The key of this computer's subscription, in a web link only: with it
-    /// the page keeps a passkey at omacloud.computer, for any device.
+    /// This computer's key at omacloud.computer (`plan.rs`), in a web link
+    /// only: with it the page can leave a passkey's sealed note there, for
+    /// the person's other devices, if they choose to.
     #[serde(skip_serializing_if = "Option::is_none")]
     plan: Option<String>,
 }
@@ -1334,7 +1335,10 @@ impl WebCode {
             seed: URL_SAFE_NO_PAD.encode(seed),
             endorsement: engine.endorse_upload_key(&public, until),
         });
-        code.plan = plan::Plan::read(&paths.subscription()).map(|p| p.key().to_string());
+        // made here if it never was: a passkey needs no subscription
+        code.plan = plan::Plan::make(&paths.subscription())
+            .ok()
+            .map(|p| p.key().to_string());
         Ok((config, code))
     }
 
@@ -2605,21 +2609,17 @@ fn run(cli: Cli) -> Out {
             let url = plan.subscribe_url();
             Ok(
                 Response::new(json!({ "url": url }), "open the address to subscribe").human(format!(
-                    "Already on Cloudflare's Workers Paid plan? You don't need this for a connector: `omacloud agents \
-                 connect <folder>` puts it in your own account, free.\n\nOtherwise, open this to subscribe: $5 a \
+                    "Already on Cloudflare's Workers Paid plan? You don't need this: `omacloud agents connect \
+                 <folder>` puts your connector in your own account, free.\n\nOtherwise, open this to subscribe: $5 a \
                  month, what Cloudflare would charge for that plan, paid through Stripe.\n\n     {url}\n\nThen \
-                 `omacloud agents connect <folder>` has Omacloud run your connector, and a passkey opens your files \
-                 in a browser on any device. End it any time with `omacloud subscription manage`; `omacloud agents \
-                 connect --own-cloudflare` moves a connector to your own account."
+                 `omacloud agents connect <folder>` has Omacloud run your connector. End it any time with `omacloud \
+                 subscription manage`; `omacloud agents connect --own-cloudflare` moves a connector to your own \
+                 account."
                 )),
             )
         }
         Cmd::Subscription { action } => {
-            let Some(plan) = plan::Plan::read(&paths.subscription()) else {
-                return Err(fail::setup("not_subscribed", "this computer started no subscription")
-                    .hint("`omacloud subscribe` starts one")
-                    .into());
-            };
+            let plan = plan::Plan::make(&paths.subscription())?;
             match action {
                 Some(SubscriptionCmd::Manage) => {
                     let url = plan.portal()?;
@@ -3618,11 +3618,20 @@ fn agents(paths: &Paths, action: AgentsCmd) -> Out {
             .to_string();
             let script = format!("omacloud-{name}");
             // with a subscription Omacloud runs it, and the settings it's sent
-            // hold no key it can open. A site that can't say whether there is
-            // one is an error, not a reason to ask for a Cloudflare token.
+            // hold no key it can open. Most people have none, so a site that
+            // can't say is said and passed over, not a reason to stop.
             let subscribed = match plan::Plan::read(&paths.subscription()) {
                 Some(plan) if !own_cloudflare && std::env::var_os("OMACLOUD_CONNECTOR_OUT").is_none() => {
-                    (plan.status()?["active"] == json!(true)).then_some(plan)
+                    match plan.status() {
+                        Ok(said) => (said["active"] == json!(true)).then_some(plan),
+                        Err(e) => {
+                            eprintln!(
+                                "omacloud.computer couldn't say whether you subscribe ({e}), so this uses your own \
+                                 Cloudflare account. With a subscription, stop here and try again later."
+                            );
+                            None
+                        }
+                    }
                 }
                 _ => None,
             };

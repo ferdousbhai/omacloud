@@ -235,8 +235,8 @@ and every computer of the account can, Wi-Fi keys included.
   see your computers' names and fingerprints, and when each one pushed or asked
   to join. They can't read file contents, names, settings or keys, or forge
   history unnoticed. They can delete everything: see below.
-- **Omacloud**, without a subscription, sees nothing: it runs no service
-  your data or your computers talk to.
+- **Omacloud**, unless you ask it for one of the two things below, sees
+  nothing: it runs no service your data or your computers talk to.
 - **Where a connector for agents runs, only if you set one up**
   (`omacloud agents connect`, [cloud-agents.md](cloud-agents.md)): your own
   Cloudflare account, or with a subscription Omacloud's. It holds the key to
@@ -245,13 +245,14 @@ and every computer of the account can, Wi-Fi keys included.
   passphrase first asks, holding them in memory from then on. So whoever runs it could read your files then, by
   changing what it runs, and the agent's provider sees what the agent reads.
   Nobody has a connector who didn't set one up.
-- **Omacloud, with a subscription** (`server/src/paid.ts`), also keeps: the
-  hash of the subscription's key and Stripe's ids for it; and for each
-  passkey that opens your files in a browser, its public key and what the
-  browser sealed with it (the same web code a device that stays signed in
-  keeps). It can't open that: the key comes from the passkey, in your
-  browser. It could withhold it, or hand it to someone who then still needs
-  the passkey.
+- **Omacloud, if you leave a passkey with it** (Use on My Other Devices in
+  the browser page; `server/src/paid.ts`), keeps the hash of a key your
+  computer made, the passkey's public key and what the browser sealed with
+  the passkey (the same web code a device that stays signed in keeps). It
+  can't open that: the key comes from the passkey, in your browser. It could
+  withhold it, or hand it to someone who then still needs the passkey.
+  **With a subscription** it also keeps Stripe's ids for it, and runs your
+  connector as above.
 - **A removed computer** keeps what it had synced before removal. With a new
   epoch it can't read what comes after; once the bucket's key changes and the
   old one is deleted it can't reach the bucket at all.

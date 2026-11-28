@@ -1,13 +1,15 @@
-// The paid tier: what omacloud.computer does for a subscriber, and the one
-// place this site keeps anything. A subscriber is a key their computer made
-// (this knows only its hash, `id`) that Stripe says is paid for. For them:
+// What omacloud.computer does for an account that asks, and the one place
+// this site keeps anything. An account here is a key one of its computers
+// made (this knows only its hash, `id`).
 //
-// - their connector for agents runs in Omacloud's Cloudflare account, not
-//   their own (`/api/connectors`). Its settings hold their keys sealed under
-//   the connector's passphrase, which never comes here: see connector/oauth.js.
-// - a passkey opens their files in a browser on any device (`/api/passkeys`):
-//   this keeps what the browser sealed with the passkey and hands it back to
-//   whoever proves the passkey. It can't open it.
+// - For anyone, free: a passkey opens their files in a browser on any device
+//   (`/api/passkeys`). This keeps what the browser sealed with the passkey,
+//   when its owner chose to leave it here, and hands it back to whoever
+//   proves the passkey. It can't open it.
+// - For a subscriber (a key Stripe says is paid for): their connector for
+//   agents runs in Omacloud's Cloudflare account, not their own
+//   (`/api/connectors`). Its settings hold their keys sealed under the
+//   connector's passphrase, which never comes here: see connector/oauth.js.
 //
 // No email, name or cookie: Stripe holds who paid, this holds that an id did.
 
@@ -61,8 +63,11 @@ export interface Paid {
 	now: () => number;
 }
 
+const NOT_NEEDED =
+	"Already on Cloudflare's Workers Paid plan? You don't need this: `omacloud agents connect` runs your connector in your own account, free. This is for having Omacloud run it for you.";
 const MOST_CONNECTORS = 5;
-const MOST_PASSKEYS = 10;
+// few: nothing is paid for these, and a person has only so many devices
+const MOST_PASSKEYS = 5;
 // a Worker's secret is at most 5 KB
 const MOST_SETTINGS = 5000;
 const MOST_SEALED = 8192;
@@ -115,13 +120,13 @@ async function stripe(p: Paid, path: string, params: Record<string, string>): Pr
 	return said;
 }
 
-// A subscriber who stopped paying keeps nothing running here.
+// A subscriber who stopped paying keeps nothing running here. (Their
+// passkeys stay: those were never what the subscription was for.)
 async function end(p: Paid, id: string): Promise<void> {
 	for (const c of await p.store.connectors(id)) {
 		await removeConnector(p.cloud, p.fetch, c.script);
 		await p.store.dropConnector(id, c.name);
 	}
-	await p.store.dropPasskeys(id);
 }
 
 // What Stripe tells this about a subscription, checked to be Stripe's
@@ -214,6 +219,8 @@ export async function paid(p: Paid, req: Request): Promise<Response | null> {
 			"subscription_data[metadata][subscriber]": id,
 			success_url: `${p.site}/subscribed`,
 			cancel_url: `${p.site}/`,
+			// said where the paying is done: nobody should pay who needn't
+			"custom_text[submit][message]": NOT_NEEDED,
 		});
 		return Response.redirect(String(session.url), 303);
 	}
@@ -230,7 +237,6 @@ export async function paid(p: Paid, req: Request): Promise<Response | null> {
 		// one answer for every way of not getting in
 		const no = () => refuse(403, "not_signed_in", "this passkey doesn't open an account here");
 		if (!key || !(await proves(p, key, asked as never))) return no();
-		if (!active(await p.store.subscriber(key.subscriber))) return refuse(402, "not_subscribed", "this account's subscription has ended");
 		return json({ sealed: key.sealed });
 	}
 
@@ -266,6 +272,17 @@ export async function paid(p: Paid, req: Request): Promise<Response | null> {
 		await p.store.dropPasskeys(id, passkey[1]);
 		return json({ removed: true });
 	}
+	if (passkey && !passkey[1] && req.method === "POST") {
+		const asked = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+		if (!b64url(asked.credential, 1400) || !b64url(asked.public_key, 1000) || !b64url(asked.sealed, MOST_SEALED) || (asked.alg !== -7 && asked.alg !== -257)) {
+			return refuse(400, "bad_passkey", "a passkey's id, its public key and what it sealed");
+		}
+		const held = await p.store.passkey(asked.credential);
+		if (held && held.subscriber !== id) return refuse(409, "taken", "this passkey is another account's");
+		if (!held && (await p.store.passkeys(id)).length >= MOST_PASSKEYS) return refuse(409, "too_many", `an account keeps at most ${MOST_PASSKEYS} passkeys here`);
+		await p.store.putPasskey({ credential: asked.credential, subscriber: id, public_key: asked.public_key, alg: asked.alg, sealed: asked.sealed });
+		return json({ kept: true });
+	}
 	if (!active(subscriber)) return refuse(402, "not_subscribed", "this needs a subscription: `omacloud subscribe`");
 
 	if (connector && req.method === "PUT") {
@@ -286,17 +303,6 @@ export async function paid(p: Paid, req: Request): Promise<Response | null> {
 		const address = await deployConnector(p.cloud, p.fetch, script, settings);
 		await p.store.putConnector({ subscriber: id, name: connector[1], script, url: address });
 		return json({ url: address });
-	}
-	if (passkey && !passkey[1] && req.method === "POST") {
-		const asked = (await req.json().catch(() => ({}))) as Record<string, unknown>;
-		if (!b64url(asked.credential, 1400) || !b64url(asked.public_key, 1000) || !b64url(asked.sealed, MOST_SEALED) || (asked.alg !== -7 && asked.alg !== -257)) {
-			return refuse(400, "bad_passkey", "a passkey's id, its public key and what it sealed");
-		}
-		const held = await p.store.passkey(asked.credential);
-		if (held && held.subscriber !== id) return refuse(409, "taken", "this passkey is another account's");
-		if (!held && (await p.store.passkeys(id)).length >= MOST_PASSKEYS) return refuse(409, "too_many", `a subscription keeps at most ${MOST_PASSKEYS} passkeys`);
-		await p.store.putPasskey({ credential: asked.credential, subscriber: id, public_key: asked.public_key, alg: asked.alg, sealed: asked.sealed });
-		return json({ kept: true });
 	}
 	return refuse(404, "not_found", "nothing is here");
 }

@@ -22,8 +22,8 @@ export function account(said) {
 		const upload = uploadKey(said.upload) ? { upload: uploadKey(said.upload) } : {};
 		// where a browser that stays signed in says so, beside the repository
 		const browsers = text("browsers") ? { browsers: text("browsers").replace(/^\/+|\/+$/g, "") } : {};
-		// the key of the account's subscription, if it has one: with it a
-		// passkey made here is kept at this site too (remember.js)
+		// the account's key at this site: with it a passkey made here can be
+		// left with the site for the person's other devices (remember.js)
 		const plan = /^[0-9a-f]{64}$/.test(text("plan")) ? { plan: text("plan") } : {};
 		// an account in Dropbox: the token in place of a bucket and its key
 		const box = said.dropbox;
