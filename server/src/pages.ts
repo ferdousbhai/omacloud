@@ -101,6 +101,15 @@ still not be able to read their files, which is how it should be.</p>
 computers, but keep another copy of anything you can't afford to lose.</p>`,
 	);
 
+export const subscribed = () =>
+	layout(
+		"Subscribed · Omacloud",
+		`<h1>You're subscribed</h1>
+<p class="lead">Back at your computer:</p>
+<pre>omacloud agents connect Documents/Notes</pre>
+<p>That gives your agent the folder you name. <code>omacloud subscription</code> shows where it stands and how to end it.</p>`,
+	);
+
 export const privacy = () =>
 	layout(
 		"Privacy · Omacloud",

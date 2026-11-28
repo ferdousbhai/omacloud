@@ -18,6 +18,16 @@ export default defineConfig({
 		env: {
 			PUBLIC_URL: bindings.text("https://omacloud.computer"),
 			ASSETS: bindings.assets(),
+			// the paid tier (src/paid.ts): who subscribed, their connectors'
+			// names and their passkeys' sealed notes; Stripe's and
+			// Cloudflare's keys. Without them the free site is all there is.
+			DB: bindings.d1({ name: "omacloud" }),
+			STRIPE_SECRET_KEY: bindings.secret(),
+			STRIPE_WEBHOOK_SECRET: bindings.secret(),
+			STRIPE_PRICE: bindings.secret(),
+			PASSKEY_SECRET: bindings.secret(),
+			CLOUDFLARE_API_TOKEN: bindings.secret(),
+			CLOUDFLARE_ACCOUNT: bindings.secret(),
 		},
 	},
 });

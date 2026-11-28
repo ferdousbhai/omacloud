@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Put the browser page where the Worker serves it from (public/files):
 # the page's files from ../web, and the reader built to WebAssembly from
-# ../crates/omacloud-web. Needs Rust's wasm32-unknown-unknown target.
+# ../crates/omacloud-web; and the connector for agents (public/connector),
+# which the Worker uploads for subscribers and serves to nobody. Needs Rust's
+# wasm32-unknown-unknown target.
 set -euo pipefail
 cd "$(dirname "$0")"
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -11,3 +13,4 @@ rm -rf "${out:?}"
 mkdir -p "$out"
 cp ../web/index.html ../web/style.css ../web/*.js "$out/"
 cp "../${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/omacloud_web.wasm" "$out/"
+../scripts/build-connector.sh "$PWD/public/connector"
