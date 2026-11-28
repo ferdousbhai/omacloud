@@ -19,7 +19,7 @@ pub struct Plan {
     client: reqwest::blocking::Client,
 }
 
-fn site() -> String {
+pub fn site() -> String {
     std::env::var("OMACLOUD_SITE")
         .unwrap_or_else(|_| "https://omacloud.computer".into())
         .trim_end_matches('/')

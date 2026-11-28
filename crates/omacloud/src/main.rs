@@ -444,9 +444,10 @@ enum AgentsCmd {
     List,
     /// Put a connector up and show its address and passphrase, once. With a
     /// subscription (`omacloud subscribe`) Omacloud runs it; without, it goes
-    /// in your own Cloudflare account (which needs the Workers Paid plan),
-    /// with an API token (permission Workers Scripts: Edit) from
-    /// OMACLOUD_CLOUDFLARE_TOKEN or asked for. Either way it holds the keys
+    /// in your own Cloudflare account (which needs the Workers Paid plan):
+    /// you allow that in your browser, or where there's none give an API
+    /// token (permission Workers Scripts: Edit) in OMACLOUD_CLOUDFLARE_TOKEN
+    /// or when asked. Either way it holds the keys
     /// to your storage and files sealed under the passphrase, opened once
     /// an agent signs in with it. Connecting again
     /// replaces it, and ends every sign-in to the one before
@@ -3646,15 +3647,7 @@ fn agents(paths: &Paths, action: AgentsCmd) -> Out {
                 // the reader is fetched last: nothing is asked of anyone until
                 // all that could be refused here has been
                 let modules = connector_modules()?;
-                if std::env::var_os("OMACLOUD_CLOUDFLARE_TOKEN").is_none() {
-                    eprintln!(
-                        "This needs an API token for your Cloudflare account, with the permission Workers Scripts: \
-                         Edit.\nMake one at https://dash.cloudflare.com/profile/api-tokens (Create Token, then Edit \
-                         Cloudflare Workers).\nIt's used now and kept nowhere. Or have Omacloud run it: `omacloud \
-                         subscribe`."
-                    );
-                }
-                let api = cloudflare::Api::new(read_secret("OMACLOUD_CLOUDFLARE_TOKEN", "Cloudflare API token")?)?;
+                let api = cloudflare::Api::with_leave()?;
                 // an account in R2 is in the Cloudflare account its address names
                 let in_r2 = code
                     .endpoint
@@ -3713,7 +3706,7 @@ fn agents(paths: &Paths, action: AgentsCmd) -> Out {
                 };
                 plan.disconnect(&name)?;
             } else if !account.is_empty() {
-                let api = cloudflare::Api::new(read_secret("OMACLOUD_CLOUDFLARE_TOKEN", "Cloudflare API token")?)?;
+                let api = cloudflare::Api::with_leave()?;
                 api.remove(&account, &format!("omacloud-{name}"))?;
             }
             known.retain(|c| c["name"] != json!(name));

@@ -28,6 +28,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_any(self):
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        # where Cloudflare's sign-in returns: on to the waiting command's port
+        if self.command == "GET" and self.path.startswith("/cloudflare/callback?"):
+            query = self.path.split("?", 1)[1]
+            port = re.search(r"(?:^|&)state=(\d+)\.", query)[1]
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{port}/callback?{query}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if not re.fullmatch(r"Bearer [0-9a-f]{64}", self.headers.get("Authorization") or ""):
             return self.answer(401, {"error": {"code": "no_key", "message": "this needs a subscription's key"}})
         path, method = self.path, self.command

@@ -40,14 +40,14 @@ fn agent() -> Result<reqwest::blocking::Client> {
         .build()?)
 }
 
-fn random_url_safe(bytes: usize) -> String {
+pub(crate) fn random_url_safe(bytes: usize) -> String {
     let mut b = vec![0u8; bytes];
     rand::rngs::OsRng.fill_bytes(&mut b);
     URL_SAFE_NO_PAD.encode(b)
 }
 
 /// What a browser is sent to: no secret of this process goes with it.
-fn open_browser(url: &str) {
+pub(crate) fn open_browser(url: &str) {
     let mut open = std::process::Command::new("xdg-open");
     for var in [
         "OMACLOUD_RECOVERY_CODE",
@@ -66,7 +66,7 @@ fn open_browser(url: &str) {
         .spawn();
 }
 
-fn param<'a>(query: &'a str, name: &str) -> Option<&'a str> {
+pub(crate) fn param<'a>(query: &'a str, name: &str) -> Option<&'a str> {
     query
         .split('&')
         .filter_map(|p| p.split_once('='))
@@ -74,7 +74,7 @@ fn param<'a>(query: &'a str, name: &str) -> Option<&'a str> {
         .map(|(_, v)| v)
 }
 
-fn reply(mut stream: &TcpStream, status: &str, title: &str, text: &str) {
+pub(crate) fn reply(mut stream: &TcpStream, status: &str, title: &str, text: &str) {
     let body = format!(
         "<!doctype html><meta charset=utf-8><title>Omacloud</title>\
          <body style=\"font:16px system-ui;max-width:32em;margin:4em auto;padding:0 1em\">\
@@ -96,12 +96,12 @@ fn authorize_url(extra: &str) -> String {
 
 /// A desktop session, where a browser here can reach this computer's
 /// loopback port.
-fn on_desktop() -> bool {
+pub(crate) fn on_desktop() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some()
 }
 
 /// PKCE's S256 challenge for a verifier.
-fn challenge(verifier: &str) -> String {
+pub(crate) fn challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 

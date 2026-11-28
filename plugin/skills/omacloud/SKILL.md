@@ -137,7 +137,8 @@ Documents/Notes` (`--read-only` to leave writing out) puts up a connector and pr
 address and a passphrase, so the owner runs it, in their terminal. With a subscription
 (`omacloud subscription` says; `omacloud subscribe` starts one, $5 a month) Omacloud runs
 it. Without, it goes in the owner's own Cloudflare account, which needs the Workers Paid
-plan and an API token (OMACLOUD_CLOUDFLARE_TOKEN or asked for). Say first what it trades:
+plan; the owner allows it in the browser the command opens (or, with no browser, gives an
+API token: OMACLOUD_CLOUDFLARE_TOKEN or asked for). Say first what it trades:
 whoever runs the connector holds the keys to the storage and the files sealed under that
 passphrase, and opens them once an agent signs in with it. `omacloud agents` lists
 connectors, `omacloud agents disconnect` removes one. Never set one up, or start a

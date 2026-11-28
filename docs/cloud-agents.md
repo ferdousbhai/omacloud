@@ -21,9 +21,15 @@ versions, and write files there. `--read-only` leaves the writing out;
 `omacloud agents` lists what this computer set up, and `omacloud agents
 disconnect` takes it out again.
 
-**In your own account** it needs an API token of yours with the one
-permission Workers Scripts: Edit (asked for, or `OMACLOUD_CLOUDFLARE_TOKEN`;
-used for the upload and kept nowhere), and Cloudflare's Workers Paid plan:
+**In your own account** it needs your leave and Cloudflare's Workers Paid
+plan. The command opens Cloudflare in your browser, where you pick the
+account and allow Omacloud to edit Workers there, and nothing else
+(`cloudflare.rs`; Cloudflare sends you back through omacloud.computer, which
+passes on a code only the waiting command can use). The leave is used for
+the upload and kept nowhere; Cloudflare lists it under your profile, to
+revoke. Where there's no browser, an API token of yours with the one
+permission Workers Scripts: Edit does the same (`OMACLOUD_CLOUDFLARE_TOKEN`,
+or asked for). The plan is needed because
 the free plan's ten milliseconds of processor time per request don't decrypt
 an account.
 

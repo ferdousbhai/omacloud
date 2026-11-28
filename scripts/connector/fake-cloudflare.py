@@ -5,8 +5,10 @@ makes, for scripts/connector.sh: it writes down what it was sent.
   fake-cloudflare.py <port file> <log folder>
 
 The token it takes is "token-one"; the account "acct"; the workers.dev name "me".
+Its sign-in (/oauth2/auth, /oauth2/token) gives that token to whoever asks.
 """
-import json, sys
+import base64, hashlib, json, sys
+from urllib.parse import parse_qs, urlencode, urlparse
 from email.parser import BytesParser
 from email.policy import default
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,6 +32,30 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_any(self):
         body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        # the sign-in in a browser: leave given at once, and a token for the
+        # code only to whoever holds what its challenge was made from
+        url = urlparse(self.path)
+        if self.command == "GET" and url.path == "/oauth2/auth":
+            asked = {k: v[0] for k, v in parse_qs(url.query).items()}
+            (log / "oauth-asked.json").write_text(json.dumps(asked))
+            self.send_response(302)
+            self.send_header("Location", asked["redirect_uri"] + "?" + urlencode({"code": "code/one+two", "state": asked["state"]}))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if self.command == "POST" and url.path == "/oauth2/token":
+            given = {k: v[0] for k, v in parse_qs(body.decode()).items()}
+            asked = json.loads((log / "oauth-asked.json").read_text())
+            proof = base64.urlsafe_b64encode(hashlib.sha256(given.get("code_verifier", "").encode()).digest()).rstrip(b"=").decode()
+            ok = (given.get("code") == "code/one+two" and proof == asked["code_challenge"] and given.get("client_id") == asked["client_id"]
+                  and given.get("redirect_uri") == asked["redirect_uri"] and given.get("grant_type") == "authorization_code")
+            answer = json.dumps({"access_token": "token-one", "token_type": "bearer"} if ok else {"error": "invalid_grant"}).encode()
+            self.send_response(200 if ok else 400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(answer)))
+            self.end_headers()
+            self.wfile.write(answer)
+            return
         if self.headers.get("Authorization") != "Bearer token-one":
             return self.answer(403, errors=["Authentication error"])
         if not (self.headers.get("User-Agent") or "").startswith("omacloud/"):

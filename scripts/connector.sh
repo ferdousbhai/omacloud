@@ -194,4 +194,24 @@ oc subscription manage | grep -q "https://billing.stripe.com/p/test" || fail "no
 on_tty "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared --name own --own-cloudflare | grep -q "in your Cloudflare account" || fail "--own-cloudflare went to Omacloud"
 oc agents disconnect hosted >/dev/null
 [ "$(cat "$work/paid-site/removed")" = hosted ] || fail "the hosted connector wasn't taken down"
+
+# with no token, leave is asked of Cloudflare in a browser: the command shows
+# where to go, the sign-in comes back through the site to the port it waits
+# on, and the token that buys is what uploads
+unset OMACLOUD_CLOUDFLARE_TOKEN
+export OMACLOUD_CLOUDFLARE_OAUTH=$OMACLOUD_CLOUDFLARE_API/oauth2 OMACLOUD_CLOUDFLARE_CLIENT=client-one
+rm -f "$work/cf/upload.json"
+# (what it says is read as it's said: `script -f` writes each line down at once)
+SHELL=/bin/bash script -qefc "$(printf '%q ' "$OMACLOUD" --config "$work/a.toml" agents connect Notes/Shared --name asked --own-cloudflare)" \
+	"$work/asked.out" </dev/null >/dev/null 2>&1 &
+asking=$!
+pids+=("$asking")
+for _ in $(seq 100); do grep -q "oauth2/auth?" "$work/asked.out" 2>/dev/null && break; sleep 0.1; done
+address=$(tr -d '\r' <"$work/asked.out" | grep -o "http://127.0.0.1:[0-9]*/oauth2/auth?[^ ]*" | head -n 1 || true)
+[ -n "$address" ] || fail "no address to allow Omacloud at: $(cat "$work/asked.out")"
+grep -q "scope=workers-scripts.edit" <<<"$address" || fail "more than editing Workers was asked for: $address"
+curl -fsSL "$address" | grep -q "Omacloud is allowed" || fail "the sign-in didn't come back to the command"
+wait "$asking" || fail "the command didn't finish once allowed: $(cat "$work/asked.out")"
+grep -q "https://omacloud-asked.me.workers.dev/mcp" "$work/asked.out" || fail "the connector isn't up after the sign-in: $(cat "$work/asked.out")"
+[ -e "$work/cf/upload.json" ] || fail "nothing was uploaded with the sign-in's token"
 echo "connector: passed"
