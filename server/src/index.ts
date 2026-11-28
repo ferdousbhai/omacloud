@@ -5,8 +5,8 @@ import * as pages from "./pages.ts";
 import { FILES_CSP, secureAsset, secureDocument } from "./security-headers.ts";
 
 // Omacloud in a browser: a page of static files that reads a person's storage from
-// their browser. Nothing of theirs comes here: the Worker only hands out the
-// page, under a policy that lets it load this site's own code and nothing else.
+// their browser. Nothing of theirs comes here unless they subscribe
+// (paid.ts): the Worker only hands out the page, under a policy that lets it load this site's own code and nothing else.
 async function files(req: Request, env: Env): Promise<Response> {
 	const response = await env.ASSETS.fetch(req);
 	if (!response.headers.get("content-type")?.includes("text/html")) return secureAsset(response);

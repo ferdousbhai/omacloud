@@ -73,8 +73,8 @@ subscription, and whether it's paid for. It keeps no name, email or card: Stripe
 under <a href="https://stripe.com/privacy">its own policy</a>.</p>
 <p>Your connector for agents then runs in Omacloud's Cloudflare account. Its settings hold the keys to your storage
 and files sealed under the connector's passphrase, which is shown on your computer and never sent here. They're
-open only while an agent you gave the passphrase to is asking, in memory, and what the agent reads passes through
-that connector to it. Nothing it reads is logged or kept.</p>
+opened when an agent you gave the passphrase to asks, and held in the running connector's memory from then on; what
+the agent reads passes through that connector to it. Nothing it reads is logged or kept.</p>
 <p>A passkey that opens your files on any device: this site keeps the passkey's public key and what your browser
 sealed with the passkey, and hands that back to a browser that proves the passkey. It can't open it.</p>
 <p>End the subscription, or run <code>omacloud agents disconnect</code> or press Forget This Device, and the
@@ -92,10 +92,11 @@ export const terms = () =>
 <p>Omacloud is free software under the MIT license. It comes as it is, with no warranty. Keep another copy
 of anything you can't afford to lose. As far as the law allows, Omacloud isn't liable for lost data.</p>
 <h2>Your recovery code</h2>
-<p>Only your computers and your recovery code can decrypt your data. If you lose the code and all your
+<p>Only your computers and your recovery code can decrypt your data, and what you let in yourself: a browser you
+open your files in, and a connector for agents if you set one up. If you lose the code and all your
 computers, nobody can get your files back, and that includes me. Keep the code safe and offline.</p>
 <h2>The subscription</h2>
-<p>The subscription is $5 a month, charged by Stripe until you end it, which you can do at any time:
+<p>Omacloud is a product of SummonGhost, Inc., which sells the subscription. It is $5 a month, charged by Stripe until you end it, which you can do at any time:
 <code>omacloud subscription manage</code>. It then runs to the end of the month you paid for. For it Omacloud runs
 your connector for agents and keeps what lets a passkey open your files in a browser. When it ends, both are
 deleted; your files, in your own storage, are untouched. The service comes as it is, and may be unavailable at

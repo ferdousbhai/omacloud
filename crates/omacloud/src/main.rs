@@ -70,13 +70,14 @@ fn mode() -> Mode {
 const AFTER_HELP: &str = "\
 Output: text on a terminal, a JSON envelope {\"ok\":true,\"data\",\"summary\"} when
 piped. --json forces the envelope, --styled text, --quiet prints only the data,
---ids-only one id per line (devices, versions, deleted, folders, packages,
-secrets),
+--ids-only one id per line (devices, browsers, versions, deleted, folders,
+packages, secrets),
 --count the number of results; ids-only > count > quiet > json > styled. Only
 a result goes to stdout; a failure goes to stderr (below).
 
 Commands that print a secret (init when it creates an account, join-code,
-invite, export, recovery split and combine) print only to a
+invite, export, web-code, web-link, agents connect, recovery split and
+combine) print only to a
 terminal, in text mode, with stdin a terminal too (combine excepted: its shares
 may come on stdin).
 
@@ -114,7 +115,7 @@ enum Cmd {
         #[arg(value_enum)]
         page: Option<Page>,
     },
-    /// Set up this device: create the account in your Dropbox or bucket
+    /// Set up this device: create the account in your Dropbox, a bucket or a folder
     /// (`--provider ...`), or join one with the code from `omacloud join-code` or `omacloud
     /// invite` in OMACLOUD_JOIN_CODE (joining is then approved on a computer
     /// already in), or with the recovery code in OMACLOUD_RECOVERY_CODE and
@@ -445,8 +446,8 @@ enum AgentsCmd {
     /// in your own Cloudflare account (which needs the Workers Paid plan),
     /// with an API token (permission Workers Scripts: Edit) from
     /// OMACLOUD_CLOUDFLARE_TOKEN or asked for. Either way it holds the keys
-    /// to your storage and files sealed under the passphrase, open only
-    /// while an agent that signed in with it is asking. Connecting again
+    /// to your storage and files sealed under the passphrase, opened once
+    /// an agent signs in with it. Connecting again
     /// replaces it, and ends every sign-in to the one before
     Connect {
         /// The folders agents may reach, like `Documents/Notes`; nothing
@@ -571,7 +572,7 @@ impl BucketArgs {
         let provider = self.provider.ok_or_else(|| {
             fail::usage("say where the files live").hint(
                 "give your bucket: `--provider r2 --account <id> --bucket <name> --access-key-id <id>` (or \
-                 `hetzner --location fsn1`, or `s3 --endpoint <url>`), or `--provider dropbox`; to set up with a code, put it in \
+                 `hetzner --location fsn1`, or `s3 --endpoint <url>`), `--provider dropbox`, or `--provider folder --path <folder>`; to set up with a code, put it in \
                  OMACLOUD_JOIN_CODE. The Omacloud app walks through the same.",
             )
         })?;
@@ -1077,8 +1078,6 @@ impl Paths {
             PathBuf::from,
         )
     }
-    /// Its being there says the bar was decided: shown once by the daemon,
-    /// or turned on or off by the person. So it's never put back unasked.
     /// The connectors for agents this computer set up: what they reach, not
     /// their secrets.
     fn agents(&self) -> PathBuf {
@@ -1093,6 +1092,8 @@ impl Paths {
     fn browsers(&self) -> PathBuf {
         self.data.join("browsers.json")
     }
+    /// Its being there says the bar was decided: shown once by the daemon,
+    /// or turned on or off by the person. So it's never put back unasked.
     fn bar_decided(&self) -> PathBuf {
         self.data.join("bar-decided")
     }
@@ -1346,9 +1347,7 @@ impl WebCode {
         e.sync()?; // pick up any key rotation first
         let (spec, secret, _) = e.repository()?;
         if !spec.is_remote() {
-            return Err(fail::unsupported("Omacloud in a browser reads a bucket or a Dropbox")
-                .hint("this account's files are in neither; `omacloud mount` shows them on a computer")
-                .into());
+            return Err(not_in_a_browser().into());
         }
         let opt = |k: &str| spec.options.get(k).cloned().unwrap_or_default();
         let dropbox = spec.is_dropbox().then(|| DropboxKey {
@@ -1386,12 +1385,24 @@ impl WebCode {
 /// How long a web link opens anything.
 const WEB_LINK_VALID: Duration = Duration::from_secs(300);
 
+/// What an account in a folder is told when asked for a browser's way in.
+fn not_in_a_browser() -> CliError {
+    fail::unsupported("Omacloud in a browser reads a bucket or a Dropbox")
+        .hint("this account's files are in neither; `omacloud mount` shows them on a computer")
+}
+
+/// Where Omacloud in a browser is served; `OMACLOUD_WEB_URL` names another
+/// copy of the page, for trying one.
+fn web_page() -> String {
+    std::env::var("OMACLOUD_WEB_URL").unwrap_or_else(|_| "https://omacloud.computer/files/".into())
+}
+
 /// The address a web link is: the browser page, and after the `#`,
 /// which a browser keeps to itself, the seed and where the sealed web code
 /// waits. `OMACLOUD_WEB_URL` names another copy of the page, for trying one.
 fn web_link(seed: &[u8], address: &str) -> String {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-    let page = std::env::var("OMACLOUD_WEB_URL").unwrap_or_else(|_| "https://omacloud.computer/files/".into());
+    let page = web_page();
     // the address in base64 too: whatever passes the link along (a camera
     // app, a chat) then has nothing in it to re-encode, which would break
     // the address's signature
@@ -2628,8 +2639,13 @@ fn run(cli: Cli) -> Out {
                     for c in &connectors {
                         human.push_str(&format!("\n{c}"));
                     }
-                    if said["passkeys"].as_u64().unwrap_or(0) > 0 {
-                        human.push_str(&format!("\n{} passkeys open your files in a browser", said["passkeys"]));
+                    let passkeys = usize::try_from(said["passkeys"].as_u64().unwrap_or(0)).unwrap_or(0);
+                    if passkeys > 0 {
+                        human.push_str(&format!(
+                            "\n{} open{} your files in a browser",
+                            counted(passkeys, "passkey"),
+                            if passkeys == 1 { "s" } else { "" }
+                        ));
                     }
                     let summary = if said["active"] == json!(true) {
                         "subscribed"
@@ -3024,14 +3040,19 @@ fn run(cli: Cli) -> Out {
             }
             let code = WebCode::of(&paths)?.1.encode()?;
             eprintln!(
-                "Paste it at https://omacloud.computer/files/ to open your files in a browser. Keep it\n\
+                "Paste it at {} to open your files in a browser. Keep it\n\
                  private: it holds the key to your storage and the password to your files, so whoever has\n\
-                 it can read them. It stops working when the bucket's key is changed."
+                 it can read them. It stops working when the bucket's key is changed.",
+                web_page()
             );
             Ok(Response::new(Value::Null, "web code").human(code))
         }
         Cmd::WebLink { close: true, .. } => {
-            Links::beside(&load(&paths)?.repo)?.clear()?;
+            let config = load(&paths)?;
+            if !config.repo.is_remote() {
+                return Err(not_in_a_browser().into());
+            }
+            Links::beside(&config.repo)?.clear()?;
             Ok(Response::new(Value::Null, "web link closed"))
         }
         Cmd::WebLink { keep, .. } => {
@@ -3409,8 +3430,7 @@ fn connector_modules() -> Result<Vec<(String, Vec<u8>)>> {
             )
         })
         .collect();
-    let page = std::env::var("OMACLOUD_WEB_URL").unwrap_or_else(|_| "https://omacloud.computer/files/".into());
-    let address = format!("{}/{CONNECTOR_READER}", page.trim_end_matches('/'));
+    let address = format!("{}/{CONNECTOR_READER}", web_page().trim_end_matches('/'));
     let reader = reqwest::blocking::Client::builder()
         .user_agent(concat!("omacloud/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(60))
@@ -3565,7 +3585,7 @@ fn agents(paths: &Paths, action: AgentsCmd) -> Out {
                 .collect::<Vec<_>>()
                 .join("-");
             let mut storage = serde_json::to_value(&code)?;
-            for field in ["v", "password", "browsers", "upload", "plan"] {
+            for field in ["v", "password", "browsers"] {
                 _ = storage.as_object_mut().and_then(|o| o.remove(field));
             }
             // the keys rest sealed under the passphrase: the settings alone,
@@ -3589,17 +3609,21 @@ fn agents(paths: &Paths, action: AgentsCmd) -> Out {
             })
             .to_string();
             let script = format!("omacloud-{name}");
-            // with a subscription Omacloud runs it; the settings it's sent hold no key it can open
-            let hosted = if own_cloudflare || std::env::var_os("OMACLOUD_CONNECTOR_OUT").is_some() {
-                None
-            } else {
-                plan::Plan::read(&paths.subscription()).filter(plan::Plan::active)
+            // with a subscription Omacloud runs it, and the settings it's sent
+            // hold no key it can open. A site that can't say whether there is
+            // one is an error, not a reason to ask for a Cloudflare token.
+            let subscribed = match plan::Plan::read(&paths.subscription()) {
+                Some(plan) if !own_cloudflare && std::env::var_os("OMACLOUD_CONNECTOR_OUT").is_none() => {
+                    (plan.status()?["active"] == json!(true)).then_some(plan)
+                }
+                _ => None,
             };
+            let hosted = subscribed.is_some();
             let (url, account) = if let Some(out) = std::env::var_os("OMACLOUD_CONNECTOR_OUT") {
                 // for trying the connector without Cloudflare: its settings, to a file
                 fs::write(&out, &settings)?;
                 ("http://127.0.0.1".to_string(), String::new())
-            } else if let Some(plan) = &hosted {
+            } else if let Some(plan) = &subscribed {
                 (plan.connect(&name, &settings)?, String::new())
             } else {
                 // the reader is fetched last: nothing is asked of anyone until
@@ -3625,20 +3649,20 @@ fn agents(paths: &Paths, action: AgentsCmd) -> Out {
             };
             let mut known = agents_known(paths);
             known.retain(|c| c["name"] != json!(name));
-            known.push(json!({ "name": name, "url": url, "account": account, "hosted": hosted.is_some(), "folders": folders, "write": !read_only, "until": until }));
+            known.push(json!({ "name": name, "url": url, "account": account, "hosted": hosted, "folders": folders, "write": !read_only, "until": until }));
             fs::write(paths.agents(), Value::Array(known).to_string())?;
             let human = format!(
                 "The connector is {}. It {} {}.\n\n1. In your agent, add a connector with this \
                  address (in claude.ai: Settings, Connectors, Add custom connector):\n\n     {url}/mcp\n\n2. When it \
                  asks, allow it with this passphrase, shown only now:\n\n     {shown}\n\n{} `omacloud agents disconnect{}` takes it out.",
-                if hosted.is_some() {
+                if hosted {
                     "running at Omacloud"
                 } else {
                     "in your Cloudflare account"
                 },
                 if read_only { "reads" } else { "reads and writes" },
                 folders.join(", "),
-                if hosted.is_some() {
+                if hosted {
                     "Its keys are sealed under that passphrase, which Omacloud never sees."
                 } else {
                     "It needs Cloudflare's Workers Paid plan to open your files."
@@ -3662,9 +3686,15 @@ fn agents(paths: &Paths, action: AgentsCmd) -> Out {
             };
             let account = text_of(&found["account"]);
             if found["hosted"] == json!(true) {
-                if let Some(plan) = plan::Plan::read(&paths.subscription()) {
-                    plan.disconnect(&name)?;
-                }
+                let Some(plan) = plan::Plan::read(&paths.subscription()) else {
+                    return Err(fail::setup(
+                        "not_subscribed",
+                        "Omacloud runs this connector, and the subscription's key isn't on this computer",
+                    )
+                    .hint("run this on the computer that subscribed; ending the subscription takes it down too")
+                    .into());
+                };
+                plan.disconnect(&name)?;
             } else if !account.is_empty() {
                 let api = cloudflare::Api::new(read_secret("OMACLOUD_CLOUDFLARE_TOKEN", "Cloudflare API token")?)?;
                 api.remove(&account, &format!("omacloud-{name}"))?;
@@ -3766,7 +3796,7 @@ fn browsers(paths: &Paths, action: BrowsersCmd) -> Out {
     let config = load(paths)?;
     let mut e = engine(paths, &config)?;
     e.sync()?; // pick up any key rotation first
-    let (notes, found) = browsers_now(paths, &mut e, &config)?;
+    let (_, found) = browsers_now(paths, &mut e, &config)?;
     match action {
         BrowsersCmd::List => {
             let mut out = String::new();
@@ -3817,8 +3847,7 @@ fn browsers(paths: &Paths, action: BrowsersCmd) -> Out {
             let full = full.clone();
             let r = e.rotate()?;
             // every browser's keys are old now, this one's among them
-            notes.clear()?;
-            _ = fs::write(paths.browsers(), "[]");
+            forget_browsers(paths, &config);
             let mut out = String::new();
             say!(
                 out,

@@ -369,7 +369,7 @@ fn set_pref(prefs: &mut Value, name: &str, value: Option<&Value>) {
 
 /// The synced preferences in a `Preferences` file.
 #[must_use]
-pub fn capture_preferences(prefs: &Value) -> Value {
+fn capture_preferences(prefs: &Value) -> Value {
     let mut out = Map::new();
     for name in PREFS {
         if let Some(v) = pref(prefs, name) {
@@ -382,7 +382,7 @@ pub fn capture_preferences(prefs: &Value) -> Value {
 /// `prefs` with the document's preferences in it, a missing one back at
 /// Chromium's default. Only [`PREFS`] change.
 #[must_use]
-pub fn write_preferences(prefs: &Value, doc: &Value) -> Value {
+fn write_preferences(prefs: &Value, doc: &Value) -> Value {
     let mut out = prefs.clone();
     for name in PREFS {
         set_pref(&mut out, name, doc.get(*name));
@@ -396,7 +396,7 @@ pub fn write_preferences(prefs: &Value, doc: &Value) -> Value {
 /// `kExternalPrefDownload`; extensions/common/mojom/manifest.mojom). Not
 /// Chromium's own, policy ones, or unpacked ones like Omarchy's.
 #[must_use]
-pub fn capture_extensions(prefs: &Value) -> Value {
+fn capture_extensions(prefs: &Value) -> Value {
     let mut out = Map::new();
     let settings = prefs.pointer("/extensions/settings").and_then(Value::as_object);
     for (id, e) in settings.into_iter().flatten() {

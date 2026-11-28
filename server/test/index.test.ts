@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import worker from "../src/index.ts";
 
-// The assets as Cloudflare serves them: the Drive page and one of its scripts.
+// The assets as Cloudflare serves them: the browser page and one of its scripts.
 const assets = {
 	fetch: async (req: Request) => {
 		const path = new URL(req.url).pathname;
@@ -26,7 +26,7 @@ test("the pages are served, and nothing else", async () => {
 	// the paid tier isn't there until Stripe's keys and the database are
 	assert.equal((await get("/api/subscription")).status, 404);
 	assert.equal((await get(`/subscribe/${"a".repeat(64)}`)).status, 404);
-	for (const gone of ["/signin", "/s", "/api/net/nodes"]) assert.equal((await get(gone)).status, 404, gone);
+	for (const gone of ["/signin", "/s", "/connector/worker.js"]) assert.equal((await get(gone)).status, 404, gone);
 	assert.equal((await get("/", "POST")).status, 404);
 });
 
@@ -68,6 +68,6 @@ test("Omacloud in a browser is served under a policy that loads only this site's
 	assert.equal(script.headers.get("x-content-type-options"), "nosniff");
 	assert.equal((await get("/files")).status, 307);
 	assert.equal((await get("/files/nothing")).status, 404);
-	// only the Drive's own folder comes from the assets
+	// only the browser page's own folder comes from the assets
 	assert.equal((await get("/filesystem")).status, 404);
 });

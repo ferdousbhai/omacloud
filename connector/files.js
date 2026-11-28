@@ -1,25 +1,22 @@
 // An account's files, read straight from the person's own storage and
 // decrypted here with the reader the browser page uses (crates/omacloud-web).
 // "Here" is a Worker whose settings hold the storage's key and the
-// repository's key sealed under the connector's passphrase, opened while an
-// agent that signed in with it is asking: see docs/cloud-agents.md for what
-// that trades. Only the folders the person granted are ever shown.
+// repository's key sealed under the connector's passphrase, opened when an
+// agent that signed in with it first asks and held in memory from then on:
+// see docs/cloud-agents.md for what that trades. Only the folders the person granted are ever shown.
 
 import * as reader from "../web/reader.js";
 import { Bucket } from "../web/s3.js";
 import { Dropbox } from "../web/dropbox.js";
+import { decode, hex } from "./oauth.js";
 
 // how long the newest version found is taken as still the newest
 const FRESH_MS = 20_000;
-// the newest snapshots read to find the one the account stands on, as the
-// page does: a listing can't order ones written in the same second
+// the newest snapshots read to find the one the account stands on: a listing can't order ones written in the same second
 const NEWEST = 3;
 const TREES_KEPT = 2000;
 const text = new TextDecoder();
-const hex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 const random = (n) => crypto.getRandomValues(new Uint8Array(n));
-
-const decode = (words) => Uint8Array.from(atob(words.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
 
 // The settings' sealed part (`storage`, `key`, `upload`), opened with what a
 // signed-in agent's token carries; throws if that isn't what sealed it.

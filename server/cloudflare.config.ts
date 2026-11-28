@@ -24,7 +24,8 @@ export default defineConfig({
 			DB: bindings.d1({ name: "omacloud" }),
 			STRIPE_SECRET_KEY: bindings.secret(),
 			STRIPE_WEBHOOK_SECRET: bindings.secret(),
-			STRIPE_PRICE: bindings.secret(),
+			// Omacloud, $5 a month, in SummonGhost's Stripe account
+			STRIPE_PRICE: bindings.text("price_1UgbwBCz3TLXJEZ40b9KLuWT"),
 			PASSKEY_SECRET: bindings.secret(),
 			CLOUDFLARE_API_TOKEN: bindings.secret(),
 			CLOUDFLARE_ACCOUNT: bindings.secret(),

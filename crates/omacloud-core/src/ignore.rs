@@ -15,12 +15,12 @@ use ignore::gitignore::{Gitignore, GitignoreBuilder};
 pub const TEMP_PREFIX: &str = ".~omacloud-";
 
 /// Rules file at the root of a synced folder.
-pub const FOLDER_FILE: &str = ".omacloudignore";
+const FOLDER_FILE: &str = ".omacloudignore";
 
 /// Always ignored: our temp files, editor swap files, desktop junk, and, as
 /// in iCloud, anything named `*.nosync`: a file or folder that stays on this
 /// computer.
-pub const DEFAULTS: &[&str] = &[
+const DEFAULTS: &[&str] = &[
     "*.nosync",
     ".~omacloud-*",
     "*.swp",

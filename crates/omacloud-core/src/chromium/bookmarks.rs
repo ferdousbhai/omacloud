@@ -27,7 +27,7 @@ use sha2::Sha256;
 use crate::merged::{ME, Merged};
 
 /// The roots' keys in the file, in the order Chromium writes them.
-pub const ROOTS: [&str; 3] = ["bookmark_bar", "other", "synced"];
+const ROOTS: [&str; 3] = ["bookmark_bar", "other", "synced"];
 
 /// The roots' fixed guids (components/bookmarks/browser/bookmark_uuids.cc).
 const ROOT_GUIDS: [&str; 3] = [

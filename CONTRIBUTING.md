@@ -1,6 +1,6 @@
 # Contributing
 
-The layout is in the README, the design in [docs/design.md](docs/design.md),
+The layout is in [AGENTS.md](AGENTS.md#layout), the design in [docs/design.md](docs/design.md),
 and the work ahead in the issues.
 
 ## Before a commit
@@ -60,6 +60,11 @@ coordinator on OpenDAL's filesystem service.
   `restic/restic` image with paths mounted 1:1 works (name it in `RESTIC`).
   `bin/check` fails without restic, so that a run that passes has restored;
   `NO_RESTIC=1 bin/check` leaves the restore out on a machine that has none.
+- `scripts/s3-choices.sh` runs daemons on the same stand-in bucket, following
+  files and choices as they change.
+- `scripts/connector.sh` runs the connector for agents on stand-ins for the
+  storage, for Cloudflare and for omacloud.computer. It needs node and Rust's
+  `wasm32-unknown-unknown` target.
 - `scripts/bar-widget.sh` lints the bar widget (`contrib/omarchy-plugin`) and
   runs it in a Quickshell of its own with no display, on stand-ins for the
   Omarchy shell's types (`scripts/bar-widget/`), handing it lines as the daemon
@@ -92,8 +97,8 @@ on real storage.
 ## Secrets
 
 Secrets never go on a command line, where other processes can read them:
-`OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE` and `OMACLOUD_SECRET_ACCESS_KEY` come
-from the environment, or a prompt that doesn't echo.
+they come from the environment or a prompt that doesn't echo.
+[AGENTS.md](AGENTS.md#conventions) lists the variables.
 
 ## Shell hygiene
 

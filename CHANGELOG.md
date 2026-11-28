@@ -9,8 +9,7 @@
   shows where it stands, `omacloud subscription manage` ends it. Everything else stays free,
   and without a subscription nothing of yours reaches a server of Omacloud's.
 - A connector's keys rest sealed under its passphrase, wherever it runs: its settings alone
-  open nothing, and the keys are open only while an agent that signed in with the passphrase
-  is asking. Connect again to get this for a connector set up with 0.0.33.
+  open nothing, and the keys are opened only once an agent signs in with the passphrase. Connect again to get this for a connector set up with 0.0.33.
 - omacloud.computer opens on your files: a code from a computer, a passkey, or the command to
   install. What Omacloud is and how it works is in the README.
 

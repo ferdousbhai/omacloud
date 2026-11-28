@@ -2,8 +2,8 @@
 # Prove a published release installs the way users get it: a clean Arch
 # container runs the specified release's install.sh and must end up with
 # omacloud <version>, the CLI must run, and the binaries must carry no
-# home directory paths. scripts/release.sh runs this
-# after publishing; only confirmed package defects trigger rollback.
+# home directory paths. The Release verification workflow runs
+# this after publishing; only confirmed package defects trigger rollback.
 #
 #   scripts/verify-release.sh 0.0.1
 set -euo pipefail

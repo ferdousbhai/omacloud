@@ -15,6 +15,7 @@ use crate::fail;
 pub struct Plan {
     key: String,
     site: String,
+    client: reqwest::blocking::Client,
 }
 
 fn site() -> String {
@@ -25,10 +26,25 @@ fn site() -> String {
 }
 
 impl Plan {
+    fn with(key: String) -> Option<Self> {
+        let client = reqwest::blocking::Client::builder()
+            .user_agent(concat!("omacloud/", env!("CARGO_PKG_VERSION")))
+            .timeout(Duration::from_secs(90))
+            .build()
+            .ok()?;
+        Some(Self {
+            key,
+            site: site(),
+            client,
+        })
+    }
+
     /// The subscription this computer has a key for, if any.
     pub fn read(path: &Path) -> Option<Self> {
         let key = fs::read_to_string(path).ok()?.trim().to_string();
-        (key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit())).then(|| Self { key, site: site() })
+        (key.len() == 64 && key.bytes().all(|b| b.is_ascii_hexdigit()))
+            .then(|| Self::with(key))
+            .flatten()
     }
 
     /// The same, made now if there's none.
@@ -52,7 +68,7 @@ impl Plan {
             .open(path)
             .and_then(|mut f| f.write_all(key.as_bytes()))
             .with_context(|| format!("writing {}", path.display()))?;
-        Ok(Self { key, site: site() })
+        Self::with(key).context("making a client for omacloud.computer")
     }
 
     /// The key itself: what a browser needs to keep a passkey with the site.
@@ -70,11 +86,8 @@ impl Plan {
     }
 
     fn call(&self, method: reqwest::Method, path: &str, body: Option<String>) -> Result<Value> {
-        let client = reqwest::blocking::Client::builder()
-            .user_agent(concat!("omacloud/", env!("CARGO_PKG_VERSION")))
-            .timeout(Duration::from_secs(90))
-            .build()?;
-        let mut request = client
+        let mut request = self
+            .client
             .request(method, format!("{}{path}", self.site))
             .bearer_auth(&self.key);
         if let Some(body) = body {
@@ -95,10 +108,13 @@ impl Plan {
         let message = said["error"]["message"]
             .as_str()
             .map_or_else(|| format!("omacloud.computer answered {status}"), str::to_string);
+        // in the site's words: it knows whether one ended or never was
         Err(if status == reqwest::StatusCode::PAYMENT_REQUIRED {
-            fail::setup("not_subscribed", "this needs a subscription")
+            fail::setup("not_subscribed", message)
                 .hint("`omacloud subscribe` starts one")
                 .into()
+        } else if status.is_client_error() {
+            fail::usage(message).into()
         } else {
             fail::unavailable(message).into()
         })

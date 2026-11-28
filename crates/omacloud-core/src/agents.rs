@@ -273,7 +273,7 @@ impl Agents {
 /// set differently on both keeps this computer's value, said in
 /// `conflicts`.
 #[must_use]
-pub fn codex_merge(base: &str, ours: &str, theirs: &str, conflicts: &mut Vec<String>) -> String {
+fn codex_merge(base: &str, ours: &str, theirs: &str, conflicts: &mut Vec<String>) -> String {
     if !base.is_empty()
         && let Some(m) = crate::settings::merge(base.as_bytes(), ours.as_bytes(), theirs.as_bytes())
             .and_then(|m| String::from_utf8(m).ok())
@@ -361,7 +361,7 @@ fn merge_table(
 
 /// Codex's config without its `projects` tables, `None` if it isn't TOML.
 #[must_use]
-pub fn codex_shared(text: &str) -> Option<String> {
+fn codex_shared(text: &str) -> Option<String> {
     let mut doc: toml_edit::DocumentMut = text.parse().ok()?;
     _ = doc.remove("projects");
     Some(doc.to_string())
@@ -372,7 +372,7 @@ pub fn codex_shared(text: &str) -> Option<String> {
 /// # Errors
 ///
 /// When `shared` isn't TOML.
-pub fn codex_here(shared: &str, here: Option<&str>) -> Result<String> {
+fn codex_here(shared: &str, here: Option<&str>) -> Result<String> {
     let mut doc: toml_edit::DocumentMut = shared.parse().context("synced Codex config")?;
     let projects = here
         .and_then(|h| h.parse::<toml_edit::DocumentMut>().ok())

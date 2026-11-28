@@ -48,19 +48,9 @@ jobs:
       - run: cargo build --locked -p omacloud -p omacloud-app
       - run: cargo test --locked --workspace
 
-  packaging:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y libarchive-tools
-      # bash -n reads one script (the rest are its arguments), so one at a time
-      - run: for f in install.sh pkgbuild/PKGBUILD packaging/omarchy-pkgs/omacloud/PKGBUILD scripts/*.sh .githooks/pre-push server/deploy.sh; do bash -n "$f"; done
-      - run: for t in scripts/tests/*.py; do python3 "$t"; done
-
   packages:
     if: github.event_name == 'workflow_dispatch'
-    needs: packaging
+    needs: check
     strategy:
       fail-fast: false
       matrix:

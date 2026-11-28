@@ -2,10 +2,11 @@
 
 A static page that reads an account's files straight from the person's own
 storage, a bucket or Dropbox, and decrypts them in the browser. No server of
-Omacloud's sees a file, a key or a request.
+Omacloud's sees a file or a key it can open; with a subscription the site
+keeps what a passkey sealed (`server/src/paid.ts`).
 
 - `index.html`, `style.css`, `app.js`: the page, laid out as iCloud is on the
-  web: a sign-in card, a home of tiles (Drive, Photos, Recents, Recently
+  web: the first screen (a code, a passkey, the install command), a home of tiles (Files, Photos, Recents, Recently
   Deleted), then a bar on top, places and the account's folders on the left,
   the open folder as icons or a list (search, sort), and a look at a file over
   it (pictures, PDFs, text, audio and video) with a download. Photos and
@@ -18,14 +19,10 @@ Omacloud's sees a file, a key or a request.
   which decrypts what the page fetched.
 
 It opens with a web link (`omacloud web-link`, or Open on a Phone in the
-app): a computer seals the web code, leaves it in the bucket under
-`omacloud-links/` for five minutes, and shows a link, as a QR code too, to this
-page with the seed and a presigned address of that object after the `#`. The
-page takes the link out of its address at once, fetches the object, and opens it
-with the seed (`link.rs` in the crate). The bucket holds only what it can't read,
-and the link alone opens nothing once the object is gone. Or paste the code
-`omacloud web-code` prints (the bucket, its key and the repository password in
-one line; what `omacloud export` prints works too), which only reads.
+app), which the page takes out of its address at once
+([design.md](../docs/design.md#in-a-browser) says how one works), or with the
+code `omacloud web-code` prints (what `omacloud export` prints works too),
+which only reads.
 
 A session opened with a web link can upload: the link carries a signing key
 made for it and a member computer's endorsement of that key. The page signs
@@ -48,6 +45,10 @@ encrypted under a key from a passkey where the browser can (WebAuthn's `prf`
 extension), else under one the browser holds and won't export. The page leaves a
 sealed note beside the repository (`omacloud-browsers/`) so the person's
 computers can list the browser, and writes over it when told to forget.
+With a subscription, a passkey made that way opens the account on other
+devices too: the page leaves what it sealed with the site (`/api/passkeys`),
+and `anywhere()` in `remember.js` gets it back for a browser that proves the
+passkey.
 
 The bucket must allow the page's origin to read it (a CORS rule allowing `GET`
 from that origin, and `PUT` to upload); nothing else about the bucket changes.

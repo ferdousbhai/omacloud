@@ -18,12 +18,12 @@ sealed under a passphrase it never sees. It needs, as secrets of the Worker:
 |---|---|
 | `STRIPE_SECRET_KEY` | Stripe's API key, for checkout and the billing portal |
 | `STRIPE_WEBHOOK_SECRET` | the signing secret of the webhook at `/api/stripe` (events `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`) |
-| `STRIPE_PRICE` | the id of the monthly price |
 | `PASSKEY_SECRET` | any long random string: signs passkey challenges |
 | `CLOUDFLARE_API_TOKEN` | a token with Workers Scripts: Edit on the account below |
 | `CLOUDFLARE_ACCOUNT` | the id of the account the connectors run in, which needs Workers Paid |
 
-Until all of them and the database are there, `/api/` and `/subscribe/` answer
+The monthly price's id is in `cloudflare.config.ts` (`STRIPE_PRICE`). Until
+all of them and the database are there, `/api/` and `/subscribe/` answer
 404 and the rest of the site works as it did.
 
 - `src/`: the Worker (`index.ts` the paths; `pages.ts` the pages; `paid.ts`

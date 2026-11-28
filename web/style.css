@@ -70,95 +70,7 @@ button {
 	fill: var(--accent);
 }
 
-/* signing in */
-#signin {
-	min-height: 100%;
-	display: grid;
-	place-items: center;
-	padding: 1.5rem 1rem;
-	background: var(--side);
-}
-#connect {
-	width: min(100%, 26rem);
-	display: grid;
-	gap: 0.875rem;
-	padding: 2rem;
-	background: var(--raised);
-	border: 1px solid var(--line);
-	border-radius: 1.125rem;
-	text-align: center;
-}
-/* groups of the form's rows, laid out as the rows themselves are */
-#kept,
-#fresh {
-	display: grid;
-	gap: 0.875rem;
-}
-#connect .quiet {
-	background: none;
-	border: 0;
-	color: var(--soft);
-	text-decoration: underline;
-}
-#connect .mark {
-	width: 4rem;
-	justify-self: center;
-}
-#connect h1 {
-	margin: 0;
-	font-size: 1.75rem;
-	font-weight: 600;
-	letter-spacing: -0.01em;
-}
-#connect p {
-	margin: 0;
-}
-#connect label {
-	display: grid;
-	gap: 0.3rem;
-	text-align: left;
-	font-size: 0.8125rem;
-	color: var(--soft);
-}
-#connect input,
-#connect textarea {
-	color: var(--ink);
-	background: var(--ground);
-	border: 1px solid var(--line);
-	border-radius: 0.625rem;
-	padding: 0.6rem 0.75rem;
-	width: 100%;
-	resize: vertical;
-}
-#connect textarea {
-	font-family: ui-monospace, monospace;
-	font-size: 0.8125rem;
-}
-#byhand {
-	text-align: left;
-	font-size: 0.875rem;
-}
-#byhand summary {
-	color: var(--accent);
-	cursor: pointer;
-}
-#byhand[open] {
-	display: grid;
-	gap: 0.75rem;
-}
-.primary {
-	color: #fff;
-	background: var(--accent);
-	border-radius: 0.625rem;
-	padding: 0.65rem 1rem;
-	font-weight: 500;
-}
-:focus-visible {
-	outline: 2px solid var(--accent);
-	outline-offset: 2px;
-}
-
-/* the first screen is the whole site's: what it's for, and nothing about it */
+/* signing in: the site's first screen, what it's for and nothing about it */
 #signin {
 	--ink: #f5f5f0;
 	--soft: #a3a3ad;
@@ -167,21 +79,21 @@ button {
 	--side: #0b0b0f;
 	--raised: #17171d;
 	--accent: #d2ff4d;
-	color: var(--ink);
+	min-height: 100%;
+	display: grid;
 	grid-template: auto 1fr auto / minmax(0, 1fr);
-	place-items: stretch;
-	padding: 0;
+	background: var(--side);
+	color: var(--ink);
 }
 #start-top,
 #start-links {
 	display: flex;
 	align-items: center;
-	justify-content: space-between;
 	gap: 1.5rem;
 	padding: 0.75rem 1.5rem;
 }
-#start-links {
-	justify-content: flex-start;
+#start-top {
+	justify-content: space-between;
 }
 #start-top strong {
 	font-size: 1.5rem;
@@ -197,45 +109,77 @@ button {
 	color: var(--ink);
 	font-weight: 500;
 }
-#signin #connect,
-#signin #fresh,
-#signin #kept,
+/* the form and the groups of its rows, laid out alike */
+#connect,
+#kept,
+#fresh,
 #install {
+	display: grid;
 	grid-template-columns: minmax(0, 1fr);
+	gap: 0.875rem;
 }
-#signin #connect {
+#connect {
 	place-self: center;
 	width: min(100%, 29rem);
 	gap: 1rem;
 	padding: 1.5rem;
-	background: none;
-	border: 0;
-	text-align: left;
 }
-#signin #connect h1 {
-	margin-bottom: 0.75rem;
+#connect h1 {
+	margin: 0 0 0.75rem;
 	font-size: 4rem;
 	line-height: 0.94;
 	font-weight: 700;
 	letter-spacing: -0.05em;
 }
-#signin #connect input,
-#signin #connect textarea {
+#connect p {
+	margin: 0;
+}
+#connect label {
+	display: grid;
+	gap: 0.3rem;
+	font-size: 0.8125rem;
+	color: var(--soft);
+}
+#connect input,
+#connect textarea {
+	color: var(--ink);
 	background: var(--raised);
-	border-width: 1.5px;
+	border: 1.5px solid var(--line);
 	border-radius: 0.75rem;
+	padding: 0.6rem 0.75rem;
+	width: 100%;
+	resize: vertical;
+}
+#connect textarea {
+	font-family: ui-monospace, monospace;
+	font-size: 0.8125rem;
+}
+#byhand {
+	font-size: 0.875rem;
+}
+#byhand summary {
+	color: var(--accent);
+	cursor: pointer;
+}
+#byhand[open] {
+	display: grid;
+	gap: 0.75rem;
 }
 #signin button {
 	min-height: 3.25rem;
 	border-radius: 0.75rem;
 	font-weight: 600;
 }
-#signin .primary {
+.primary {
 	color: #0b0b0f;
+	background: var(--accent);
+	padding: 0.65rem 1rem;
 }
-#signin #connect .quiet {
+#connect .quiet {
 	min-height: 2.75rem;
+	color: var(--soft);
 	font-weight: 400;
+	text-decoration: underline;
 }
 #passkey,
 #kept-forget {
@@ -254,7 +198,6 @@ button {
 	font-size: 0.8125rem;
 }
 #install {
-	display: grid;
 	gap: 0.5rem;
 	margin-top: 0.75rem;
 	padding-top: 1.5rem;
@@ -286,8 +229,12 @@ button {
 	background: var(--ink);
 	color: var(--ground);
 }
+:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
 
-/* the drive */
+/* your files */
 #browser {
 	height: 100%;
 	display: grid;

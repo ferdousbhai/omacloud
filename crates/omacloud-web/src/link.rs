@@ -1,4 +1,4 @@
-//! What a drive link hands a browser, sealed: a computer leaves it in the
+//! What a web link hands a browser, sealed: a computer leaves it in the
 //! account's own bucket for a few minutes, and the link carries the seed that
 //! opens it, in the part of an address no server is sent. So the bucket holds
 //! only what it can't read, and the link alone, once the minutes are up, opens
@@ -23,6 +23,7 @@ fn key(seed: &[u8]) -> Result<Key> {
         return Err("the link is damaged".into());
     }
     let mut hash = Sha512::new();
+    // the label is from before the page's rename, kept so links still open
     hash.update(b"omacloud drive link 1");
     hash.update(seed);
     Ok(Key(hash.finalize().into()))

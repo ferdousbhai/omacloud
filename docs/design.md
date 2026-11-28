@@ -241,8 +241,8 @@ and every computer of the account can, Wi-Fi keys included.
   (`omacloud agents connect`, [cloud-agents.md](cloud-agents.md)): your own
   Cloudflare account, or with a subscription Omacloud's. It holds the key to
   your storage and the repository's key sealed under the connector's
-  passphrase, and opens them while an agent that signed in with the
-  passphrase is asking. So whoever runs it could read your files then, by
+  passphrase, and opens them when an agent that signed in with the
+  passphrase first asks, holding them in memory from then on. So whoever runs it could read your files then, by
   changing what it runs, and the agent's provider sees what the agent reads.
   Nobody has a connector who didn't set one up.
 - **Omacloud, with a subscription** (`server/src/paid.ts`), also keeps: the
@@ -274,11 +274,14 @@ account takes the backup with it, though every computer keeps its synced files.
 Omacloud doesn't keep a second copy elsewhere yet.
 
 Nobody but your computers and your recovery code can read file contents,
-names, settings or keys.
+names, settings or keys, except what you let in yourself: a browser you
+open your files in, and a connector for agents if you set one up (both
+above).
 
 - **Programs you run, AI agents included,** can run `omacloud` as you. The
   commands that print a secret (the recovery code, a join code,
-  shares, an invite, the repository password) print it only in text
+  shares, an invite, a web code or link, the repository password, a
+  connector's passphrase) print it only in text
   mode with stdin and stdout on a terminal, and refuse as JSON or into a
   pipe, so it doesn't land in a script's output, a JSON consumer or an
   agent's captured output by accident. That is a guard against accidents,

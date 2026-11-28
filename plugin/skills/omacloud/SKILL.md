@@ -139,7 +139,7 @@ address and a passphrase, so the owner runs it, in their terminal. With a subscr
 it. Without, it goes in the owner's own Cloudflare account, which needs the Workers Paid
 plan and an API token (OMACLOUD_CLOUDFLARE_TOKEN or asked for). Say first what it trades:
 whoever runs the connector holds the keys to the storage and the files sealed under that
-passphrase, and it opens them while an agent is asking. `omacloud agents` lists
+passphrase, and opens them once an agent signs in with it. `omacloud agents` lists
 connectors, `omacloud agents disconnect` removes one. Never set one up, or start a
 subscription, unasked.
 
@@ -153,7 +153,7 @@ the old key once `bucket status` says every computer switched. Each step needs t
 
 The owner must retain the recovery code privately. Commands that print a
 secret (`init` creating an account, `join-code`, `invite`, `web-code`, `web-link`, `export`,
-`recovery split|combine`) refuse with `terminal_required`
+`agents connect`, `recovery split|combine`) refuse with `terminal_required`
 off a terminal: have the owner run them in their own terminal. Never work
 around that refusal (no pseudo-terminals, no `script`), and never run them
 yourself, even where your shell has a terminal and nothing refuses. Joining with a join code or recovery code prints none.

@@ -51,13 +51,13 @@ qmllint; see CONTRIBUTING.md.
   and a failure goes to stderr (the error object on one line when piped), so
   the app and scripts read errors there. Piped output is the JSON envelope,
   so scripts parsing text pass `--styled`. Commands that print a secret (a recovery code, join code,
-  shares, an invite, a web code or link, export's password) check `output::to_terminal` (stdin and
+  shares, an invite, a web code or link, export's password, a connector's passphrase) check `output::to_terminal` (stdin and
   stdout a terminal; `combine` stdout only) first and refuse otherwise;
   tests and scripts run them under a pty (`script`), the app on its own.
   `watch` keeps its exit codes (2 stopped, 75 upgraded): the systemd unit's
   `RestartPreventExitStatus=2` depends on them.
 - Secrets never go on a command line: they come from env vars
-  (`OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE`, `OMACLOUD_SECRET_ACCESS_KEY`, `OMACLOUD_DROPBOX_REFRESH_TOKEN`, `OMACLOUD_DROPBOX_AUTH_CODE`) or a no-echo prompt
+  (`OMACLOUD_RECOVERY_CODE`, `OMACLOUD_JOIN_CODE`, `OMACLOUD_SECRET_ACCESS_KEY`, `OMACLOUD_DROPBOX_REFRESH_TOKEN`, `OMACLOUD_DROPBOX_AUTH_CODE`, `OMACLOUD_CLOUDFLARE_TOKEN`) or a no-echo prompt
   (`read_secret` in `crates/omacloud/src/main.rs`), asked only in text mode
   with stdin and stdout on a terminal.
 - Worker code is TypeScript with tabs, run directly by node

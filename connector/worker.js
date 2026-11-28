@@ -1,13 +1,14 @@
 // Omacloud's connector for agents that aren't on one of your computers
-// (claude.ai, an agent on a phone): a Worker in your own Cloudflare account,
-// put there by `omacloud agents connect` and by nothing else. It reads your
+// (claude.ai, an agent on a phone): a Worker in your own Cloudflare account
+// or, with a subscription, Omacloud's (server/src/hosting.ts), put there by
+// `omacloud agents connect` and by nothing else. It reads your
 // files from your own storage and decrypts them here, for the folders you
 // granted, and leaves what an agent writes in the account's inbox for your
 // computers to take in. Its settings (`OMACLOUD`, set at deploy) hold the
 // storage's key and the repository's sealed under the connector's
 // passphrase; a signed-in agent's token carries what opens them, so they're
-// open here only while one is asking: docs/cloud-agents.md says what that
-// trades.
+// opened here when one first asks, and held in this copy's memory from then
+// on: docs/cloud-agents.md says what that trades.
 
 import wasm from "./omacloud_web.wasm";
 import { Files, unlock } from "./files.js";

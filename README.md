@@ -17,7 +17,7 @@ Storage is your own: your Dropbox, an S3 bucket at Cloudflare R2, Hetzner or any
 other provider with create-only writes, or a folder on a drive or NAS of yours
 ([docs/providers.md](docs/providers.md)).
 You pay your provider, if anything; Omacloud runs no storage and charges
-nothing. Your family and friends each get an account of their own, in their own
+nothing unless you subscribe ([below](#made-for-your-ai-agents)). Your family and friends each get an account of their own, in their own
 Dropbox or a bucket you set up for them ([below](#family-and-friends)).
 
 ## Made for your AI agents
@@ -31,9 +31,9 @@ you too: their instructions, skills and settings, and Claude Code's memory.
 An agent that isn't on your computers (claude.ai, one on your phone) can
 reach the folders you name too, through a connector:
 `omacloud agents connect Documents/Notes`. It's there only if you set it
-up, and it's the one thing here that lets anything but your computers read
-your files: while an agent you gave its passphrase to is asking, the
-connector opens them. It runs in your own Cloudflare account, or with a
+up, and it's the one thing here that reads your files without you at it:
+once an agent you gave its passphrase to signs in, the connector opens
+them. It runs in your own Cloudflare account, or with a
 subscription at Omacloud: [docs/cloud-agents.md](docs/cloud-agents.md) says
 what it trades.
 
@@ -483,7 +483,7 @@ from `--yes`.
 What prints a secret prints it only to your terminal, in text mode with
 stdin and stdout on it, and refuses (`terminal_required`) as JSON or into a pipe: `init`
 when it creates an account (the recovery code), `join-code`, `invite`, `web-code`, `web-link`, `export`,
-and `recovery split` and `combine`
+`agents connect` (the connector's passphrase), and `recovery split` and `combine`
 (`combine` reads its shares from stdin, so only its stdout must be a
 terminal). Joining with a join code or the recovery code prints no secret
 and works anywhere. This guards against accidents, such as a secret landing
@@ -531,18 +531,7 @@ everyday edits.
 
 ## Layout
 
-| path | what |
-|---|---|
-| `crates/omacloud-core` | sync engine (`sync.rs`), coordination in the bucket and its key (`bucket.rs`, `bucket_key.rs`), settings (`settings.rs`; Chromium and Wi-Fi as merged documents: `merged.rs`, `chromium/`, `wifi.rs`), signed heads (`head.rs`), device chain (`devices.rs`, `account.rs`), repository keys and rotation (`epoch.rs`), secrets bundle (`secrets.rs`), Shamir split (`shamir.rs`) |
-| `crates/omacloud` | CLI and `watch` daemon |
-| `crates/omacloud-app` | the Omacloud app (GTK4, with [omui](https://github.com/ferdousbhai/omui)), driving the CLI |
-| `vendor/rustic_core` | rustic_core 0.13 plus pack padding and `splice_tree` (upstream PRs in `vendor/upstream-patches`) |
-| `scripts/` | end to end checks (an account in a bucket, upstream restic; see CONTRIBUTING.md) and the release scripts |
-| `server/` | the Cloudflare Worker behind omacloud.computer: the browser page, the paid tier and the public pages (see its README) |
-| `contrib/` | the systemd user unit, the desktop entry and its icon (`omacloud.desktop`, `omacloud.svg`), and the bar widget |
-| `pkgbuild/PKGBUILD` | Arch package, built from the committed checkout |
-| `install.sh` | the installer each release ships |
-
+[AGENTS.md](AGENTS.md#layout) says what each folder holds.
 [CONTRIBUTING.md](CONTRIBUTING.md) covers building, testing and releases;
 the issues hold the work ahead.
 

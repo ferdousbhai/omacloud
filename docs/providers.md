@@ -3,7 +3,7 @@
 Omacloud keeps everything in your own Dropbox, or an S3 bucket you rent yourself,
 or a folder on a drive or NAS of yours ([below](#a-folder-a-drive-or-a-nas)).
 You pay the provider for what you store and transfer, at their prices; Omacloud
-charges nothing. Each person needs a Dropbox, a bucket and key, or a folder of their own.
+charges nothing for any of this. Each person needs a Dropbox, a bucket and key, or a folder of their own.
 
 ## Dropbox
 

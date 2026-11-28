@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-// @ts-ignore: the Drive page's own script, plain JavaScript
+// @ts-ignore: the browser page's own script, plain JavaScript
 import { account, linked, pasted } from "../../web/paste.js";
 
 const printed = `# restore without omacloud: restic or rustic, this bucket and password

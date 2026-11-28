@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # The web page (web/) on a throwaway account: builds the WebAssembly reader,
 # starts scripts/fake-s3.py with a CORS rule for the page, syncs a few files
-# into it, and serves the page. Prints what to enter; Ctrl-C ends it.
+# into it (and deletes two, for Recently Deleted), runs the daemon so what the
+# page uploads is taken in, and serves the page. Prints a web code and a live
+# web link; Ctrl-C ends it. It serves, and checks nothing.
 #
 #   scripts/web-files.sh [path/to/omacloud]
 set -euo pipefail

@@ -12,6 +12,8 @@
 // it back to whoever proves the passkey (server/src/paid.ts) and can't open
 // it. The passkey is one the device's password manager carries along.
 
+import { bytesOf } from "./paste.js";
+
 const DB = "omacloud";
 const STORE = "kept";
 const RECORD = "account";
@@ -20,7 +22,6 @@ const SALT = new TextEncoder().encode("omacloud stay signed in 1");
 // the same on every device, so a passkey gives the same key wherever it is
 const ANYWHERE = new TextEncoder().encode("omacloud passkey anywhere 1".padEnd(32, "."));
 const b64 = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-const unb64 = (words) => Uint8Array.from(atob(words.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
 const site = (path, init) => fetch(new URL(path, location.origin), { cache: "no-store", ...init });
 
 const random = (n) => crypto.getRandomValues(new Uint8Array(n));
@@ -180,7 +181,7 @@ export async function anywhere() {
 	if (!asked.ok) throw new Error("Signing in with a passkey isn't available here now.");
 	const got = await navigator.credentials.get({
 		publicKey: {
-			challenge: unb64((await asked.json()).challenge),
+			challenge: bytesOf((await asked.json()).challenge),
 			userVerification: "required",
 			extensions: { prf: { eval: { first: ANYWHERE } } },
 		},
@@ -199,7 +200,7 @@ export async function anywhere() {
 	});
 	if (opened.status === 402) throw new Error("This account's subscription has ended. Use a code from one of your computers.");
 	if (!opened.ok) throw new Error("That passkey doesn't open an account here. Use a code from one of your computers.");
-	const sealed = unb64((await opened.json()).sealed);
+	const sealed = bytesOf((await opened.json()).sealed);
 	const key = await fromPasskey(new Uint8Array(secret));
 	const words = await crypto.subtle.decrypt({ name: "AES-GCM", iv: sealed.subarray(0, 12) }, key, sealed.subarray(12));
 	return JSON.parse(new TextDecoder().decode(words));

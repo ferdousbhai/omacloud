@@ -532,7 +532,8 @@ scrypt (restic spec; `omacloud-web/src/lib.rs`, `Key`, `Reader::open`).
 `aes256ctr_poly1305aes` 0.2.1:
 
 ```
-key64  = SHA-512("omacloud web link 1" || seed)      seed: 32 random bytes, no newline after the label
+key64  = SHA-512("omacloud drive link 1" || seed)    seed: 32 random bytes, no newline after the label
+                                                     (the label is from before the page's rename, kept so links still open)
 object = nonce(16) || AES-256-CTR-Poly1305-AES(key64, nonce, web code JSON)
 ```
 
@@ -614,10 +615,10 @@ existing file.
   `omacloud-recovery-v1`, `omacloud-device-v1`, `omacloud-head-v3`,
   `omacloud-epoch-v1`, `omacloud-grant-v1`, `omacloud-join-v1`,
   `omacloud-bucket-key-v1`, `omacloud-upload-key-v1`, `omacloud-agent-key-v1`, `omacloud-upload-v1`,
-  `omacloud web link 1`, and the bundle magic `omacloud-secrets-v1\n`. A
+  `omacloud drive link 1`, and the bundle magic `omacloud-secrets-v1\n`. A
   record whose signature doesn't verify under the current domain is
   refused; there is no fallback to an older one (only `v3` heads verify).
-- Explicit version fields: an upload header's `v` (must be 1), the drive
+- Explicit version fields: an upload header's `v` (must be 1), the web
   code's `v` (1), and restic's own config `version` (2).
 - `Head.epoch` is `#[serde(default)]`, read as 0 when missing.
 - No record type uses `deny_unknown_fields`, so serde ignores unknown

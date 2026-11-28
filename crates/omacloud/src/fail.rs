@@ -30,7 +30,7 @@ pub fn storage_gone(kind: &str) -> CliError {
         Kind::Setup,
         format!("this computer was set up on {kind}, which Omacloud no longer uses"),
     )
-    .hint("run `omacloud init` with your Dropbox or a bucket to set it up again (the old config is kept aside); the files here stay as they are")
+    .hint("run `omacloud init` with your Dropbox, a bucket or a folder to set it up again (the old config is kept aside); the files here stay as they are")
 }
 
 /// The storage refusing a key this command was just given.
@@ -159,7 +159,7 @@ pub fn is_waiting(e: &anyhow::Error) -> bool {
 
 /// Records older than what this computer saw: the bucket was restored from
 /// an old copy, or someone with its key rolled it back.
-pub fn is_rollback(e: &anyhow::Error) -> bool {
+fn is_rollback(e: &anyhow::Error) -> bool {
     matches!(e.downcast_ref::<HeadError>(), Some(HeadError::Rollback { .. }))
         || matches!(e.downcast_ref::<DeviceError>(), Some(DeviceError::Rollback { .. }))
         || matches!(e.downcast_ref::<EpochError>(), Some(EpochError::Rollback { .. }))

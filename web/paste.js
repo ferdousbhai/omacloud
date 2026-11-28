@@ -11,7 +11,7 @@ const loose = (text) =>
 		.map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
 		.join("\\s*");
 
-const bytesOf = (base64url) => Uint8Array.from(atob(base64url.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+export const bytesOf = (base64url) => Uint8Array.from(atob(base64url.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
 
 // What a web code says, as the page uses it: { endpoint, bucket, root,
 // region, key, secret, password }, or for an account in Dropbox { dropbox:

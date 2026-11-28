@@ -250,34 +250,28 @@ async function forget() {
 		$("home-status").textContent = "This device no longer stays signed in.";
 	} else location.reload();
 }
-// What's kept here into the form, and the storage and key from it.
-async function unlockKept() {
-	const found = await remember.open();
+// What opens an account (a code's, a link's, or what's kept) into the form
+// and this page's memory, in place of whatever an earlier try left there.
+function take(found, upload = null) {
 	fill($("connect"), found);
 	dropbox = found.dropbox ?? null;
 	browsers = found.browsers || "";
 	plan = found.plan || "";
-	uploader = null;
+	uploader = upload;
+}
+// What's kept here into the form, and the storage and key from it.
+async function unlockKept() {
+	take(await remember.open());
 	await unlock($("connect"));
 }
 // A passkey of the person's, on a device that was never given a code: what
 // this site keeps for it, opened here (remember.js). For subscribers.
 async function openAnywhere() {
-	const found = await remember.anywhere();
-	fill($("connect"), found);
-	dropbox = found.dropbox ?? null;
-	browsers = found.browsers || "";
-	plan = found.plan || "";
-	uploader = null;
+	take(await remember.anywhere());
 	await connect($("connect"));
 }
 async function openKept() {
-	const found = await remember.open();
-	fill($("connect"), found);
-	dropbox = found.dropbox ?? null;
-	browsers = found.browsers || "";
-	plan = found.plan || "";
-	uploader = null;
+	take(await remember.open());
 	try {
 		await connect($("connect"));
 	} catch (e) {
@@ -779,11 +773,7 @@ async function follow({ seed, address }) {
 		found = account(reader.unseal(seed, new Uint8Array(await response.arrayBuffer())));
 	} catch {}
 	if (!found) throw new Error(`This link is damaged. ${again}`);
-	fill($("connect"), found);
-	uploader = found.upload;
-	dropbox = found.dropbox ?? null;
-	browsers = found.browsers || "";
-	plan = found.plan || "";
+	take(found, found.upload);
 	await connect($("connect"));
 }
 
@@ -796,9 +786,7 @@ $("pasted").addEventListener("input", (event) => {
 		status(text ? "That doesn't read as a web code. Paste all of what omacloud web-code prints, or enter it by hand." : "");
 		return;
 	}
-	fill(form, found);
-	dropbox = found.dropbox ?? null;
-	browsers = found.browsers || "";
+	take(found);
 	// a Dropbox has nothing more to enter: open it
 	if (dropbox) return found.password ? act(() => connect(form)) : status("Found your Dropbox, but not the password: paste the whole code.");
 	const missing = !found.key || !found.secret || !found.password;
@@ -832,7 +820,6 @@ $("install-copy").addEventListener("click", async () => {
 });
 $("kept-other").addEventListener("click", () => (($("fresh").hidden = false), ($("kept-other").hidden = true)));
 $("filter").addEventListener("input", show);
-$("filter").placeholder = "Search";
 $("sort").addEventListener("change", (event) => {
 	if (place) placeSort = event.target.value;
 	else (sort = event.target.value), keep("sort", sort);

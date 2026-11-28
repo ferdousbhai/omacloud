@@ -39,7 +39,7 @@ Everything else in Omacloud keeps one rule: only your computers can read
 your files ([design.md](design.md)). The connector is the one place that
 gives it up, for the folders' sake and by your choice:
 
-- **The connector opens your files while an agent is asking.** Its settings,
+- **The connector opens your files once an agent signs in.** Its settings,
   kept as a secret of the Worker, hold the key to your storage and the
   repository's key sealed under a key worked out from the passphrase. The
   passphrase is shown on your computer and typed on the connector's page; no

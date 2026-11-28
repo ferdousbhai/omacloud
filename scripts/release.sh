@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cut a release from this machine: tag it, build the package, sign it and the
-# [omacloud] pacman repository database with the local package-signing key,
+# [omacloud] and [omacloud-aarch64] pacman repository databases with the local package-signing key,
 # and publish them as one GitHub release. Computers that ran install.sh get it
 # through `omarchy update`.
 #

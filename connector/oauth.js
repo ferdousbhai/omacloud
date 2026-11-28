@@ -14,10 +14,10 @@
 // So whoever holds the settings alone, the account they rest in included,
 // reads nothing.
 
-const encode = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-const decode = (words) => Uint8Array.from(atob(words.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+export const encode = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+export const decode = (words) => Uint8Array.from(atob(words.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
 const utf8 = new TextEncoder();
-const hex = (bytes) => [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
+export const hex = (bytes) => [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
 const now = () => Math.floor(Date.now() / 1000);
 
 // What opens the sealed keys, from the passphrase as typed.
@@ -210,7 +210,6 @@ export async function signed(request, config) {
 	const given = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
 	return given ? unseal(config.secret, given, "access") : null;
 }
-export const allowed = async (request, config) => !!(await signed(request, config));
 
 // What a request without one is told: where to sign in.
 export function unauthorized(request) {

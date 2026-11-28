@@ -849,7 +849,7 @@ impl Engine {
     /// The synced path for a path on disk under the folder, if it is one:
     /// the reverse of [`Self::on_disk`].
     #[must_use]
-    pub fn synced_path(&self, rel: &Path) -> Option<PathBuf> {
+    fn synced_path(&self, rel: &Path) -> Option<PathBuf> {
         self.account_path(rel).filter(|p| self.syncs(p))
     }
 
