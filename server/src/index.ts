@@ -17,6 +17,9 @@ async function files(req: Request, env: Env): Promise<Response> {
 	return secureDocument(new Response(response.body, { status: response.status, statusText: response.statusText, headers }));
 }
 
+// Omacloud's mark (contrib/omacloud.svg), for where another site shows it.
+const LOGO = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -10 64 64"><path fill="#0071e3" d="M50 44H16a14 14 0 0 1-2.6-27.8A19 19 0 0 1 50.6 14 15 15 0 0 1 50 44z"/></svg>';
+
 // What the paid tier runs on, once it's all there: a deploy without Stripe's
 // keys or the database serves the free site and nothing else.
 function paidTier(env: Env): Paid | null {
@@ -63,6 +66,18 @@ export default {
 			if (url.pathname === "/subscribed") return secureDocument(pages.subscribed());
 			if (url.pathname === "/llms.txt") return pages.llms(env);
 			if (url.pathname === "/health") return new Response("ok");
+			if (url.pathname === "/logo.svg") return new Response(LOGO, { headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" } });
+			// Cloudflare sends a person back here after they allow Omacloud to
+			// put a connector in their account (`omacloud agents connect`):
+			// this passes them on to the command waiting on their computer,
+			// whose port the `state` it made begins with. What comes along is
+			// a code only that command can use (PKCE), so nothing is kept or
+			// usable here.
+			if (url.pathname === "/cloudflare/callback") {
+				const port = Number((url.searchParams.get("state") ?? "").split(".")[0]);
+				if (!Number.isInteger(port) || port < 1024 || port > 65535) return new Response("This isn't a sign-in Omacloud started.\n", { status: 400 });
+				return Response.redirect(`http://127.0.0.1:${port}/callback${url.search}`, 302);
+			}
 			if (url.pathname === "/files" || url.pathname.startsWith("/files/")) return files(req, env);
 			// the latest release's installer: what it installs it checks
 			// against the signing key it pins, wherever it came from

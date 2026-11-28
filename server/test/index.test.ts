@@ -71,3 +71,11 @@ test("Omacloud in a browser is served under a policy that loads only this site's
 	// only the browser page's own folder comes from the assets
 	assert.equal((await get("/filesystem")).status, 404);
 });
+
+test("Cloudflare's sign-in comes back through here to the command that started it, and to nowhere else", async () => {
+	const back = await get("/cloudflare/callback?code=abc&state=43121.xyz");
+	assert.equal(back.status, 302);
+	assert.equal(back.headers.get("location"), "http://127.0.0.1:43121/callback?code=abc&state=43121.xyz");
+	for (const state of ["", "80.x", "evil.example", "99999.x", "43121x"]) assert.equal((await get(`/cloudflare/callback?code=abc&state=${state}`)).status, 400, state);
+	assert.match((await get("/logo.svg")).headers.get("content-type") ?? "", /svg/);
+});
