@@ -6,11 +6,22 @@
 // holds and won't hand out, and the device's own lock is what protects it.
 //
 // Nothing is kept unless asked for, and `forget` removes all of it.
+//
+// With a subscription the same passkey opens the account on the person's
+// other devices too: what it sealed is also kept at this site, which hands
+// it back to whoever proves the passkey (server/src/paid.ts) and can't open
+// it. The passkey is one the device's password manager carries along.
 
 const DB = "omacloud";
 const STORE = "kept";
 const RECORD = "account";
 const SALT = new TextEncoder().encode("omacloud stay signed in 1");
+
+// the same on every device, so a passkey gives the same key wherever it is
+const ANYWHERE = new TextEncoder().encode("omacloud passkey anywhere 1".padEnd(32, "."));
+const b64 = (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const unb64 = (words) => Uint8Array.from(atob(words.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+const site = (path, init) => fetch(new URL(path, location.origin), { cache: "no-store", ...init });
 
 const random = (n) => crypto.getRandomValues(new Uint8Array(n));
 const hex = (bytes) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -100,9 +111,10 @@ export async function keep(account, name) {
 	const iv = random(12);
 	const record = { id, name, iv };
 	let key;
+	let made;
 	if (await passkeyAble()) {
-		const salt = random(32);
-		const made = await navigator.credentials.create({
+		const salt = account.plan ? ANYWHERE : random(32);
+		made = await navigator.credentials.create({
 			publicKey: {
 				challenge: random(32),
 				rp: { name: "Omacloud" },
@@ -111,7 +123,8 @@ export async function keep(account, name) {
 					{ type: "public-key", alg: -7 },
 					{ type: "public-key", alg: -257 },
 				],
-				authenticatorSelection: { authenticatorAttachment: "platform", residentKey: "preferred", userVerification: "required" },
+				// one to be found on another device has to say whose it is by itself
+				authenticatorSelection: { authenticatorAttachment: "platform", residentKey: account.plan ? "required" : "preferred", userVerification: "required" },
 				extensions: { prf: { eval: { first: salt } } },
 			},
 		});
@@ -125,8 +138,25 @@ export async function keep(account, name) {
 		Object.assign(record, { lock: "device", key });
 	}
 	record.sealed = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, words));
+	if (account.plan && made) {
+		// kept at this site too, for the person's other devices; if that
+		// fails this device still stays signed in
+		try {
+			const kept = await site("/api/passkeys", {
+				method: "POST",
+				headers: { authorization: `Bearer ${account.plan}`, "content-type": "application/json" },
+				body: JSON.stringify({
+					credential: b64(made.rawId),
+					public_key: b64(made.response.getPublicKey()),
+					alg: made.response.getPublicKeyAlgorithm(),
+					sealed: b64(new Uint8Array([...iv, ...record.sealed])),
+				}),
+			});
+			record.anywhere = kept.ok;
+		} catch {}
+	}
 	await store("readwrite", (s) => s.put(record, RECORD));
-	return { id, lock: record.lock, name };
+	return { id, lock: record.lock, name, anywhere: !!record.anywhere };
 }
 
 // The account kept here, opened: with a passkey, that asks for the
@@ -139,10 +169,52 @@ export async function open() {
 	return JSON.parse(new TextDecoder().decode(words));
 }
 
-// Forget what's kept here. (A passkey made for it stays in the device's
-// passwords, opening nothing; the device's settings remove it.)
-export async function forget() {
-	if (able()) await store("readwrite", (s) => s.delete(RECORD));
+// Whether this browser can sign in with a passkey kept at this site.
+export const anywhereAble = () => !!globalThis.PublicKeyCredential && !!globalThis.crypto?.subtle;
+
+// The account a passkey of the person's opens, from what this site keeps
+// for it: asks for the fingerprint or face, so call it from a press. The
+// site sees the passkey's proof and hands back what only its key opens.
+export async function anywhere() {
+	const asked = await site("/api/passkeys/challenge", { method: "POST" });
+	if (!asked.ok) throw new Error("Signing in with a passkey isn't available here now.");
+	const got = await navigator.credentials.get({
+		publicKey: {
+			challenge: unb64((await asked.json()).challenge),
+			userVerification: "required",
+			extensions: { prf: { eval: { first: ANYWHERE } } },
+		},
+	});
+	const secret = got?.getClientExtensionResults().prf?.results?.first;
+	if (!secret) throw new Error("This device's passkey didn't give its key.");
+	const opened = await site("/api/passkeys/open", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({
+			credential: b64(got.rawId),
+			authenticator_data: b64(got.response.authenticatorData),
+			client_data: b64(got.response.clientDataJSON),
+			signature: b64(got.response.signature),
+		}),
+	});
+	if (opened.status === 402) throw new Error("This account's subscription has ended. Use a code from one of your computers.");
+	if (!opened.ok) throw new Error("That passkey doesn't open an account here. Use a code from one of your computers.");
+	const sealed = unb64((await opened.json()).sealed);
+	const key = await fromPasskey(new Uint8Array(secret));
+	const words = await crypto.subtle.decrypt({ name: "AES-GCM", iv: sealed.subarray(0, 12) }, key, sealed.subarray(12));
+	return JSON.parse(new TextDecoder().decode(words));
+}
+
+// Forget what's kept here, and with `plan` (the subscription's key) what
+// this site keeps for the same passkey. (The passkey itself stays in the
+// device's passwords, opening nothing; the device's settings remove it.)
+export async function forget(plan) {
+	if (!able()) return;
+	try {
+		const record = await store("readonly", (s) => s.get(RECORD));
+		if (plan && record?.anywhere) await site(`/api/passkeys/${b64(record.credential)}`, { method: "DELETE", headers: { authorization: `Bearer ${plan}` } });
+	} catch {}
+	await store("readwrite", (s) => s.delete(RECORD));
 }
 
 // What to call this device, from what the browser says of itself.

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- A subscription, $5 a month: `omacloud subscribe`. With it Omacloud runs your connector for
+  agents (`omacloud agents connect Documents/Notes` needs no Cloudflare account), and a passkey
+  opens your files in a browser on any device, with no code from a computer: Stay Signed In on
+  a device opened with a link, then Sign In With a Passkey anywhere. `omacloud subscription`
+  shows where it stands, `omacloud subscription manage` ends it. Everything else stays free,
+  and without a subscription nothing of yours reaches a server of Omacloud's.
+- A connector's keys rest sealed under its passphrase, wherever it runs: its settings alone
+  open nothing, and the keys are open only while an agent that signed in with the passphrase
+  is asking. Connect again to get this for a connector set up with 0.0.33.
+- omacloud.computer opens on your files: a code from a computer, a passkey, or the command to
+  install. What Omacloud is and how it works is in the README.
+
 ## 0.0.33 (2026-11-27)
 
 - Omacloud is made for your AI agents. Setting up or joining an account installs the agent

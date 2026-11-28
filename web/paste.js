@@ -22,11 +22,14 @@ export function account(said) {
 		const upload = uploadKey(said.upload) ? { upload: uploadKey(said.upload) } : {};
 		// where a browser that stays signed in says so, beside the repository
 		const browsers = text("browsers") ? { browsers: text("browsers").replace(/^\/+|\/+$/g, "") } : {};
+		// the key of the account's subscription, if it has one: with it a
+		// passkey made here is kept at this site too (remember.js)
+		const plan = /^[0-9a-f]{64}$/.test(text("plan")) ? { plan: text("plan") } : {};
 		// an account in Dropbox: the token in place of a bucket and its key
 		const box = said.dropbox;
 		if (typeof box?.refresh_token === "string" && box.refresh_token && typeof box.app_key === "string") {
 			const dropbox = { appKey: box.app_key, refreshToken: box.refresh_token, root: typeof box.root === "string" ? box.root : "" };
-			return { dropbox, password: text("password"), ...browsers, ...upload };
+			return { dropbox, password: text("password"), ...browsers, ...plan, ...upload };
 		}
 		if (!text("bucket") || !new URL(text("endpoint")).host) return null;
 		return {
@@ -38,6 +41,7 @@ export function account(said) {
 			secret: text("secret"),
 			password: text("password"),
 			...browsers,
+			...plan,
 			...upload,
 		};
 	} catch {

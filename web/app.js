@@ -133,6 +133,8 @@ async function readFile(node, progress) {
 // keeps. And where the account's bucket lists the browsers that do.
 let current;
 let browsers = "";
+// the key of the account's subscription, if a link or what's kept brought one
+let plan = "";
 
 // The storage and the repository's key, from what the form holds: enough to
 // seal something for the account's computers, without reading its files.
@@ -160,6 +162,7 @@ async function unlock(form) {
 				password: form.elements.password.value,
 			};
 	if (browsers) current.browsers = browsers;
+	if (plan) current.plan = plan;
 	await reader.load("omacloud_web.wasm");
 	const keys = await bucket.list("keys");
 	if (!keys.length) throw new Error(dropbox ? "No Omacloud files in this Dropbox." : "No Omacloud files here: check the bucket and its folder.");
@@ -226,8 +229,9 @@ async function stay() {
 	const kept = await remember.keep(current, remember.deviceName());
 	await record(kept, false);
 	await stayOffer();
-	$("home-status").textContent =
-		kept.lock === "passkey"
+	$("home-status").textContent = kept.anywhere
+		? "This device stays signed in, and its passkey opens your files on your other devices too."
+		: kept.lock === "passkey"
 			? "This device stays signed in. Opening your files here asks for its fingerprint or face."
 			: "This device stays signed in. Anyone who can unlock it can open your files here.";
 }
@@ -240,7 +244,7 @@ async function forget() {
 		if (!current) await unlockKept();
 		await record(kept, true);
 	} catch {}
-	await remember.forget();
+	await remember.forget(current?.plan);
 	if ($("signin").hidden) {
 		await stayOffer();
 		$("home-status").textContent = "This device no longer stays signed in.";
@@ -252,14 +256,27 @@ async function unlockKept() {
 	fill($("connect"), found);
 	dropbox = found.dropbox ?? null;
 	browsers = found.browsers || "";
+	plan = found.plan || "";
 	uploader = null;
 	await unlock($("connect"));
+}
+// A passkey of the person's, on a device that was never given a code: what
+// this site keeps for it, opened here (remember.js). For subscribers.
+async function openAnywhere() {
+	const found = await remember.anywhere();
+	fill($("connect"), found);
+	dropbox = found.dropbox ?? null;
+	browsers = found.browsers || "";
+	plan = found.plan || "";
+	uploader = null;
+	await connect($("connect"));
 }
 async function openKept() {
 	const found = await remember.open();
 	fill($("connect"), found);
 	dropbox = found.dropbox ?? null;
 	browsers = found.browsers || "";
+	plan = found.plan || "";
 	uploader = null;
 	try {
 		await connect($("connect"));
@@ -766,6 +783,7 @@ async function follow({ seed, address }) {
 	uploader = found.upload;
 	dropbox = found.dropbox ?? null;
 	browsers = found.browsers || "";
+	plan = found.plan || "";
 	await connect($("connect"));
 }
 
@@ -806,6 +824,12 @@ $("home-stay").addEventListener("click", () => act(stay));
 $("home-forget").addEventListener("click", () => act(forget));
 $("kept-open").addEventListener("click", () => act(openKept));
 $("kept-forget").addEventListener("click", () => act(forget));
+$("passkey").hidden = !remember.anywhereAble();
+$("passkey").addEventListener("click", () => act(openAnywhere));
+$("install-copy").addEventListener("click", async () => {
+	await navigator.clipboard.writeText($("install-command").textContent);
+	$("install-copy").textContent = "Copied";
+});
 $("kept-other").addEventListener("click", () => (($("fresh").hidden = false), ($("kept-other").hidden = true)));
 $("filter").addEventListener("input", show);
 $("filter").placeholder = "Search";

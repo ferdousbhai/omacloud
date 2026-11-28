@@ -133,12 +133,15 @@ that do, and `omacloud browsers remove ID` cuts a lost one off by changing the
 account's keys, as `devices revoke --lost` does: it needs `--yes`, the owner's to give.
 
 Agents off the owner's computers (claude.ai, a phone): `omacloud agents connect
-Documents/Notes` (`--read-only` to leave writing out) puts a connector in the owner's own
-Cloudflare account and prints its address and a passphrase, so the owner runs it, in
-their terminal, with their Cloudflare API token (OMACLOUD_CLOUDFLARE_TOKEN or asked for).
-Say first what it trades: that Cloudflare account then holds the keys to the storage and
-the files, and it needs Cloudflare's Workers Paid plan. `omacloud agents` lists
-connectors, `omacloud agents disconnect` removes one. Never set one up unasked.
+Documents/Notes` (`--read-only` to leave writing out) puts up a connector and prints its
+address and a passphrase, so the owner runs it, in their terminal. With a subscription
+(`omacloud subscription` says; `omacloud subscribe` starts one, $5 a month) Omacloud runs
+it. Without, it goes in the owner's own Cloudflare account, which needs the Workers Paid
+plan and an API token (OMACLOUD_CLOUDFLARE_TOKEN or asked for). Say first what it trades:
+whoever runs the connector holds the keys to the storage and the files sealed under that
+passphrase, and it opens them while an agent is asking. `omacloud agents` lists
+connectors, `omacloud agents disconnect` removes one. Never set one up, or start a
+subscription, unasked.
 
 In Omarchy's bar a cloud shows how sync stands; `omacloud bar on` and `omacloud bar off`
 put it there or take it out.

@@ -11,9 +11,9 @@
 <body>
 
 <main id="signin">
+<header id="start-top"><strong>omacloud</strong><a href="https://github.com/ferdousbhai/omacloud">GitHub</a></header>
 <form id="connect" autocomplete="off">
-<svg class="mark" viewBox="0 0 64 44" aria-hidden="true"><path d="M50 44H16a14 14 0 0 1-2.6-27.8A19 19 0 0 1 50.6 14 15 15 0 0 1 50 44z"/></svg>
-<h1>Omacloud</h1>
+<h1>Your files.</h1>
 <div id="kept" hidden>
 <p id="kept-words" class="note"></p>
 <button id="kept-open" type="button" class="primary">Open</button>
@@ -21,10 +21,8 @@
 <button id="kept-other" type="button" class="quiet">Use a Code Instead</button>
 </div>
 <div id="fresh">
-<p class="note">Your files, read in this browser straight from your own storage. What you enter stays in this tab and is gone when it closes, unless you choose to stay signed in.</p>
-<p class="note">On one of your computers, open Omacloud and press Open on a Phone (or run <code>omacloud web-link</code>), then point this device's camera at the code. Nothing to type.</p>
-<label><span>Or paste the code <code>omacloud web-code</code> prints</span>
-<textarea id="pasted" rows="3" spellcheck="false" placeholder="omacloud-web-…"></textarea></label>
+<label><span>Code from one of your computers</span>
+<textarea id="pasted" rows="2" spellcheck="false" placeholder="omacloud web-code"></textarea></label>
 <details id="byhand">
 <summary>Or enter it by hand</summary>
 <label>Endpoint <input name="endpoint" type="url" required placeholder="https://&lt;account&gt;.r2.cloudflarestorage.com"></label>
@@ -36,9 +34,15 @@
 <label>Repository password <input name="password" type="password" required></label>
 </details>
 <button type="submit" class="primary">Open</button>
+<button id="passkey" type="button" hidden>Sign In With a Passkey<span class="tag">Paid</span></button>
+<div id="install">
+<span>Install on Omarchy</span>
+<div><code id="install-command">curl -fsSL https://omacloud.computer/install.sh | sudo bash</code><button id="install-copy" type="button">Copy</button></div>
+</div>
 </div>
 <p id="signin-status" class="note" role="status"></p>
 </form>
+<footer id="start-links"><a href="/privacy">Privacy</a><a href="/terms">Terms</a></footer>
 </main>
 
 <main id="home" hidden>

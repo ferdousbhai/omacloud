@@ -29,19 +29,27 @@ last week" or "set up my new laptop like this one", and it does it through the
 you too: their instructions, skills and settings, and Claude Code's memory.
 
 An agent that isn't on your computers (claude.ai, one on your phone) can
-reach the folders you name too, through a connector you put in your own
-Cloudflare account: `omacloud agents connect Documents/Notes`.
-It's there only if you set it up, and it's the one thing here that lets
-anything but your computers read your files (that account can, with the
-keys the connector holds): [docs/cloud-agents.md](docs/cloud-agents.md)
-says what it trades, and what it needs at Cloudflare.
+reach the folders you name too, through a connector:
+`omacloud agents connect Documents/Notes`. It's there only if you set it
+up, and it's the one thing here that lets anything but your computers read
+your files: while an agent you gave its passphrase to is asking, the
+connector opens them. It runs in your own Cloudflare account, or with a
+subscription at Omacloud: [docs/cloud-agents.md](docs/cloud-agents.md) says
+what it trades.
 
-Omacloud has no AI of its own and never sees your files: your agents see what
-you let them on your own computer. There's no account with us and no
-analytics. Omacloud talks only to your own storage, and omacloud.computer
-serves the installer and the browser page and nothing your files depend
-on: `omacloud export` gives you the plain restic command that restores
-everything without Omacloud.
+Omacloud is free, and has no AI of its own. Without a subscription there's
+no account with us, no analytics, and nothing of yours reaches a server of
+ours: Omacloud talks only to your own storage, and omacloud.computer serves
+the installer and the browser page. `omacloud export` gives you the plain
+restic command that restores everything without Omacloud.
+
+A subscription ($5 a month, `omacloud subscribe`) is for two things that
+need a server: Omacloud runs your connector for agents, so you need no
+Cloudflare account, and a passkey opens your files in a browser on any
+device, with no code from a computer. The connector's keys rest sealed
+under its passphrase, and what a passkey opens is sealed with the passkey,
+so what Omacloud keeps it can't read by itself. `omacloud subscription`
+shows where it stands, and `omacloud subscription manage` ends it.
 
 ## Install
 
@@ -368,6 +376,12 @@ with a new code from a computer. Your computers list the browsers that stay sign
 (Devices in the app, or `omacloud browsers`). Forget This Device on the phone ends it; for a
 lost phone, Remove there (`omacloud browsers remove`) changes your keys, as for a lost computer.
 
+With a subscription, the passkey a device makes when it stays signed in opens your files on your
+other devices too: Sign In With a Passkey at omacloud.computer, with nothing from a computer. For
+that the site keeps what the passkey sealed, which it can't open, and gives it to a browser that
+proves the passkey. The link the device was first opened with has to come from the computer that
+subscribed.
+
 Leaving needs nothing from Omacloud: `omacloud export` prints the command that
 has plain restic or rustic restore everything from your storage, with the
 repository's password (and the bucket's key; Dropbox goes through rclone), and `omacloud export --to <folder>` copies the
@@ -524,7 +538,7 @@ everyday edits.
 | `crates/omacloud-app` | the Omacloud app (GTK4, with [omui](https://github.com/ferdousbhai/omui)), driving the CLI |
 | `vendor/rustic_core` | rustic_core 0.13 plus pack padding and `splice_tree` (upstream PRs in `vendor/upstream-patches`) |
 | `scripts/` | end to end checks (an account in a bucket, upstream restic; see CONTRIBUTING.md) and the release scripts |
-| `server/` | the Cloudflare Worker behind omacloud.computer: the public pages (see its README) |
+| `server/` | the Cloudflare Worker behind omacloud.computer: the browser page, the paid tier and the public pages (see its README) |
 | `contrib/` | the systemd user unit, the desktop entry and its icon (`omacloud.desktop`, `omacloud.svg`), and the bar widget |
 | `pkgbuild/PKGBUILD` | Arch package, built from the committed checkout |
 | `install.sh` | the installer each release ships |

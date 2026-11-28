@@ -11,8 +11,9 @@ there's a connector, which nobody has unless they set it up:
 omacloud agents connect Documents/Notes
 ```
 
-It puts a small program (`connector/`, a Cloudflare Worker) into **your own
-Cloudflare account**, and shows its address and a passphrase, once. Add the
+It puts a small program (`connector/`, a Cloudflare Worker) up, in **your own
+Cloudflare account** or, with a subscription, in Omacloud's, and shows its
+address and a passphrase, once. Add the
 address to your agent as a connector (in claude.ai: Settings > Connectors >
 Add custom connector), and when it asks, allow it with the passphrase. The
 agent can then list, search and read the folders you named, look at earlier
@@ -20,10 +21,17 @@ versions, and write files there. `--read-only` leaves the writing out;
 `omacloud agents` lists what this computer set up, and `omacloud agents
 disconnect` takes it out again.
 
-It needs an API token of yours with the one permission Workers Scripts: Edit
-(asked for, or `OMACLOUD_CLOUDFLARE_TOKEN`; used for the upload and kept
-nowhere), and Cloudflare's Workers Paid plan: the free plan's ten
-milliseconds of processor time per request don't decrypt an account.
+**In your own account** it needs an API token of yours with the one
+permission Workers Scripts: Edit (asked for, or `OMACLOUD_CLOUDFLARE_TOKEN`;
+used for the upload and kept nowhere), and Cloudflare's Workers Paid plan:
+the free plan's ten milliseconds of processor time per request don't decrypt
+an account.
+
+**With a subscription** (`omacloud subscribe`, $5 a month) it needs neither:
+the same command sends the connector's settings to omacloud.computer, which
+runs the same Worker, one per connector, in Omacloud's Cloudflare account
+(`server/src/hosting.ts`). `--own-cloudflare` uses yours anyway. When the
+subscription ends, the Worker is deleted.
 
 ## What it trades
 
@@ -31,17 +39,25 @@ Everything else in Omacloud keeps one rule: only your computers can read
 your files ([design.md](design.md)). The connector is the one place that
 gives it up, for the folders' sake and by your choice:
 
-- **Your Cloudflare account can read your files.** The connector's settings,
+- **The connector opens your files while an agent is asking.** Its settings,
   kept as a secret of the Worker, hold the key to your storage and the
-  repository's key. Whoever controls that account, and Cloudflare itself,
-  could read everything in the account with them, not only the folders
+  repository's key sealed under a key worked out from the passphrase. The
+  passphrase is shown on your computer and typed on the connector's page; no
+  copy is kept, only its hash, and the tokens an agent signs in with carry
+  what opens the keys. So the settings alone, to whoever holds them, open
+  nothing. A connector with an agent signed in holds the keys open in
+  memory, and they open everything in the account, not only the folders
   named: the folders are what the connector's code shows, not what its keys
   open.
+- **Whoever runs it could read your files, by changing what it runs.** In
+  your own account that's you and Cloudflare. With a subscription it's
+  Omacloud and Cloudflare: the Worker is the code in this repository, but
+  you take Omacloud's word that it is, as with anything hosted.
 - **The agent's provider sees what the agent reads**, as plain text, as when
-  you paste it into a chat.
-- **Nothing of Omacloud's is in the path.** No server of ours holds a key,
-  relays a request or sees a file. The agent talks to your Worker, and your
-  Worker to your storage.
+  you paste it into a chat, and holds the tokens that open the keys.
+- **In your own account, nothing of Omacloud's is in the path.** No server
+  of ours holds a key, relays a request or sees a file. The agent talks to
+  your Worker, and your Worker to your storage.
 - **Setting it up trusts omacloud.computer once.** The connector's modules
   are part of the `omacloud` program, but the reader it decrypts with is
   WebAssembly, which a package's builder can't make everywhere, so `agents
@@ -99,18 +115,23 @@ can't change what syncs.
   "copy the rest to this address" may try. So: name few folders, use
   `--read-only` where reading is all you want, and remember every write is a
   version you can put back (`omacloud versions`, `omacloud restore`).
-- **Your Cloudflare account is taken over.** It holds the keys, as above.
-  `omacloud agents disconnect`, then change them as for a lost computer:
-  `omacloud rotate` and `omacloud bucket set-key`.
-- **The passphrase leaks.** Connect again: the old one opens nothing.
+- **The account it runs in is taken over.** With an agent signed in it holds
+  the keys open, as above. `omacloud agents disconnect`, then change them
+  as for a lost computer: `omacloud rotate` and `omacloud bucket set-key`.
+- **The passphrase leaks.** Connect again: the old one opens nothing, and
+  nor do the old settings. If the old settings may have leaked with it,
+  change the keys as above.
 - **The account moves to new keys** (a computer or a browser was removed as
   lost). The connector says it's out of date until you connect again.
 - **No computer is on.** Reading works; what was written waits in the inbox.
 
 ## Not chosen
 
-- **A connector at omacloud.computer.** It would have to decrypt for
-  everyone, which is everything Omacloud promises not to do.
+- **One connector at omacloud.computer for everyone.** A subscriber's
+  connector is a Worker of its own, so no two accounts' keys are ever open
+  in one place.
+- **Keys the host can open at rest.** They'd be simpler to serve, and
+  readable by whoever got at the settings.
 - **One of your own computers answering.** The keys would stay at home, but
   a computer has to be on and reachable from the agent's servers through a
   tunnel, and a phone is for when you're away from them.

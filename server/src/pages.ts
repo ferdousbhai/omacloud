@@ -1,9 +1,10 @@
-// The public pages of omacloud.computer: home, privacy, terms and llms.txt.
-// index.ts also serves /install.sh and Omacloud in a browser (/files).
+// The public pages of omacloud.computer: privacy, terms and llms.txt. The
+// site opens on Omacloud in a browser (/files), which index.ts serves along
+// with /install.sh and the paid tier (paid.ts).
 
 const PRIVACY = "privacy@omacloud.computer";
 const LEGAL = "legal@omacloud.computer";
-const UPDATED = "27 November 2026";
+const UPDATED = "28 November 2026";
 
 function layout(title: string, body: string): Response {
 	return new Response(
@@ -43,64 +44,6 @@ ${body}
 	);
 }
 
-export const home = () =>
-	layout(
-		"Omacloud",
-		`<h1>Omacloud</h1>
-<p class="lead">Sync for Omarchy computers. Your files and your setup on every machine, encrypted before
-they leave it, kept in storage you own.</p>
-<p>I have a few Omarchy computers and I wanted them to feel like one. iCloud does that for a Mac.
-Nothing did it for Omarchy, so I wrote this.</p>
-<h2>What it does</h2>
-<p>You pick the folders you want everywhere (Documents, Pictures, anything in your home) and they sync in
-place. Then it carries the things that make a computer feel like yours:</p>
-<ul>
-<li>Omarchy settings: keybindings, look and feel, terminals, your theme</li>
-<li>AI agent settings, instructions and skills, for Claude Code, Codex, pi and the rest</li>
-<li>Chromium bookmarks, settings and extensions</li>
-<li>Wi-Fi networks, web apps, and the list of packages you installed</li>
-<li>SSH and GPG keys, sealed so that only your recovery code opens them</li>
-</ul>
-<p>What describes one machine stays on that machine: monitors, the touchpad, sign-ins, anything another
-program installed. And if you delete a file or wreck one, the old versions are there for 30 days.</p>
-<h2>How it works</h2>
-<p>There is no Omacloud server. That is the whole idea. Your computer encrypts everything, then writes it to
-storage that is yours: your Dropbox, or an S3 bucket at Cloudflare R2, Hetzner or anywhere else. The provider
-holds bytes it can't read. I hold nothing.</p>
-<p>Underneath it is plain <a href="https://restic.net">restic</a>. If Omacloud vanished tomorrow, restic by
-itself restores everything, and <code>omacloud export</code> prints the command to do it.</p>
-<p>The cost of nobody else holding your keys is that nobody else can reset them. Setup gives you a recovery
-code. Write it down and keep it somewhere that isn't a computer. Lose the code and all your computers, and
-the data is gone. If that worries you, you can split the code among people you trust.</p>
-<h2>Made for your AI agents</h2>
-<p>Omacloud is AI first. Tell the agent you use (Claude Code, Codex, pi, opencode, Antigravity) what you want,
-"bring back the draft I deleted last week" or "set up my new laptop like this one", and it does it through the
-<code>omacloud</code> command. What you taught your agents follows you too: their instructions, skills and
-settings, and what Claude Code remembers.</p>
-<p>Omacloud has no AI of its own. Your agents see what you let them, on your own computer. An agent that isn't on
-your computers, like Claude on your phone, can reach the folders you name through a connector you put in your own
-Cloudflare account. That one is a trade, and only yours to make: that account then holds the keys.
-<a href="https://github.com/ferdousbhai/omacloud/blob/master/docs/cloud-agents.md">Here is what it gives up</a>.</p>
-<h2>In a browser</h2>
-<p><a href="/files/">Omacloud in a browser</a> opens your files on any device. Same rule as everything else: the
-page fetches from your storage and decrypts in the tab, so this site never sees a file or a key.
-To sign in on a phone, press Open on a Phone in the app and point
-the camera at the code. One of your computers leaves the keys in your storage for five minutes, sealed, and
-the code carries what opens them. Nothing passes through here. You can upload from there too: the browser
-encrypts the file, leaves it in your storage, and one of your computers picks it up.</p>
-<p>A phone is for when you're away from your computers, so it can stay signed in: press Stay Signed In once,
-and from then on it opens your files with its fingerprint or face. The keys then rest on the phone, and your
-computers list it, so you can cut off one you lose.</p>
-<h2>Family</h2>
-<p>Each person gets an account of their own, in storage of their own. You can pay for someone's bucket and
-still not be able to read their files, which is how it should be.</p>
-<h2>Get it</h2>
-<pre>curl -fsSL https://omacloud.computer/install.sh | sudo bash</pre>
-<p>Then open Omacloud from the app launcher. It is free, MIT licensed, and the
-<a href="https://github.com/ferdousbhai/omacloud">code is on GitHub</a>. It is also young. I run it on my own
-computers, but keep another copy of anything you can't afford to lose.</p>`,
-	);
-
 export const subscribed = () =>
 	layout(
 		"Subscribed · Omacloud",
@@ -115,17 +58,27 @@ export const privacy = () =>
 		"Privacy · Omacloud",
 		`<h1>Privacy</h1>
 <p class="lead">Updated ${UPDATED}.</p>
-<p>Short version: this site knows nothing about you. No cookies, no accounts, no logs, no analytics.
-Cloudflare delivers the pages and sees your IP address to do that. That is all.</p>
-<p>Omacloud itself has no accounts and runs no storage. Your files, their names, your settings and your
-keys are encrypted on your computer, with keys that stay on your computers and in your recovery code, before
-they go to the storage you chose. That provider can't read them. It has its own terms and privacy policy,
-and you deal with it directly. Nothing of yours comes here.</p>
+<p>Short version: without a subscription this site knows nothing about you. No cookies, no accounts, no logs,
+no analytics. Cloudflare delivers the pages and sees your IP address to do that. That is all.</p>
+<p>Omacloud itself runs no storage. Your files, their names, your settings and your keys are encrypted on your
+computer, with keys that stay on your computers and in your recovery code, before they go to the storage you
+chose. That provider can't read them. It has its own terms and privacy policy, and you deal with it directly.</p>
 <p><a href="/files/">Omacloud in a browser</a> is a page that runs in your browser. What you give it (a link from one of
 your computers, or your bucket's key and your password) stays in that tab. It goes into requests from your browser to your storage and
 is gone when you close the tab, unless you press Stay Signed In: then it's kept in that browser, on that device,
-encrypted, until you press Forget This Device. Your files travel between your browser and your storage. This site serves
-the page and sees none of it.</p>
+encrypted, until you press Forget This Device. Your files travel between your browser and your storage.</p>
+<h2>With a subscription</h2>
+<p>A subscription is a key your computer makes. This site keeps its hash, Stripe's ids for the customer and the
+subscription, and whether it's paid for. It keeps no name, email or card: Stripe takes the payment and holds those,
+under <a href="https://stripe.com/privacy">its own policy</a>.</p>
+<p>Your connector for agents then runs in Omacloud's Cloudflare account. Its settings hold the keys to your storage
+and files sealed under the connector's passphrase, which is shown on your computer and never sent here. They're
+open only while an agent you gave the passphrase to is asking, in memory, and what the agent reads passes through
+that connector to it. Nothing it reads is logged or kept.</p>
+<p>A passkey that opens your files on any device: this site keeps the passkey's public key and what your browser
+sealed with the passkey, and hands that back to a browser that proves the passkey. It can't open it.</p>
+<p>End the subscription, or run <code>omacloud agents disconnect</code> or press Forget This Device, and the
+connector and the sealed notes are deleted.</p>
 <h2>Contact</h2>
 <p><a href="mailto:${PRIVACY}">${PRIVACY}</a></p>`,
 	);
@@ -141,6 +94,12 @@ of anything you can't afford to lose. As far as the law allows, Omacloud isn't l
 <h2>Your recovery code</h2>
 <p>Only your computers and your recovery code can decrypt your data. If you lose the code and all your
 computers, nobody can get your files back, and that includes me. Keep the code safe and offline.</p>
+<h2>The subscription</h2>
+<p>The subscription is $5 a month, charged by Stripe until you end it, which you can do at any time:
+<code>omacloud subscription manage</code>. It then runs to the end of the month you paid for. For it Omacloud runs
+your connector for agents and keeps what lets a passkey open your files in a browser. When it ends, both are
+deleted; your files, in your own storage, are untouched. The service comes as it is, and may be unavailable at
+times. It isn't a backup of anything.</p>
 <h2>Contact</h2>
 <p><a href="mailto:${LEGAL}">${LEGAL}</a></p>`,
 	);
@@ -173,13 +132,12 @@ it. Omacloud runs on Omarchy (Arch Linux, x86_64 and aarch64), as a GTK app and 
 
 - [omacloud CLI](${repo}/blob/master/README.md): \`omacloud --help\` lists every command. Piped, every command prints a JSON envelope ({ok, data, summary}; \`--quiet\` for the data alone) on stdout and exits 0; a failure exits 1 with {ok: false, error: {code, kind, message, hint}} on one line of stderr, kind being usage, setup, not_found, unavailable or error; \`omacloud status\` reports state. Commands that print a secret (\`join-code\`, \`invite\`, \`web-code\`, \`web-link\`, \`export\`, \`recovery split\` and \`combine\`, a new account's recovery code) print only to a terminal. Secrets come from environment variables (OMACLOUD_RECOVERY_CODE, OMACLOUD_JOIN_CODE, OMACLOUD_SECRET_ACCESS_KEY) or a prompt, never arguments
 
-- [Agents off a person's computers](${repo}/blob/master/docs/cloud-agents.md): \`omacloud agents connect <folder>\` puts an MCP connector for the folders named into the person's own Cloudflare account (claude.ai, an agent on a phone); what that trades
+- [Agents off a person's computers](${repo}/blob/master/docs/cloud-agents.md): \`omacloud agents connect <folder>\` puts up an MCP connector for the folders named (claude.ai, an agent on a phone), in the person's own Cloudflare account, or run by Omacloud with a subscription (\`omacloud subscribe\`, $5 a month); what that trades
 
 ## Site
 
-- [Home](${site}/): what Omacloud is and how to install it
-- [Omacloud in a browser](${site}/files/): a person's files in a browser, read from their own bucket or Dropbox and decrypted there; signed in with a link from one of their computers (\`omacloud web-link\`), it uploads too, and a phone can stay signed in
-- [Privacy](${site}/privacy): visiting collects nothing; Omacloud has no accounts
+- [Omacloud in a browser](${site}/files/): where the site opens. A person's files in a browser, read from their own bucket or Dropbox and decrypted there; signed in with a link from one of their computers (\`omacloud web-link\`), it uploads too, and a phone can stay signed in; with a subscription a passkey signs in on any device
+- [Privacy](${site}/privacy): visiting collects nothing; what a subscription keeps
 - [Terms](${site}/terms): terms
 
 ## Optional

@@ -235,13 +235,23 @@ and every computer of the account can, Wi-Fi keys included.
   see your computers' names and fingerprints, and when each one pushed or asked
   to join. They can't read file contents, names, settings or keys, or forge
   history unnoticed. They can delete everything: see below.
-- **Omacloud** sees nothing: it runs no service your data or your computers
-  talk to.
-- **Your Cloudflare account, only if you set up a connector for agents**
-  (`omacloud agents connect`, [cloud-agents.md](cloud-agents.md)): it then
-  holds the key to your storage and the repository's key, so it, and
-  Cloudflare, could read your files, and the agent's provider sees what the
-  agent reads. Nobody has a connector who didn't set one up.
+- **Omacloud**, without a subscription, sees nothing: it runs no service
+  your data or your computers talk to.
+- **Where a connector for agents runs, only if you set one up**
+  (`omacloud agents connect`, [cloud-agents.md](cloud-agents.md)): your own
+  Cloudflare account, or with a subscription Omacloud's. It holds the key to
+  your storage and the repository's key sealed under the connector's
+  passphrase, and opens them while an agent that signed in with the
+  passphrase is asking. So whoever runs it could read your files then, by
+  changing what it runs, and the agent's provider sees what the agent reads.
+  Nobody has a connector who didn't set one up.
+- **Omacloud, with a subscription** (`server/src/paid.ts`), also keeps: the
+  hash of the subscription's key and Stripe's ids for it; and for each
+  passkey that opens your files in a browser, its public key and what the
+  browser sealed with it (the same web code a device that stays signed in
+  keeps). It can't open that: the key comes from the passkey, in your
+  browser. It could withhold it, or hand it to someone who then still needs
+  the passkey.
 - **A removed computer** keeps what it had synced before removal. With a new
   epoch it can't read what comes after; once the bucket's key changes and the
   old one is deleted it can't reach the bucket at all.

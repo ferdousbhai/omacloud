@@ -1,4 +1,4 @@
-// omacloud.computer: the public pages.
+// omacloud.computer: Omacloud in a browser, the paid tier and the public pages.
 
 import { type Paid, d1Store, paid } from "./paid.ts";
 import * as pages from "./pages.ts";
@@ -56,7 +56,8 @@ export default {
 			return new Response("Not found\n", { status: 404 });
 		}
 		if (req.method === "GET" || req.method === "HEAD") {
-			if (url.pathname === "/") return secureDocument(pages.home());
+			// the site opens on what it's for: a person's files
+			if (url.pathname === "/") return Response.redirect(`${url.origin}/files/`, 302);
 			if (url.pathname === "/privacy") return secureDocument(pages.privacy());
 			if (url.pathname === "/terms") return secureDocument(pages.terms());
 			if (url.pathname === "/subscribed") return secureDocument(pages.subscribed());
