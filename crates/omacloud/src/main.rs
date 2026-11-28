@@ -190,9 +190,11 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<AgentsCmd>,
     },
-    /// Start a subscription ($5 a month): Omacloud runs your connector for
-    /// agents, and a passkey opens your files in a browser on any device.
-    /// Shows the address where you pay; no account, no email kept here
+    /// Start a subscription ($5 a month, what Cloudflare charges for the
+    /// plan a connector needs): Omacloud runs your connector for agents, and
+    /// a passkey opens your files in a browser on any device. With Workers
+    /// Paid of your own you don't need it for a connector. Shows the address
+    /// where you pay; no account, no email kept here
     Subscribe,
     /// Where your subscription stands; `manage` changes the card or ends it
     Subscription {
@@ -2601,10 +2603,16 @@ fn run(cli: Cli) -> Out {
                     .human("You're subscribed already. `omacloud subscription` shows where it stands."));
             }
             let url = plan.subscribe_url();
-            Ok(Response::new(json!({ "url": url }), "open the address to subscribe").human(format!(
-                "Open this to subscribe, $5 a month, paid through Stripe:\n\n     {url}\n\nThen `omacloud agents connect \
-                 <folder>` has Omacloud run your connector for agents."
-            )))
+            Ok(
+                Response::new(json!({ "url": url }), "open the address to subscribe").human(format!(
+                    "Already on Cloudflare's Workers Paid plan? You don't need this for a connector: `omacloud agents \
+                 connect <folder>` puts it in your own account, free.\n\nOtherwise, open this to subscribe: $5 a \
+                 month, what Cloudflare would charge for that plan, paid through Stripe.\n\n     {url}\n\nThen \
+                 `omacloud agents connect <folder>` has Omacloud run your connector, and a passkey opens your files \
+                 in a browser on any device. End it any time with `omacloud subscription manage`; `omacloud agents \
+                 connect --own-cloudflare` moves a connector to your own account."
+                )),
+            )
         }
         Cmd::Subscription { action } => {
             let Some(plan) = plan::Plan::read(&paths.subscription()) else {

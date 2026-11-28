@@ -33,6 +33,10 @@ runs the same Worker, one per connector, in Omacloud's Cloudflare account
 (`server/src/hosting.ts`). `--own-cloudflare` uses yours anyway. When the
 subscription ends, the Worker is deleted.
 
+The two cost the same, $5 a month, to Cloudflare or to Omacloud: the
+subscription is for not having a Cloudflare account, a plan and a token to
+look after. With Workers Paid already, your own account is the one to use.
+
 ## What it trades
 
 Everything else in Omacloud keeps one rule: only your computers can read

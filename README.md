@@ -46,7 +46,11 @@ restic command that restores everything without Omacloud.
 A subscription ($5 a month, `omacloud subscribe`) is for two things that
 need a server: Omacloud runs your connector for agents, so you need no
 Cloudflare account, and a passkey opens your files in a browser on any
-device, with no code from a computer. The connector's keys rest sealed
+device, with no code from a computer. A connector needs Cloudflare's
+Workers Paid plan, which costs the same: if you have that already, put the
+connector in your own account, free, and skip the subscription. You can end
+it any time, and `omacloud agents connect --own-cloudflare` moves a
+connector to your own account. The connector's keys rest sealed
 under its passphrase, and what a passkey opens is sealed with the passkey,
 so what Omacloud keeps it can't read by itself. `omacloud subscription`
 shows where it stands, and `omacloud subscription manage` ends it.

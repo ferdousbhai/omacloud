@@ -141,7 +141,8 @@ plan and an API token (OMACLOUD_CLOUDFLARE_TOKEN or asked for). Say first what i
 whoever runs the connector holds the keys to the storage and the files sealed under that
 passphrase, and opens them once an agent signs in with it. `omacloud agents` lists
 connectors, `omacloud agents disconnect` removes one. Never set one up, or start a
-subscription, unasked.
+subscription, unasked, and never suggest a subscription to an owner who has Cloudflare's
+Workers Paid plan: their own account does the same for a connector, free.
 
 In Omarchy's bar a cloud shows how sync stands; `omacloud bar on` and `omacloud bar off`
 put it there or take it out.

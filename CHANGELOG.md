@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- `omacloud subscribe` says first who doesn't need it: with Cloudflare's Workers Paid plan a
+  connector goes in your own account, free. The subscription costs what that plan does, and is
+  for not having a Cloudflare account to look after.
+
 ## 0.0.34 (2026-11-28)
 
 - A subscription, $5 a month: `omacloud subscribe`. With it Omacloud runs your connector for
